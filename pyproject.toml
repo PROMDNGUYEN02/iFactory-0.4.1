@@ -31,11 +31,11 @@ dev = [
 ]
 
 [project.scripts]
-factory-monitor = "factory.__main__:run_qt"
+factory = "factory.__main__:run_qt"
 iFactory = "iFactory.app:main"
 
 [project.gui-scripts]
-factory-monitor-gui = "factory.__main__:run_qt"
+factory-gui = "factory.__main__:run_qt"
 iFactory-gui = "iFactory.app:main"
 
 [tool.setuptools.packages.find]
