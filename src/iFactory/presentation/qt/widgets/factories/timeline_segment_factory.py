@@ -62,16 +62,25 @@ class TimelineSegmentFactory(QObject):
             return None
 
     def set_data(self, frame_name, device_code, segments, start=None, end=None):
-        """Alias khớp với lời gọi từ MainView."""
+        """4. FIX: Đảm bảo dữ liệu segments luôn là list of tuples hợp lệ."""
         if frame_name in self._frames:
-            widget = self._frames[frame_name]["widget"]
+            metadata = self._frames[frame_name]
+            widget = metadata["widget"]
+
+            # Chuẩn hóa data: widget Gantt cần (datetime_start, datetime_end, label)
+            valid_segments = []
+            for s in segments:
+                if isinstance(s, (list, tuple)) and len(s) >= 3:
+                    valid_segments.append(s)
+
             try:
-                widget.set_data(segments, start, end)
-                widget.set_title(device_code)
-                self.data_loaded.emit(frame_name, len(segments))
+                # Ép widget vẽ lại ngay lập tức
+                widget.set_data(valid_segments, start, end)
+                widget.set_title(f"Lịch sử: {device_code}")
+                widget.repaint()
                 return True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Gantt drawing error: {e}")
         return False
 
 

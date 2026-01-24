@@ -1,7 +1,3 @@
-"""
-Async Executor - Cầu nối asyncio và Qt.
-"""
-
 from __future__ import annotations
 import asyncio
 import logging
@@ -23,9 +19,7 @@ class AsyncExecutor(QObject):
         self._periodic_timers: dict[str, QTimer] = {}
         self._running = True
 
-    def run(
-        self, coro: Awaitable[T], callback: Optional[Callable[[T], None]] = None, error_callback: Optional[Callable[[Exception], None]] = None
-    ) -> None:
+    def run(self, coro: Awaitable[T], callback=None, error_callback=None) -> None:
         if not self._running:
             return
 
@@ -47,15 +41,16 @@ class AsyncExecutor(QObject):
 
         self._executor.submit(_run_in_thread)
 
-    # --- CÁC HÀM UICONTAINER YÊU CẦU ---
-    def run_async(self, coro: Awaitable[T], callback=None) -> None:
-        self.run(coro, callback)
-
-    def run_in_background(self, coro: Awaitable[T], callback=None, error_callback=None) -> None:
+    def run_in_background(self, coro, callback=None, error_callback=None):
         self.run(coro, callback, error_callback)
+
+    def cancel_all_periodic(self) -> None:
+        for task_id in list(self._periodic_timers.keys()):
+            timer = self._periodic_timers.pop(task_id)
+            timer.stop()
+            timer.deleteLater()
 
     def shutdown(self, wait: bool = True) -> None:
         self._running = False
-        for t in list(self._periodic_timers.values()):
-            t.stop()
+        self.cancel_all_periodic()
         self._executor.shutdown(wait=wait)

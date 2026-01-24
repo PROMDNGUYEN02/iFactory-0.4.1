@@ -193,10 +193,23 @@ class DeviceController(QObject):
         self._current_device = device_code
         self.device_selected.emit(device_code, device_name)
 
-    def refresh_all_devices(self) -> None:
-        """Sửa lỗi gọi nhầm _sync_use_case."""
-        if self._async_executor:
-            self._async_executor.run_in_background(self._sync_and_refresh_internal(), callback=self._on_sync_complete)
+    async def refresh_all_devices(self, codes=None) -> dict:
+        """5. FIX: Phải trả về Dictionary để UIContainer kết thúc vòng lặp loading."""
+        try:
+            if self._sync_service:
+                await self._sync_service.sync_status_hot(codes)
+
+            statuses = await self._device_service.get_all_latest_status()
+            formatted = self._presenter.format_for_update(statuses) if self._presenter else statuses
+
+            # Phát tín hiệu báo cho Bridge/View dừng spinner Refresh
+            if self._signal_adapter:
+                self._signal_adapter.emit_device_statuses(formatted)
+
+            return formatted if formatted else {}  # KHÔNG ĐƯỢC TRẢ VỀ NONE
+        except Exception as e:
+            logger.error(f"Refresh failed: {e}")
+            return {}
 
     async def _sync_and_refresh_internal(self):
         """Hàm trợ giúp thực hiện logic sync."""

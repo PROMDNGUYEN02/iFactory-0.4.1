@@ -6,6 +6,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtWidgets import QMenu
+from PySide6.QtGui import QAction, QCursor
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,43 @@ class MainController(QObject):
         """Fix lỗi thiếu hàm xử lý click."""
         if self._async_executor:
             self._async_executor.run(self._load_device_history(code))
+
+    def _inject_managers_into_view(self) -> None:
+        if not self._view:
+            return
+
+        # 1. FIX: Hiển thị tên Hệ thống trên Left Menu
+        if hasattr(self._view, "ui"):
+            self._view.ui.title_label.setText("IFACTORY MS - QUẢN LÝ")
+            self._view.ui.title_label.show()
+
+        # 2. FIX: Nạp lại Background SVG cho Middle Frame 1
+        if self._device_layout_mgr:
+            for frame_name in ["daboard_midle_frame_1", "orders_midle_frame_1"]:
+                path = self._get_frame_svg_path(frame_name, self._current_mode)
+                if path:
+                    self._device_layout_mgr.load_svg_for_frame(frame_name, path)
+
+        if hasattr(self._view, "set_tooltip_provider"):
+            self._view.set_tooltip_provider(self._get_device_tooltip_data)
+
+    def _show_device_context_menu(self, code: str, name: str, pos: QPoint) -> None:
+        """3. FIX: Lỗi không chuột phải được - Tạo QMenu tại vị trí click."""
+        if not self._view:
+            return
+        menu = QMenu(self._view)
+        # Style cho menu chuẩn UI hiện đại
+        menu.setStyleSheet(
+            "QMenu { background-color: #ffffff; border: 1px solid #dcdcdc; padding: 5px; } "
+            "QMenu::item:selected { background-color: #0078d7; color: white; }"
+        )
+
+        act_history = QAction(f"Xem Gantt: {code}", menu)
+        act_history.triggered.connect(lambda: self.handle_device_click(code, name))
+
+        menu.addAction(act_history)
+        # Sử dụng QCursor để lấy vị trí global chính xác
+        menu.exec(QCursor.pos())
 
     async def _load_device_history(self, code: str) -> None:
         """Fix lỗi thiếu hàm load history."""
