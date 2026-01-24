@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 def configure_logging() -> None:
     """Configure application logging."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
+    root_logger = logging.getLogger()
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
     for noisy in ("aiosqlite", "qasync", "sqlalchemy.engine"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 

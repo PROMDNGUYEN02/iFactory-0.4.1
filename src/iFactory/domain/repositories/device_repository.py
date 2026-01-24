@@ -49,10 +49,7 @@ class DeviceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_by_codes(
-        self,
-        codes: Sequence[str]
-    ) -> Sequence[Device]:
+    async def get_by_codes(self, codes: Sequence[str]) -> Sequence[Device]:
         """
         Lấy nhiều devices theo equipment codes.
 
@@ -75,10 +72,7 @@ class DeviceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_by_status(
-        self,
-        status: "Status"
-    ) -> Sequence[Device]:
+    async def get_by_status(self, status: "Status") -> Sequence[Device]:
         """
         Lấy devices có status cụ thể.
 
@@ -91,7 +85,7 @@ class DeviceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_by_status_codes(self, codes: Sequence[str]) -> Sequence[Device]:
+    async def get_by_status_codes(self, status_codes: Sequence[Status]) -> Sequence[Device]:
         """
         Lấy devices có các status codes cụ thể.
 
@@ -100,26 +94,6 @@ class DeviceRepository(ABC):
 
         Returns:
             Sequence của Device entities có status codes đó
-        """
-        pass
-
-    @abstractmethod
-    async def get_requiring_attention(self) -> Sequence[Device]:
-        """
-        Lấy devices cần sự chú ý (alarm, stop).
-
-        Returns:
-            Sequence của Device entities cần attention
-        """
-        pass
-
-    @abstractmethod
-    async def get_running_devices(self) -> Sequence[Device]:
-        """
-        Lấy devices đang chạy.
-
-        Returns:
-            Sequence của Device entities đang running
         """
         pass
 

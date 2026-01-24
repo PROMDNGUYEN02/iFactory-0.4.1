@@ -193,73 +193,24 @@ class DeviceController(QObject):
         self._current_device = device_code
         self.device_selected.emit(device_code, device_name)
 
-    @profile_async_method(threshold_ms=100)
-    async def refresh_all_devices(self, device_codes: Optional[List[str]] = None) -> int:
-        """
-        Refresh all device statuses from remote.
+    def refresh_all_devices(self) -> None:
+        """Sửa lỗi gọi nhầm _sync_use_case."""
+        if self._async_executor:
+            self._async_executor.run_in_background(self._sync_and_refresh_internal(), callback=self._on_sync_complete)
 
-        This will:
-        1. Sync from MSSQL to local DB (if sync service available)
-        2. Read from local DB (Use Case)
-        3. Convert DTOs to dict format using Presenter
-        4. Emit to signal adapter
-        5. Update cache
+    async def _sync_and_refresh_internal(self):
+        """Hàm trợ giúp thực hiện logic sync."""
+        await self._sync_from_remote()
+        statuses = await self._device_service.get_all_latest_status()
+        if self._presenter:
+            return self._presenter.format_for_update(statuses)
+        return statuses
 
-        Args:
-            device_codes: Optional list of specific device codes to refresh
-
-        Returns:
-            Number of devices refreshed
-        """
-        if self._sync_in_progress:
-            logger.debug("[DeviceController] Sync already in progress, skipping")
-            return 0
-        self._sync_in_progress = True
-        self.refresh_started.emit()
-        try:
-            with profile_block("Sync from remote"):
-                sync_count = await self._sync_from_remote(device_codes)
-            if not self._device_service:
-                logger.warning("[DeviceController] No device service available")
-                return 0
-            with profile_block("Read from local DB"):
-                logger.debug("[DeviceController] Reading device statuses from local DB...")
-                statuses = await self._device_service.get_all_latest_status(device_codes)
-            if not statuses:
-                if sync_count == 0:
-                    logger.debug("[DeviceController] No device statuses found (sync may have failed)")
-                else:
-                    logger.warning(f"[DeviceController] Synced {sync_count} but no statuses read from DB")
-                return 0
-
-            # Delegate formatting to Presenter
-            formatted_statuses = {}
-            if self._presenter:
-                formatted_statuses = self._presenter.format_for_update(statuses)
-            else:
-                # Defensive fallback, though Presenter should be injected
-                logger.warning("[DeviceController] Presenter not available, using raw data")
-                formatted_statuses = statuses
-
-            self._cached_statuses = formatted_statuses
-            self._last_refresh_time = datetime.now()
-            self._cache_valid = True
-
-            with profile_block("Emit formatted data"):
-                if self._signal_adapter:
-                    # Presenter ensures the dict format matches what SignalAdapter/View expects
-                    self._signal_adapter.emit_device_statuses(formatted_statuses)
-
-            logger.info(f"[DeviceController] Refreshed {len(formatted_statuses)} devices")
-            self.sync_completed.emit(len(formatted_statuses))
-            self.refresh_complete.emit()
-            return len(formatted_statuses)
-        except Exception as e:
-            logger.error(f"[DeviceController] Refresh failed: {e}", exc_info=True)
-            self.error_occurred.emit(str(e))
-            return 0
-        finally:
-            self._sync_in_progress = False
+    def _on_sync_complete(self, updated_data):
+        if updated_data:
+            self.status_updated.emit(updated_data)
+            if self._signal_adapter:
+                self._signal_adapter.emit_device_statuses(updated_data)
 
     async def _sync_from_remote(self, device_codes: Optional[List[str]] = None) -> int:
         """

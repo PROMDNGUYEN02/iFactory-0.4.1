@@ -114,19 +114,6 @@ class SqliteDeviceRepository(DeviceRepository):
             rows = result.scalars().all()
             return DeviceOrmMapper.to_entities(rows)
 
-    async def get_requiring_attention(self) -> Sequence[Device]:
-        """
-        Get devices that require attention.
-
-        DEPRECATED: This method hard-codes business logic.
-        Use get_by_status_codes() with Domain enum codes instead.
-        Example: await repo.get_by_status_codes([s.code for s in DeviceStatus.attention_required_statuses()])
-        """
-        from iFactory.domain.enums import DeviceStatus
-
-        attention_codes = [s.code for s in DeviceStatus.attention_required_statuses()]
-        return await self.get_by_status_codes(attention_codes)
-
     async def exists(self, code: str | EquipmentCode) -> bool:
         """Check if device exists."""
         code_str = code.value if isinstance(code, EquipmentCode) else str(code)
@@ -200,10 +187,10 @@ class SqliteDeviceRepository(DeviceRepository):
             update_time: Optional timestamp
         """
         from iFactory.domain.value_objects import Status
-        
+
         code_str = code.value if isinstance(code, EquipmentCode) else str(code)
         code_obj = status_code.code if isinstance(status_code, Status) else str(status_code)
-        
+
         async with self._engine.session() as session:
             result = await session.execute(select(LatestStatus).where(LatestStatus.equip_code == code_str))
             row = result.scalar_one_or_none()
@@ -235,7 +222,6 @@ class SqliteDeviceRepository(DeviceRepository):
         Note: This method is deprecated as it hard-codes business logic.
         Use get_by_status_codes() with Domain enum codes instead.
         """
-        from iFactory.domain.enums import DeviceStatus
 
         running_codes = [s.code for s in DeviceStatus.running_statuses()]
         return await self.get_by_status_codes(running_codes)

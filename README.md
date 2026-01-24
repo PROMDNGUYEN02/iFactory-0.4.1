@@ -1,9 +1,10 @@
 pip install -e .
+Get-ChildItem -Path . -Include __pycache__ -Recurse | Remove-Item -Recurse -Force
+python -m iFactory
 tree /F > structure.txt
 
 .\venv\Scripts\activate
 python -m iFactory
-python -m iFactory_monitor
 Get-ChildItem -Path "src\iFactory" -Filter "__pycache__" -Recurse -Force | Remove-Item -Recurse -Force
 Get-ChildItem -Path "src\iFactory" -Filter "*.pyc" -Recurse -Force | Remove-Item -Recurse -Force
 

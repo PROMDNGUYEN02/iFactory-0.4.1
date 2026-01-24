@@ -49,30 +49,7 @@ class Device:
     name: Optional[str] = None
     description: Optional[str] = None
 
-    _events: List["StatusChangedEvent"] = field(
-        default_factory=list, init=False, repr=False
-    )
-
-    def __post_init__(self) -> None:
-        """
-        Validate sau khi khởi tạo.
-
-        Defensive programming: nếu truyền string thô,
-        tự động chuyển thành EquipmentCode/Status.
-        """
-        if not isinstance(self.equipment_code, EquipmentCode):
-            object.__setattr__(
-                self, 
-                "equipment_code", 
-                EquipmentCode(self.equipment_code)
-            )
-
-        if not isinstance(self.current_status, Status):
-            object.__setattr__(
-                self, 
-                "current_status", 
-                Status(DeviceStatus.from_code_or_name(self.current_status))
-            )
+    _events: List["StatusChangedEvent"] = field(default_factory=list, init=False, repr=False)
 
     @classmethod
     def create(
@@ -118,11 +95,7 @@ class Device:
 
     # ====== BUSINESS BEHAVIOR ======
 
-    def update_status(
-        self, 
-        new_status: Status | DeviceStatus | str,
-        update_time: datetime | None = None
-    ) -> bool:
+    def update_status(self, new_status: Status | DeviceStatus | str, update_time: datetime | None = None) -> bool:
         """
         Business Rule: Cập nhật trạng thái.
 
@@ -159,17 +132,10 @@ class Device:
 
         # Cập nhật state
         object.__setattr__(self, "current_status", new_status)
-        object.__setattr__(
-            self, 
-            "last_update", 
-            update_time or datetime.now()
-        )
+        object.__setattr__(self, "last_update", update_time or datetime.now())
         return True
 
-    def can_transition_to(
-        self, 
-        new_status: Status | DeviceStatus
-    ) -> bool:
+    def can_transition_to(self, new_status: Status | DeviceStatus) -> bool:
         """
         Business Rule: Kiểm tra transition có hợp lệ không.
 
