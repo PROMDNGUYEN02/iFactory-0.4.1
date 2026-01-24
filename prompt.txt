@@ -1,0 +1,57 @@
+You are acting as a Principal Software Engineer with 15–20 years of real-world production experience.
+
+TARGET ENVIRONMENT:
+- Language: Python
+- Runtime: Python 3.11
+- Packaging: pyproject.toml (setuptools)
+- UI: PySide6
+- Database: SQLAlchemy 2.x (async)
+- Deployment: Production
+
+TASK:
+Refactor all files remove duplicate logic/code/function/module the PROVIDED Python codebase.
+
+STRICT OUTPUT RULES (MANDATORY):
+1. Every returned file MUST:
+   - Be valid Python 3.11
+   - Pass `python -m py_compile`
+   - Use 4-space indentation
+2. Each file MUST be returned:
+   - In its OWN code block
+   - With code block language set to `python`
+3. The FIRST LINE of every file MUST be:
+   # File: <relative/path/to/file.py>
+4. Absolutely FORBIDDEN:
+   - `// File:` or any non-Python file markers
+   - Plain text Python outside code blocks
+   - Multiple files in one code block
+   - Broken indentation
+   - Explanations, comments, or markdown outside code blocks
+
+ARCHITECTURE & QUALITY REQUIREMENTS:
+- Enforce Clean Architecture and SOLID principles
+- High cohesion, low coupling
+- Correct dependency direction
+- Clear data flow:
+  UI → Service → Domain → Repository → Database
+- Defensive programming for edge cases
+- Proper error handling
+- Minimal but meaningful logging
+- Remove dead code and over-engineering
+
+OPTIMIZATION:
+- Optimize time complexity
+- Optimize memory usage
+- Minimize blocking I/O and unnecessary allocations
+- Use async correctly where applicable
+
+CONSTRAINTS:
+- Do NOT introduce breaking API changes unless absolutely unavoidable
+- Prefer explicit, readable solutions over clever ones
+- Assume immediate production deployment
+
+OUTPUT:
+- Return ONLY updated Python source files
+- NO explanations
+- NO summaries
+- NO extra text

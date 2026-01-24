@@ -1,0 +1,66 @@
+{
+  "common": {
+    "font.family": "Segoe UI",
+    "menu.fontSize": "10.5pt",
+    "menu.itemH": "40px",
+    "separator.h": "1px",
+    "radius": "5px",
+    "item.padLeft": "5px"
+  },
+  "light": {
+    "app.bg": "#F2F2F2",
+    "app.fg": "#000000",
+    "slide.bg": "#F2F2F2",
+    "stack.bg": "#FFFFFF",
+    "frame.bg": "#FAFAFA",
+    "border": "#E0E0E0",
+    "hover": "rgba(0,0,0,0.06)",
+    "icon.hover": "#E6E6E6",
+    "icon.border": "#CFCFCF",
+    "hint": "#888888"
+  },
+  "dark": {
+    "app.bg": "#2B2B2B",
+    "app.fg": "#FFFFFF",
+    "slide.bg": "#3A3A3A",
+    "stack.bg": "#1E1E1E",
+    "frame.bg": "#747474",
+    "border": "rgba(255,255,255,0.1)",
+    "hover": "rgba(255,255,255,0.08)",
+    "icon.hover": "#747474",
+    "icon.border": "rgba(255,255,255,0.14)",
+    "hint": "#3A3A3A"
+  },
+  "iconAlias": {
+    "dark": {
+      ":/icon/dashboard.svg": ":/icon/dashboard-white.svg",
+      ":/icon/orders.svg": ":/icon/orders-white.svg",
+      ":/icon/products.svg": ":/icon/products-white.svg",
+      ":/icon/customers.svg": ":/icon/customers-white.svg",
+      ":/icon/reports.svg": ":/icon/reports-white.svg",
+      ":/icon/settings.svg": ":/icon/settings-white.svg",
+      ":/icon/open.svg": ":/icon/open-white.svg",
+      ":/icon/close.svg": ":/icon/close-white.svg",
+      ":/icon/expand.svg": ":/icon/expand-white.svg",
+      ":/icon/arrow_menu_open.svg": ":/icon/arrow_menu_open-white.svg",
+      ":/icon/arrow_menu_close.svg": ":/icon/arrow_menu_close-white.svg"
+    },
+    "light": {}
+  },
+  "icons": {
+    "_default": { "pad": 2, "scale": 1.08 },
+    ":/icon/settings.svg": { "pad": 0, "scale": 1.08 },
+    ":/icon/open.svg": { "pad": 2, "scale": 1.1 },
+    ":/icon/close.svg": { "pad": 2, "scale": 1.1 }
+  },
+  "pageSvg": {
+    "daboard_midle_frame_1": {
+      "light": ":/icon/dashboard_layout.svg",
+      "dark": ":/icon/dashboard_layout-white.svg"
+    },
+    "orders_midle_frame_1": {
+      "light": ":/icon/orders_layout.svg",
+      "dark": ":/icon/orders_layout-white.svg"
+    }
+  }
+}

@@ -1,0 +1,204 @@
+/*  src\iFactory\resources\themes\base.qss */
+/* ===== BASE ===== */
+QMainWindow, QWidget#centralwidget {
+    background: ${app.bg};
+    color: ${app.fg};
+}
+
+/* ===== STACKED WIDGET & PAGES ===== */
+QStackedWidget#stackedWidget,
+QWidget#orders_page,
+QWidget#daboard_page {
+    background: ${stack.bg};
+    border: none;
+}
+
+/* ===== PAGE FRAMES ===== */
+QFrame#daboard_top_frame,
+QFrame#daboard_midle_frame_1,
+QFrame#daboard_midle_frame_2,
+QFrame#daboard_bottom_frame,
+QFrame#orders_top_frame,
+QFrame#orders_midle_frame_1,
+QFrame#orders_midle_frame_2,
+QFrame#orders_bottom_frame {
+    background: ${frame.bg};
+    border: none;
+    border-bottom: 1px solid ${border};
+    margin: 0;
+}
+
+/* ===== SLIDE MENUS ===== */
+QFrame#title_frame,
+QFrame#left_slide_menu_frame,
+QFrame#right_slide_menu_frame,
+QStatusBar#statusbar {
+    background: ${slide.bg};
+    border: none;
+}
+
+QFrame#daboard_midle_frame_1 {
+    background: ${frame.bg};
+    background-repeat: no-repeat;
+    background-position: center;
+    border: none;
+    margin: 0;
+}
+
+/* ===== LABELS ===== */
+QLabel#title_label,
+QLabel#title_icon,
+QLabel#pageTitle {
+    background: transparent;
+    color: ${app.fg};
+    font-family: ${font.family};
+}
+
+QLabel#pageTitle { font-size: 20px; }
+
+/* ===== LIST WIDGETS ===== */
+QListWidget,
+QListWidget::viewport,
+QListView#listView {
+    background: transparent;
+    border: none;
+    color: ${app.fg};
+    font: ${menu.fontSize} ${font.family};
+    outline: none;
+}
+
+QListWidget::item,
+QListView#listView::item {
+    height: ${menu.itemH};
+    border: none;
+    padding-left: ${item.padLeft};
+}
+
+QListWidget::item:hover,
+QListView#listView::item:hover {
+    background: ${hover};
+}
+
+QListWidget::item:selected,
+QListView#listView::item:selected {
+    background: transparent;
+}
+
+QListWidget[collapsed="true"] {
+    width: ${menu.widthCollapsed};
+}
+
+QListWidget[collapsed="true"]::item {
+    margin: 0;
+    padding: 8px 0;
+    border-radius: ${radius};
+    text-align: center;
+}
+
+QListWidget[collapsed="true"]::item:hover {
+    background: ${icon.hover};
+    border: 1px solid ${icon.border};
+}
+
+/* ===== BUTTONS ===== */
+QPushButton#menu_btn,
+QPushButton#panelBtn {
+    background: transparent;
+    border: none;
+    color: ${app.fg};
+    font-family: ${font.family};
+}
+
+QPushButton#menu_btn:hover,
+QPushButton#panelBtn:hover {
+    background: ${hover};
+    border-radius: ${radius};
+}
+
+/* ===== PANELS ===== */
+QFrame#settingsRootPanel,
+QFrame#themeSubPanel {
+    background: ${frame.bg};
+    border: 1px solid ${border};
+    border-radius: ${radius};
+}
+
+QWidget#expandableMenuButton,
+QWidget#menuButtonWithShortcut {
+    background: transparent;
+    border-radius: ${radius};
+}
+
+QWidget#expandableMenuButton:hover,
+QWidget#menuButtonWithShortcut:hover {
+    background: ${hover};
+}
+
+QLabel#expandableMenuLabel,
+QLabel#menuButtonLabel {
+    color: ${app.fg};
+    font-family: ${font.family};
+    background: transparent;
+}
+
+QLabel#shortcutHint {
+    color: ${hint};
+    font: 10px ${font.family};
+}
+
+QLabel#shortcutHintsPanel {
+    color: ${hint};
+    font: 12px ${font.family};
+    padding: 20px;
+    background: ${frame.bg};
+    border: 1px solid ${border};
+    border-radius: ${radius};
+}
+
+/* ===== RIGHT PANEL ===== */
+QPushButton#floatingOpenBtn {
+    background: ${slide.bg};
+    border: 1px solid ${border};
+    border-right: none;
+    border-radius: 4px 0 0 4px;
+}
+
+QPushButton#rightMenuToggleBtn {
+    background: ${slide.bg};
+    border: 1px solid ${border};
+    border-left: none;
+    border-radius: 0 4px 4px 0;
+}
+
+QPushButton#floatingOpenBtn:hover,
+QPushButton#rightMenuToggleBtn:hover {
+    background: ${hover};
+}
+
+QFrame#resizableRightPanel { background: ${slide.bg}; border: none; }
+QFrame#rightPanelContent { background: transparent; }
+
+QListWidget#rightListWidget {
+    background: transparent;
+    border: none;
+    color: ${app.fg};
+    font: ${menu.fontSize} ${font.family};
+}
+
+QListWidget#rightListWidget::item { padding: 8px; }
+QListWidget#rightListWidget::item:hover { background: ${hover}; }
+
+/* ===== TABLE VIEW ===== */
+QTableView#tableView {
+    background: ${stack.bg};
+    border: none;
+    color: ${app.fg};
+    gridline-color: ${border};
+}
+
+QTableView#tableView QHeaderView::section {
+    background: ${frame.bg};
+    color: ${app.fg};
+    border: 1px solid ${border};
+    padding: 4px;
+}

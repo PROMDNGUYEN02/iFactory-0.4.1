@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "factory_monitor"
+version = "0.4.0"
+description = "AES Lithium Battery - Industrial Factory Management"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Industrial Engineering Team"}
+]
+dependencies = [
+    "PySide6>=6.4.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.19.0",
+    "pyodbc>=5.0.0",
+    "pandas>=2.0.0",
+    "pyarrow>=12.0.0",
+    "tenacity>=8.2.0",
+    "qasync>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "isort>=5.12",
+]
+
+[project.scripts]
+factory-monitor = "factory_monitor.__main__:run_qt"
+iFactory = "iFactory.app:main"
+
+[project.gui-scripts]
+factory-monitor-gui = "factory_monitor.__main__:run_qt"
+iFactory-gui = "iFactory.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.qss", "*.json", "*.svg", "*.png", "*.ico", "*.qrc"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+fix = true
+unsafe-fixes = false
+
+[tool.ruff.lint]
+select = [
+  "F",    # pyflakes (undefined, unused, import errors)
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "I",    # isort (imports)
+  "B",    # flake8-bugbear (real bugs)
+  "UP",   # pyupgrade (modern Python)
+  "ASYNC",# async/await correctness
+  "C4",   # unnecessary comprehensions
+  "SIM",  # code simplification
+  "RET",  # return correctness
+  "PL",   # pylint-equivalent (selected)
+]
+
+ignore = [
+  "E501",     # handled by formatter / intentional
+  "W0107",    # unnecessary-pass (ABCs need pass)
+  "PLW0127",  # self-assignment (harmless in init)
+  "PLR0913",  # too many arguments (DTOs, Commands)
+  "PLR2004",  # magic numbers (domain rules)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["factory_monitor", "iFactory"]
+force-single-line = false
+combine-as-imports = true
+
+[tool.ruff.lint.per-file-ignores]
+"**/dto/*.py" = ["PLR0913"]        # DTOs often have many fields
+"**/domain/**/*.py" = ["PLR2004"]  # Domain constants allowed
+"**/tests/**/*.py" = ["S101"]     # assert allowed
+

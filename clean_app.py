@@ -1,0 +1,14 @@
+"""Clean build artifacts and cache files."""
+import shutil
+import pathlib
+
+for p in ('build', 'dist'):
+    shutil.rmtree(p, ignore_errors=True)
+for p in pathlib.Path('.').rglob('__pycache__'):
+    shutil.rmtree(p, ignore_errors=True)
+for f in pathlib.Path('.').rglob('*.pyc'):
+    try:
+        f.unlink()
+    except OSError:
+        pass
+print('Cleaned build/dist/__pycache__')
