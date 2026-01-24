@@ -1,11 +1,11 @@
 """
-Main Controller - Điều phối trung tâm.
+Main Controller - Standardized API and English UI.
 """
 
 from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QTimer, Signal, QPoint, Qt
 from PySide6.QtWidgets import QMenu
 from PySide6.QtGui import QAction, QCursor
 
@@ -23,15 +23,20 @@ class MainController(QObject):
         self._async_executor = async_executor
         self._device_presenter = device_presenter
         self._gantt_presenter = gantt_presenter
+
         self._device_status_cache = {}
         self._view = None
         self._gantt_mgr = None
+        self._device_layout_mgr = None
+        self._current_mode = "light"
         self._initialized = False
-        logger.info("[MainController] Khởi tạo thành công")
 
-    # --- PHƯƠNG THỨC UICONTAINER YÊU CẦU ---
     def set_view(self, view):
         self._view = view
+        if hasattr(self._view, "ui"):
+            # FIX: Ensure English titles in Left Menu
+            self._view.ui.title_label.setText("IFACTORY MANAGEMENT SYSTEM")
+            self._view.ui.title_label.show()
 
     def set_device_controller(self, ctrl):
         pass
@@ -43,77 +48,85 @@ class MainController(QObject):
         pass
 
     def set_infrastructure_managers(self, device_layout=None, gantt=None, legend=None):
+        self._device_layout_mgr = device_layout
         self._gantt_mgr = gantt
-        if self._view and hasattr(self._view, "set_tooltip_provider"):
-            self._view.set_tooltip_provider(self._get_device_tooltip_data)
+        self._inject_managers_into_view()
+        self._load_initial_layouts()
 
-    def update_device_cache(self, statuses=None, **kwargs) -> None:
+    def _load_initial_layouts(self):
+        """FIX: Restore missing background layouts."""
+        if self._device_layout_mgr:
+            for f_name in ["daboard_midle_frame_1", "orders_midle_frame_1"]:
+                path = self._get_frame_svg_path(f_name, self._current_mode)
+                if path:
+                    self._device_layout_mgr.load_svg_for_frame(f_name, path)
+
+    def _show_device_context_menu(self, code: str, name: str, pos: QPoint) -> None:
+        """FIX: Full Right-Click Menu (English)."""
+        if not self._view:
+            return
+        menu = QMenu(self._view)
+        menu.setStyleSheet("QMenu { background-color: #ffffff; color: #333; border: 1px solid #ccc; }")
+
+        # Header items
+        menu.addAction(f"Device: {code}").setEnabled(False)
+        menu.addSeparator()
+
+        # Actions
+        act_gantt = QAction("📊 Show Gantt Chart", menu)
+        act_gantt.triggered.connect(lambda: self.handle_device_click(code, name))
+
+        act_history = QAction("📋 View Status History", menu)
+        act_history.triggered.connect(lambda: self._request_right_panel(code, name, "status"))
+
+        menu.addActions([act_gantt, act_history])
+        menu.exec(QCursor.pos())
+
+    def _request_right_panel(self, code, name, h_type):
+        self.right_panel_data_ready.emit({"type": "history", "device": code, "name": name, "history_type": h_type})
+
+    def handle_device_click(self, device_code: str, device_name: str) -> None:
+        if self._async_executor:
+            self._async_executor.run(self._load_device_history(device_code))
+
+    async def _load_device_history(self, code: str) -> None:
+        """FIX: Proper mapping to avoid 'No Data' in Gantt."""
+        if not self._device_service or not self._gantt_mgr:
+            return
+        try:
+            segments = await self._device_service.get_gantt_segments(code)
+            # Ensure proper tuple structure (start, end, label)
+            converted = [(s.start_time, s.end_time, str(getattr(s, "status_code", "0"))) for s in segments]
+
+            page = self._view.get_current_page() if self._view else "daboard_page"
+            frame = "daboard_midle_frame_2" if "daboard" in page else "orders_midle_frame_2"
+
+            self._gantt_mgr.set_data(frame, code, converted)
+        except Exception as e:
+            logger.error(f"Gantt load failed for {code}: {e}")
+
+    def update_device_cache(self, statuses=None, **kwargs):
         if statuses:
             for s in statuses:
-                code = s.get("equip_code")
-                if code:
-                    self._device_status_cache[code] = s
+                c = s.get("equip_code") or s.get("EQUIP_CODE")
+                if c:
+                    self._device_status_cache[c] = s
 
     def _get_device_tooltip_data(self, code: str) -> dict:
         return {"status": self._device_status_cache.get(code, {}), "input": {}, "output": {}}
 
-    def handle_device_click(self, code: str, name: str) -> None:
-        """Fix lỗi thiếu hàm xử lý click."""
-        if self._async_executor:
-            self._async_executor.run(self._load_device_history(code))
+    def _get_frame_svg_path(self, f, m):
+        d = {
+            "daboard_midle_frame_1": {"light": ":/icon/dashboard_layout.svg", "dark": ":/icon/dashboard_layout-white.svg"},
+            "orders_midle_frame_1": {"light": ":/icon/orders_layout.svg", "dark": ":/icon/orders_layout-white.svg"},
+        }
+        return d.get(f, {}).get(m)
 
-    def _inject_managers_into_view(self) -> None:
-        if not self._view:
-            return
-
-        # 1. FIX: Hiển thị tên Hệ thống trên Left Menu
-        if hasattr(self._view, "ui"):
-            self._view.ui.title_label.setText("IFACTORY MS - QUẢN LÝ")
-            self._view.ui.title_label.show()
-
-        # 2. FIX: Nạp lại Background SVG cho Middle Frame 1
-        if self._device_layout_mgr:
-            for frame_name in ["daboard_midle_frame_1", "orders_midle_frame_1"]:
-                path = self._get_frame_svg_path(frame_name, self._current_mode)
-                if path:
-                    self._device_layout_mgr.load_svg_for_frame(frame_name, path)
-
-        if hasattr(self._view, "set_tooltip_provider"):
+    def _inject_managers_into_view(self):
+        if self._view and hasattr(self._view, "set_tooltip_provider"):
             self._view.set_tooltip_provider(self._get_device_tooltip_data)
-
-    def _show_device_context_menu(self, code: str, name: str, pos: QPoint) -> None:
-        """3. FIX: Lỗi không chuột phải được - Tạo QMenu tại vị trí click."""
-        if not self._view:
-            return
-        menu = QMenu(self._view)
-        # Style cho menu chuẩn UI hiện đại
-        menu.setStyleSheet(
-            "QMenu { background-color: #ffffff; border: 1px solid #dcdcdc; padding: 5px; } "
-            "QMenu::item:selected { background-color: #0078d7; color: white; }"
-        )
-
-        act_history = QAction(f"Xem Gantt: {code}", menu)
-        act_history.triggered.connect(lambda: self.handle_device_click(code, name))
-
-        menu.addAction(act_history)
-        # Sử dụng QCursor để lấy vị trí global chính xác
-        menu.exec(QCursor.pos())
-
-    async def _load_device_history(self, code: str) -> None:
-        """Fix lỗi thiếu hàm load history."""
-        try:
-            if not self._device_service:
-                return
-            segments = await self._device_service.get_gantt_segments(code)
-            converted = [(s.start_time, s.end_time, getattr(s, "status_code", "0")) for s in segments]
-
-            cur_page = self._view.get_current_page() if self._view else "daboard_page"
-            frame = "daboard_midle_frame_2" if "daboard" in cur_page else "orders_midle_frame_2"
-
-            if self._gantt_mgr:
-                self._gantt_mgr.set_data(frame, code, converted)
-        except Exception as e:
-            logger.error(f"Load history failed: {e}")
+        if self._view and hasattr(self._view, "set_context_menu_provider"):
+            self._view.set_context_menu_provider(self._show_device_context_menu)
 
     async def initialize(self):
         self._initialized = True

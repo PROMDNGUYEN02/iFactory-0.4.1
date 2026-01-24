@@ -1,9 +1,4 @@
-"""
-Timeline Segment Factory - Quản lý biểu đồ Gantt.
-"""
-
 from __future__ import annotations
-import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 from PySide6.QtCore import QObject, Signal
@@ -26,16 +21,14 @@ class TimelineSegmentFactory(QObject):
     segment_clicked = Signal(str, object)
     data_loaded = Signal(str, int)
 
-    def __init__(self, db=None, parent=None):
+    def __init__(self, db=None, config=None, parent=None):
         super().__init__(parent)
         self._frames = {}
         self._theme = "light"
 
     def set_theme(self, theme: str) -> None:
-        """Sửa lỗi 'dict' object has no attribute 'widget'."""
         self._theme = "dark" if theme == "dark" else "light"
         for metadata in self._frames.values():
-            # metadata là dictionary nên dùng .get()
             widget = metadata.get("widget")
             if widget and hasattr(widget, "set_theme"):
                 try:
@@ -47,6 +40,7 @@ class TimelineSegmentFactory(QObject):
         if not _HAS_GANTT or not frame:
             return None
         if frame.layout():
+            # Clean layout safely
             QWidget().setLayout(frame.layout())
         try:
             layout = QVBoxLayout(frame)
@@ -58,31 +52,21 @@ class TimelineSegmentFactory(QObject):
             self._frames[name] = {"widget": gantt, "device": ""}
             return gantt
         except Exception as e:
-            logger.error(f"Failed to register frame {name}: {e}")
+            logger.error(f"Gantt register failed: {e}")
             return None
 
     def set_data(self, frame_name, device_code, segments, start=None, end=None):
-        """4. FIX: Đảm bảo dữ liệu segments luôn là list of tuples hợp lệ."""
+        """FIX: Force repaint to solve 'No Data' issue."""
         if frame_name in self._frames:
-            metadata = self._frames[frame_name]
-            widget = metadata["widget"]
-
-            # Chuẩn hóa data: widget Gantt cần (datetime_start, datetime_end, label)
-            valid_segments = []
-            for s in segments:
-                if isinstance(s, (list, tuple)) and len(s) >= 3:
-                    valid_segments.append(s)
-
+            widget = self._frames[frame_name]["widget"]
             try:
-                # Ép widget vẽ lại ngay lập tức
-                widget.set_data(valid_segments, start, end)
-                widget.set_title(f"Lịch sử: {device_code}")
+                # Filter valid tuples
+                valid_data = [s for s in segments if isinstance(s, (list, tuple)) and len(s) >= 3]
+                widget.set_data(valid_data, start, end)
+                widget.set_title(f"Device History: {device_code}")
                 widget.repaint()
+                self.data_loaded.emit(frame_name, len(valid_data))
                 return True
             except Exception as e:
-                logger.error(f"Gantt drawing error: {e}")
+                logger.error(f"Gantt draw failed: {e}")
         return False
-
-
-def create_gantt_manager(db=None, **kwargs) -> TimelineSegmentFactory:
-    return TimelineSegmentFactory(db=db)

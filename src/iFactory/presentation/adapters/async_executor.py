@@ -32,7 +32,6 @@ class AsyncExecutor(QObject):
                     QTimer.singleShot(0, lambda: callback(result))
                 self.task_completed.emit(result)
             except Exception as e:
-                logger.error(f"Async task failed: {e}")
                 if error_callback:
                     QTimer.singleShot(0, lambda: error_callback(e))
                 self.task_failed.emit(str(e))
@@ -41,14 +40,18 @@ class AsyncExecutor(QObject):
 
         self._executor.submit(_run_in_thread)
 
+    def cancel_all_periodic(self) -> None:
+        """Cleanup timers to avoid AttributeError during shutdown."""
+        for tid in list(self._periodic_timers.keys()):
+            timer = self._periodic_timers.pop(tid)
+            timer.stop()
+            timer.deleteLater()
+
     def run_in_background(self, coro, callback=None, error_callback=None):
         self.run(coro, callback, error_callback)
 
-    def cancel_all_periodic(self) -> None:
-        for task_id in list(self._periodic_timers.keys()):
-            timer = self._periodic_timers.pop(task_id)
-            timer.stop()
-            timer.deleteLater()
+    def run_async(self, coro, callback=None):
+        self.run(coro, callback)
 
     def shutdown(self, wait: bool = True) -> None:
         self._running = False
