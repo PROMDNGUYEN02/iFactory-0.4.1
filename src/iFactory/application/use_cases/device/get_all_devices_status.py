@@ -1,58 +1,37 @@
-"""Get all devices status use case."""
+"""
+Get All Devices Status Use Case.
+Thuộc Tầng Application - Chỉ điều phối luồng dữ liệu, không có logic UI.
+"""
 
-import logging
-from datetime import timedelta
-from typing import Optional
+from typing import List
 
-from iFactory.application.config.constants import CacheDefaults, CacheKeys
-from iFactory.application.dtos import DeviceStatusDTO
-from iFactory.application.interfaces import CacheProvider
-from iFactory.application.mappers import DeviceMapper
-from iFactory.domain.repositories import DeviceRepository
-
-logger = logging.getLogger(__name__)
+from iFactory.application.dtos.device_dtos import DeviceStatusDTO
+from iFactory.application.interfaces.unit_of_work import IUnitOfWork
+from iFactory.application.interfaces.cache_provider import ICacheProvider
+from iFactory.application.mappers.device_mapper import to_device_status_dto
 
 
 class GetAllDevicesStatusUseCase:
-    """
-    Use case: Get latest status for all or specified devices.
-    """
+    """Use case to fetch the current status of all devices with caching."""
 
-    def __init__(self, device_repository: DeviceRepository, cache_provider: Optional[CacheProvider] = None):
-        self._device_repo = device_repository
-        self._cache = cache_provider
+    def __init__(self, uow: IUnitOfWork, cache: ICacheProvider):
+        self._uow = uow
+        self._cache = cache
 
-    async def execute(self, equipment_codes: Optional[list[str]] = None) -> dict[str, DeviceStatusDTO]:
-        try:
-            if equipment_codes:
-                from iFactory.domain.value_objects import EquipmentCode
+    async def execute(self) -> List[DeviceStatusDTO]:
+        # 1. Check Cache first
+        cached_status = await self._cache.get("all_devices_status")
+        if cached_status:
+            return cached_status
 
-                codes_vo = [EquipmentCode(c) for c in equipment_codes]
-                devices = await self._device_repo.get_by_codes(codes_vo)
-            else:
-                devices = await self._device_repo.get_all()
+        # 2. Fetch from Database via Unit of Work
+        async with self._uow:
+            devices = await self._uow.devices.get_all()
 
-            result: dict[str, DeviceStatusDTO] = {}
-            mapper = DeviceMapper()
+        # 3. Map Domain Entities to Application DTOs
+        results = [to_device_status_dto(device) for device in devices]
 
-            for device in devices:
-                code = str(device.equipment_code)
-                dto = mapper.to_dto(device, latest_input=None, theme="light")
-                result[code] = dto
+        # 4. Save to Cache for 60 seconds
+        await self._cache.set("all_devices_status", results, ttl=60)
 
-                if self._cache:
-                    try:
-                        cache_key = CacheKeys.device_status(code)
-                        await self._cache.set(
-                            cache_key,
-                            dto.to_dict(),
-                            ttl=timedelta(seconds=CacheDefaults.TTL_STATUS),
-                        )
-                    except Exception:
-                        pass
-
-            logger.info(f"[GetAllDevices] Retrieved statuses for {len(result)} devices.")
-            return result
-        except Exception as e:
-            logger.error(f"[GetAllDevices] Failed to retrieve devices: {e}", exc_info=True)
-            return {}
+        return results

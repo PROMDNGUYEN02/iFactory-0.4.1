@@ -1,54 +1,43 @@
-"""Get latest device status use case."""
+"""
+Get Latest Device Status Use Case.
+Thuộc Tầng Application - Trả về trạng thái hiện tại của một thiết bị cụ thể.
+"""
 
-import logging
-from datetime import timedelta
 from typing import Optional
 
-from iFactory.application.config.constants import CacheDefaults, CacheKeys
-from iFactory.application.dtos import DeviceStatusDTO
-from iFactory.application.interfaces import CacheProvider
-from iFactory.application.mappers import DeviceMapper
-from iFactory.domain.repositories import DeviceRepository, InputRepository
-from iFactory.domain.value_objects import EquipmentCode
-
-logger = logging.getLogger(__name__)
+from iFactory.application.dtos.device_dtos import DeviceStatusDTO
+from iFactory.application.interfaces.unit_of_work import IUnitOfWork
+from iFactory.application.interfaces.cache_provider import ICacheProvider
+from iFactory.application.mappers.device_mapper import to_device_status_dto
+from iFactory.application.exceptions import ResourceNotFoundException
 
 
 class GetLatestDeviceStatusUseCase:
-    """
-    Use case: Get latest status for a specific device.
-    Query-Only use case.
-    """
+    """Use case to fetch the latest status of a single device."""
 
-    __slots__ = ("_device_repo", "_input_repo", "_cache", "_mapper")
+    def __init__(self, uow: IUnitOfWork, cache: ICacheProvider):
+        self._uow = uow
+        self._cache = cache
 
-    def __init__(
-        self,
-        device_repository: DeviceRepository,
-        input_repository: InputRepository,
-        cache_provider: Optional[CacheProvider] = None,
-    ):
-        self._device_repo = device_repository
-        self._input_repo = input_repository
-        self._cache = cache_provider
-        self._mapper = DeviceMapper()
+    async def execute(self, equip_code: str) -> DeviceStatusDTO:
+        cache_key = f"device_status_{equip_code}"
 
-    async def execute(self, equipment_code: str) -> Optional[DeviceStatusDTO]:
-        try:
-            code = EquipmentCode(equipment_code)
-        except ValueError as e:
-            logger.error(f"[GetLatestStatus] Invalid equipment code '{equipment_code}': {e}")
-            return self._mapper.create_unknown_dto(equipment_code)
+        # 1. Check Cache
+        cached_status = await self._cache.get(cache_key)
+        if cached_status:
+            return cached_status
 
-        # Fetch from Domain
-        device = await self._device_repo.get_by_code(code)
-        if device is None:
-            logger.warning(f"[GetLatestStatus] Device '{equipment_code}' not found.")
-            return self._mapper.create_unknown_dto(equipment_code)
+        # 2. Fetch from DB
+        async with self._uow:
+            device = await self._uow.devices.get_by_equipment_code(equip_code)
 
-        # Fetch latest input
-        latest_input = await self._input_repo.get_latest(code)
+        if not device:
+            raise ResourceNotFoundException("Device", equip_code)
 
-        dto = self._mapper.to_dto(device, latest_input, theme="light")
+        # 3. Map to DTO
+        result = to_device_status_dto(device)
 
-        return dto
+        # 4. Update Cache
+        await self._cache.set(cache_key, result, ttl=30)
+
+        return result

@@ -14,13 +14,16 @@ from .dtos.pagination import PaginatedResponseDTO
 from .interfaces.unit_of_work import IUnitOfWork
 from .interfaces.repository import IRepository
 from .interfaces.logger import ILogger
-from .interfaces.cache_provider import CacheProvider
+from .interfaces.cache_provider import ICacheProvider  # Đã sửa thành ICacheProvider
 
-# 3. Use Cases (Interactors) - Add your specific device use cases here
+# 3. Mappers
+from .mappers.device_mapper import to_device_status_dto
+
+# 4. Use Cases (Interactors)
 from .use_cases.device.get_all_devices_status import GetAllDevicesStatusUseCase
 from .use_cases.device.sync_device_status import SyncDeviceStatusUseCase
 
-# 4. Application Exceptions
+# 5. Application Exceptions
 from .exceptions import ApplicationException, ResourceNotFoundException, UnauthorizedActionException, DomainConstraintViolationException
 
 __all__ = [
@@ -32,7 +35,9 @@ __all__ = [
     "IUnitOfWork",
     "IRepository",
     "ILogger",
-    "CacheProvider",
+    "ICacheProvider",  # Đã sửa thành ICacheProvider
+    # Mappers
+    "to_device_status_dto",
     # Use Cases
     "GetAllDevicesStatusUseCase",
     "SyncDeviceStatusUseCase",
