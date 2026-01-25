@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Optional, Sequence
 from sqlalchemy import select, delete, func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
 from iFactory.domain import Device, DeviceRepository
 from iFactory.domain.value_objects import EquipmentCode, Status
 from iFactory.infrastructure.database import AsyncSQLiteEngine, LatestStatus
@@ -69,7 +70,7 @@ class SqliteDeviceRepository(DeviceRepository):
             rows = result.scalars().all()
             return DeviceOrmMapper.to_entities(rows)
 
-    async def get_by_codes(self, codes: Sequence[str] | Sequence[str]) -> Sequence[Device]:
+    async def get_by_codes(self, codes: Sequence[str]) -> Sequence[Device]:
         """Get devices by equipment codes."""
         if not codes:
             return []
@@ -133,7 +134,7 @@ class SqliteDeviceRepository(DeviceRepository):
         """Save device (insert or update)."""
         values = {
             "equip_code": device.code,
-            "equip_status": device.status_code,
+            "equip_status": device.current_status.code,  # FIXED: Through Value Object
             "last_update": device.last_update or datetime.now(),
         }
         stmt = sqlite_insert(LatestStatus).values(**values)
@@ -155,7 +156,7 @@ class SqliteDeviceRepository(DeviceRepository):
         values = [
             {
                 "equip_code": d.code,
-                "equip_status": d.status_code,
+                "equip_status": d.current_status.code,  # FIXED: Through Value Object
                 "last_update": d.last_update or now,
             }
             for d in devices
@@ -214,14 +215,3 @@ class SqliteDeviceRepository(DeviceRepository):
         async with self._engine.session() as session:
             result = await session.execute(stmt)
             return len(result.fetchall())
-
-    async def get_running_devices(self) -> Sequence[Device]:
-        """
-        Get devices currently running.
-
-        Note: This method is deprecated as it hard-codes business logic.
-        Use get_by_status_codes() with Domain enum codes instead.
-        """
-
-        running_codes = [s.code for s in DeviceStatus.running_statuses()]
-        return await self.get_by_status_codes(running_codes)

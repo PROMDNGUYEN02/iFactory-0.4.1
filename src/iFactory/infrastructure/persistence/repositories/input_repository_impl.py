@@ -5,16 +5,13 @@ SQLite implementation of InputRepository.
 from __future__ import annotations
 import logging
 from datetime import datetime
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Dict
 from sqlalchemy import select, delete, desc
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
 from iFactory.domain import InputRepository, MaterialInput, TimeRange
 from iFactory.domain.value_objects import EquipmentCode
-from iFactory.infrastructure.database import (
-    AsyncSQLiteEngine,
-    LatestInput,
-    InputHistory,
-)
+from iFactory.infrastructure.database import AsyncSQLiteEngine, LatestInput, InputHistory
 
 __all__ = ["SqliteInputRepository"]
 logger = logging.getLogger(__name__)
@@ -49,72 +46,73 @@ class SqliteInputRepository(InputRepository):
     async def dispose(self) -> None:
         pass
 
-    async def get_latest(self, code: str | EquipmentCode) -> Optional[MaterialInput]:
-        code_str = code.value if isinstance(code, EquipmentCode) else str(code)
+    async def get_latest(self, code: EquipmentCode) -> Optional[MaterialInput]:
+        code_str = code.value
         stmt = select(LatestInput).where(LatestInput.equip_code == code_str)
         async with self._hot_engine.session() as session:
             result = await session.execute(stmt)
             row = result.scalar_one_or_none()
             if row:
-                return MaterialInput(
+                # FIXED: Use Factory Method for Domain Entity
+                return MaterialInput.create(
                     equip_code=row.equip_code,
                     material_batch=row.material_batch,
                     feeding_time=row.feeding_time,
                 )
             return None
 
-    async def get_all_latest(self, codes: Optional[Sequence[str]] = None) -> Sequence[MaterialInput]:
+    async def get_all_latest(self, codes: Optional[Sequence[EquipmentCode]] = None) -> Sequence[MaterialInput]:
         stmt = select(LatestInput)
         if codes:
-            stmt = stmt.where(LatestInput.equip_code.in_(codes))
+            code_strs = [c.value for c in codes]
+            stmt = stmt.where(LatestInput.equip_code.in_(code_strs))
         async with self._hot_engine.session() as session:
             result = await session.execute(stmt)
             rows = result.scalars().all()
+            # FIXED: Use Factory Method
             return [
-                MaterialInput(
+                MaterialInput.create(
                     equip_code=r.equip_code,
                     material_batch=r.material_batch,
                     feeding_time=r.feeding_time,
                 )
                 for r in rows
             ]
- 
-    async def get_history_for_codes(
-        self,
-        codes: Sequence[str],
-        time_range: TimeRange
-    ) -> dict[str, Sequence[MaterialInput]]:
+
+    async def get_history_for_codes(self, codes: Sequence[EquipmentCode], time_range: TimeRange) -> Dict[str, Sequence[MaterialInput]]:
         """
         Get input history for multiple devices.
 
         Args:
-            codes: Equipment code strings
+            codes: Equipment code Value Objects
             time_range: Time range to query
 
         Returns:
             Dictionary mapping equipment code to input sequences
         """
-        result: dict[str, list] = {code: [] for code in codes}
+        code_strs = [c.value for c in codes]
+        result: Dict[str, list] = {code: [] for code in code_strs}
 
-        if not codes:
+        if not code_strs:
             return result
 
         stmt = (
             select(InputHistory)
-            .where(InputHistory.equip_code.in_(codes))
+            .where(InputHistory.equip_code.in_(code_strs))
             .where(InputHistory.feeding_time >= time_range.start)
             .where(InputHistory.feeding_time <= time_range.end)
             .order_by(InputHistory.equip_code, desc(InputHistory.feeding_time))
         )
 
         async with self._cold_engine.session() as session:
-            result = await session.execute(stmt)
-            for row in result.scalars().all():
+            db_result = await session.execute(stmt)
+            for row in db_result.scalars().all():
                 code = row.equip_code
                 if code not in result:
                     result[code] = []
+                # FIXED: Use Factory Method
                 result[code].append(
-                    MaterialInput(
+                    MaterialInput.create(
                         equip_code=code,
                         material_batch=row.material_batch,
                         feeding_time=row.feeding_time,
@@ -122,9 +120,9 @@ class SqliteInputRepository(InputRepository):
                 )
 
         return result
- 
-    async def get_history(self, code: str | EquipmentCode, time_range: TimeRange) -> Sequence[MaterialInput]:
-        code_str = code.value if isinstance(code, EquipmentCode) else str(code)
+
+    async def get_history(self, code: EquipmentCode, time_range: TimeRange) -> Sequence[MaterialInput]:
+        code_str = code.value
         stmt = (
             select(InputHistory)
             .where(InputHistory.equip_code == code_str)
@@ -135,8 +133,9 @@ class SqliteInputRepository(InputRepository):
         async with self._cold_engine.session() as session:
             result = await session.execute(stmt)
             rows = result.scalars().all()
+            # FIXED: Use Factory Method
             return [
-                MaterialInput(
+                MaterialInput.create(
                     equip_code=r.equip_code,
                     material_batch=r.material_batch,
                     feeding_time=r.feeding_time,
@@ -146,7 +145,7 @@ class SqliteInputRepository(InputRepository):
 
     async def save_latest(self, input_record: MaterialInput) -> None:
         values = {
-            "equip_code": input_record.equip_code,
+            "equip_code": input_record.equipment_code.value,  # FIXED: Access value through equipment_code
             "material_batch": input_record.material_batch,
             "feeding_time": input_record.feeding_time,
         }
@@ -166,7 +165,7 @@ class SqliteInputRepository(InputRepository):
             return 0
         values = [
             {
-                "equip_code": i.equip_code,
+                "equip_code": i.equipment_code.value,  # FIXED: Access value
                 "material_batch": i.material_batch,
                 "feeding_time": i.feeding_time,
             }
@@ -184,30 +183,9 @@ class SqliteInputRepository(InputRepository):
             await session.execute(stmt)
         return len(inputs)
 
-    async def get_history(self, code: str | EquipmentCode, time_range: TimeRange) -> Sequence[MaterialInput]:
-        code_str = code.value if isinstance(code, EquipmentCode) else str(code)
-        stmt = (
-            select(InputHistory)
-            .where(InputHistory.equip_code == code_str)
-            .where(InputHistory.feeding_time >= time_range.start)
-            .where(InputHistory.feeding_time <= time_range.end)
-            .order_by(desc(InputHistory.feeding_time))
-        )
-        async with self._cold_engine.session() as session:
-            result = await session.execute(stmt)
-            rows = result.scalars().all()
-            return [
-                MaterialInput(
-                    equip_code=r.equip_code,
-                    material_batch=r.material_batch,
-                    feeding_time=r.feeding_time,
-                )
-                for r in rows
-            ]
-
     async def save_to_history(self, input_record: MaterialInput) -> None:
         values = {
-            "equip_code": input_record.equip_code,
+            "equip_code": input_record.equipment_code.value,  # FIXED: Access value
             "material_batch": input_record.material_batch,
             "feeding_time": input_record.feeding_time,
         }
@@ -224,7 +202,7 @@ class SqliteInputRepository(InputRepository):
             return 0
         values = [
             {
-                "equip_code": i.equip_code,
+                "equip_code": i.equipment_code.value,  # FIXED: Access value
                 "material_batch": i.material_batch,
                 "feeding_time": i.feeding_time,
             }

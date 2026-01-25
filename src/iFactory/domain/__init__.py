@@ -1,79 +1,60 @@
-"""
-Domain Layer Package.
-
-Contains core business logic, entities, value objects, and repository interfaces.
-This layer has NO dependencies on other layers.
-"""
-
 from __future__ import annotations
 
-# ====== ENTITIES ======
-from .entities import Device
-
-# ====== DOMAIN EVENTS ======
-from .events import StatusChangedEvent, DomainEvent
-
-# ====== ENUMS ======
+from .entities import Device, SyncMetadata
 from .enums import DeviceStatus, StatusCode
-
-# ====== VALUE OBJECTS ======
-from .value_objects import EquipmentCode, DeviceHistory, MaterialInput, Status, SyncMetadata, TimeRange
-
-# ====== DOMAIN SERVICES ======
-from .services import StatusNormalizationService
-
-# ====== REPOSITORIES ======
-from .repositories import (
-    DeviceRepository,
-    StatusRepository,
-    InputRepository,
-    SyncMetadataRepository,
-)
-
-# ====== EXCEPTIONS ======
+from .events import DomainEvent, StatusChangedEvent
 from .exceptions import (
-    DomainError,
     DeviceError,
     DeviceNotFoundError,
-    InvalidStatusError,
+    DomainError,
+    HistoryMergeError,
     InvalidDeviceStateError,
     InvalidEquipmentCodeError,
+    InvalidStatusError,
     InvalidTimeRangeError,
-    HistoryMergeError,
-    ValidationError,
     RepositoryError,
+    ValidationError,
+)
+from .repositories import (
+    DeviceRepository,
+    InputRepository,
+    StatusRepository,
+    SyncMetadataRepository,
+)
+from .services import StatusNormalizationService
+from .value_objects import (
+    DeviceHistory,
+    EquipmentCode,
+    MaterialInput,
+    Status,
+    TimeRange,
 )
 
 __all__ = [
-    # Entities
     "Device",
-    # Domain Events
-    "StatusChangedEvent",
-    "DomainEvent",
-    # Enums
+    "SyncMetadata",
     "DeviceStatus",
     "StatusCode",
-    # Value Objects
-    "EquipmentCode",
-    "DeviceHistory",
-    "MaterialInput",
-    "Status",
-    "SyncMetadata",
-    "TimeRange",
-    # Repositories
-    "DeviceRepository",
-    "StatusRepository",
-    "InputRepository",
-    "SyncMetadataRepository",
-    # Exceptions
-    "DomainError",
+    "DomainEvent",
+    "StatusChangedEvent",
     "DeviceError",
     "DeviceNotFoundError",
-    "InvalidStatusError",
+    "DomainError",
+    "HistoryMergeError",
     "InvalidDeviceStateError",
     "InvalidEquipmentCodeError",
+    "InvalidStatusError",
     "InvalidTimeRangeError",
-    "HistoryMergeError",
-    "ValidationError",
     "RepositoryError",
+    "ValidationError",
+    "DeviceRepository",
+    "InputRepository",
+    "StatusRepository",
+    "SyncMetadataRepository",
+    "StatusNormalizationService",
+    "DeviceHistory",
+    "EquipmentCode",
+    "MaterialInput",
+    "Status",
+    "TimeRange",
 ]

@@ -1,31 +1,26 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 
-__all__ = ["MaterialInput"]
+from ..exceptions import ValidationError
+from .equipment_code import EquipmentCode
 
 
 @dataclass(frozen=True, slots=True)
 class MaterialInput:
-    """
-    Entity: Thông tin nguyên liệu đầu vào.
-
-    Đây là Entity đại diện cho một bản ghi lịch sử nguyên liệu.
-    Sử dụng frozen=True để đảm bảo bất biến (Immutability).
-    """
-
-    equip_code: str
+    equipment_code: EquipmentCode
     material_batch: str
     feeding_time: datetime
 
+    def __post_init__(self):
+        if not self.material_batch.strip():
+            raise ValidationError.required_field("material_batch")
+
     @classmethod
     def create(cls, equip_code: str, material_batch: str, feeding_time: datetime) -> "MaterialInput":
-        """
-        Factory method để tạo instance từ các giá trị thô.
-        Giúp đóng gói logic tạo object.
-        """
         return cls(
-            equip_code=equip_code,
+            equipment_code=EquipmentCode(equip_code),
             material_batch=material_batch,
             feeding_time=feeding_time,
         )

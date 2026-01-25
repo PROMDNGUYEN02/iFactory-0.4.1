@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict
 from sqlalchemy import select, delete
+
 from iFactory.domain import SyncMetadataRepository, SyncMetadata
 from iFactory.infrastructure.database import AsyncSQLiteEngine, SyncMeta
 
@@ -43,13 +44,11 @@ class SqliteSyncMetadataRepository(SyncMetadataRepository):
             result = await session.execute(stmt)
             row = result.scalar_one_or_none()
             if row:
-                return SyncMetadata(
-                    table_name=row.table_name,
-                    last_sync=row.last_synced or datetime.min,
-                    record_count=row.sync_count,
-                    sync_status=row.sync_status or "idle",
-                    error_message=row.error_message,
-                )
+                # FIXED: Use Factory Method
+                meta = SyncMetadata.create(table_name=row.table_name, last_sync=row.last_synced or datetime.min)
+                if row.sync_status == "failed":
+                    return meta.with_failure(error_message=row.error_message or "Unknown error", sync_time=row.last_synced)
+                return meta.with_success(record_count=row.sync_count, sync_time=row.last_synced)
             return None
 
     async def get_last_sync(self, table_name: str) -> Optional[datetime]:
@@ -63,16 +62,15 @@ class SqliteSyncMetadataRepository(SyncMetadataRepository):
         async with self._engine.session() as session:
             result = await session.execute(stmt)
             rows = result.scalars().all()
-            return {
-                row.table_name: SyncMetadata(
-                    table_name=row.table_name,
-                    last_sync=row.last_synced or datetime.min,
-                    record_count=row.sync_count,
-                    sync_status=row.sync_status or "idle",
-                    error_message=row.error_message,
-                )
-                for row in rows
-            }
+            res = {}
+            for row in rows:
+                meta = SyncMetadata.create(table_name=row.table_name, last_sync=row.last_synced or datetime.min)
+                if row.sync_status == "failed":
+                    meta = meta.with_failure(error_message=row.error_message or "Unknown error", sync_time=row.last_synced)
+                else:
+                    meta = meta.with_success(record_count=row.sync_count, sync_time=row.last_synced)
+                res[row.table_name] = meta
+            return res
 
     async def has_synced(self, table_name: str) -> bool:
         metadata = await self.get(table_name)
@@ -80,9 +78,7 @@ class SqliteSyncMetadataRepository(SyncMetadataRepository):
 
     async def save(self, metadata: SyncMetadata) -> None:
         async with self._engine.session() as session:
-            result = await session.execute(
-                select(SyncMeta).where(SyncMeta.table_name == metadata.table_name)
-            )
+            result = await session.execute(select(SyncMeta).where(SyncMeta.table_name == metadata.table_name))
             row = result.scalar_one_or_none()
             if row:
                 row.last_synced = metadata.last_sync
@@ -102,9 +98,7 @@ class SqliteSyncMetadataRepository(SyncMetadataRepository):
 
     async def set_last_sync(self, table_name: str, timestamp: datetime) -> None:
         async with self._engine.session() as session:
-            result = await session.execute(
-                select(SyncMeta).where(SyncMeta.table_name == table_name)
-            )
+            result = await session.execute(select(SyncMeta).where(SyncMeta.table_name == table_name))
             row = result.scalar_one_or_none()
             if row:
                 row.last_synced = timestamp
@@ -120,9 +114,7 @@ class SqliteSyncMetadataRepository(SyncMetadataRepository):
 
     async def mark_sync_started(self, table_name: str) -> None:
         async with self._engine.session() as session:
-            result = await session.execute(
-                select(SyncMeta).where(SyncMeta.table_name == table_name)
-            )
+            result = await session.execute(select(SyncMeta).where(SyncMeta.table_name == table_name))
             row = result.scalar_one_or_none()
             if row:
                 row.sync_status = "in_progress"
@@ -132,9 +124,7 @@ class SqliteSyncMetadataRepository(SyncMetadataRepository):
 
     async def mark_sync_completed(self, table_name: str, record_count: int = 0) -> None:
         async with self._engine.session() as session:
-            result = await session.execute(
-                select(SyncMeta).where(SyncMeta.table_name == table_name)
-            )
+            result = await session.execute(select(SyncMeta).where(SyncMeta.table_name == table_name))
             row = result.scalar_one_or_none()
             now = datetime.now()
             if row:
@@ -154,9 +144,7 @@ class SqliteSyncMetadataRepository(SyncMetadataRepository):
 
     async def mark_sync_failed(self, table_name: str, error_message: str) -> None:
         async with self._engine.session() as session:
-            result = await session.execute(
-                select(SyncMeta).where(SyncMeta.table_name == table_name)
-            )
+            result = await session.execute(select(SyncMeta).where(SyncMeta.table_name == table_name))
             row = result.scalar_one_or_none()
             if row:
                 row.sync_status = "failed"
