@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Optional
 
 from iFactory.application.config.constants import CacheDefaults, CacheKeys
-from iFactory.application.dto import DeviceStatusDTO
+from iFactory.application.dtos import DeviceStatusDTO
 from iFactory.application.interfaces import CacheProvider
 from iFactory.application.mappers import DeviceMapper
 from iFactory.domain.repositories import DeviceRepository, InputRepository

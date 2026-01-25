@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Optional
 
 from iFactory.application.config.constants import CacheDefaults, CacheKeys
-from iFactory.application.dto import DeviceStatusDTO
+from iFactory.application.dtos import DeviceStatusDTO
 from iFactory.application.interfaces import CacheProvider
 from iFactory.application.mappers import DeviceMapper
 from iFactory.domain.repositories import DeviceRepository
@@ -26,6 +26,7 @@ class GetAllDevicesStatusUseCase:
         try:
             if equipment_codes:
                 from iFactory.domain.value_objects import EquipmentCode
+
                 codes_vo = [EquipmentCode(c) for c in equipment_codes]
                 devices = await self._device_repo.get_by_codes(codes_vo)
             else:

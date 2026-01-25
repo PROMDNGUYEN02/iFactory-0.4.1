@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime
-from iFactory.application.dto import GanttSegmentDTO
+from iFactory.application.dtos import GanttSegmentDTO
 from iFactory.domain.repositories import StatusRepository
 from iFactory.domain.value_objects import EquipmentCode, TimeRange
 
@@ -29,6 +29,7 @@ class GetDeviceHistoryUseCase:
             periods = await self._status_repo.get_history(code, time_range)
 
             from iFactory.application.mappers.status_period_mapper import StatusPeriodMapper
+
             mapper = StatusPeriodMapper()
 
             segments = [mapper.to_dto(period, theme="light") for period in periods]

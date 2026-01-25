@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame, QSizePolicy
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from iFactory.infrastructure.legend.status_registry import StatusRegistry
-from iFactory.application.dto.gantt_dto import GanttSegmentDto
+from iFactory.application.dtos.gantt_dto import GanttSegmentDto
 
 logger = logging.getLogger(__name__)
 

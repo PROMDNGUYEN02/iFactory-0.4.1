@@ -4,7 +4,7 @@ Device entity -> DTO mapper.
 
 from typing import TYPE_CHECKING, Optional
 
-from iFactory.application.dto import DeviceStatusDTO
+from iFactory.application.dtos import DeviceStatusDTO
 from iFactory.application.services.status_ui_mapper import StatusUIMapper
 
 if TYPE_CHECKING:

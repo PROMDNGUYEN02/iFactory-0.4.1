@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
-from iFactory.application.dto import GanttSegmentDTO
+from iFactory.application.dtos import GanttSegmentDTO
 from iFactory.application.services.status_ui_mapper import StatusUIMapper
 
 if TYPE_CHECKING:

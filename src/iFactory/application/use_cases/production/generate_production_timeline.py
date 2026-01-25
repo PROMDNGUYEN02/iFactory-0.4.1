@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from iFactory.application.config.constants import CacheDefaults, CacheKeys
-from iFactory.application.dto import GanttSegmentDTO
+from iFactory.application.dtos import GanttSegmentDTO
 from iFactory.application.interfaces import CacheProvider, UnitOfWork
 from iFactory.application.mappers import StatusPeriodMapper
 from iFactory.domain.value_objects import EquipmentCode, TimeRange
