@@ -191,7 +191,7 @@ class AppContainer:
         try:
             from iFactory.infrastructure.cache import InMemoryCacheProvider
 
-            self._cache_provider = InMemoryCacheProvider(max_size=500, default_ttl=30.0)
+            self._cache_provider = InMemoryCacheProvider(max_size=500)
         except Exception as e:
             logger.warning(f"Cache init failed: {e}")
 
@@ -289,7 +289,7 @@ class AppContainer:
         # Use Cases
         sync_uc = SyncAllDevicesUseCase(self._remote_data_source, device_repo) if self._remote_data_source else None
 
-        get_latest_uc = GetLatestDeviceStatusUseCase(device_repo, input_repo, self._cache_provider)
+        get_latest_uc = GetLatestDeviceStatusUseCase(SimpleUnitOfWork(device_repo, status_repo), self._cache_provider)
 
         get_all_uc = GetAllDevicesStatusUseCase(device_repo, self._cache_provider)
 

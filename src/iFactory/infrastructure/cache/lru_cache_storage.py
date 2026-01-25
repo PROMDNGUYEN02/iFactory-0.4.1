@@ -152,9 +152,7 @@ class LRUCacheStorage(Generic[T]):
                     self._hits += 1
         return result
 
-    async def set_many(
-        self, items: dict[str, T], ttl: Optional[timedelta] = None
-    ) -> None:
+    async def set_many(self, items: dict[str, T], ttl: Optional[timedelta] = None) -> None:
         """Set multiple values atomically."""
         ttl_seconds = ttl.total_seconds() if ttl else self._ttl
         async with self._lock:

@@ -12,11 +12,3 @@ class DeviceStatusDTO:
     material_batch: Optional[str]
     feeding_time: Optional[datetime]
     is_active: bool
-
-
-@dataclass(frozen=True)
-class GanttSegmentDTO:
-    device_id: str
-    status: str
-    start_time: datetime
-    end_time: Optional[datetime]

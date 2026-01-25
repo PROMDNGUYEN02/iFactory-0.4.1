@@ -7,14 +7,15 @@ NOTE: UI logic (View Models, Facades, UI Mappers) has been moved to the Presenta
 """
 
 # 1. DTOs (Pure Data Transfer Objects)
-from .dtos.device_dtos import DeviceStatusDTO, GanttSegmentDTO
+from .dtos.device_dtos import DeviceStatusDTO
+from .dtos.gantt_dto import GanttSegmentDTO  # <-- ĐÃ SỬA: Import từ gantt_dto.py
 from .dtos.pagination import PaginatedResponseDTO
 
 # 2. Interfaces (Ports)
 from .interfaces.unit_of_work import IUnitOfWork
 from .interfaces.repository import IRepository
 from .interfaces.logger import ILogger
-from .interfaces.cache_provider import ICacheProvider  # Đã sửa thành ICacheProvider
+from .interfaces.cache_provider import ICacheProvider
 
 # 3. Mappers
 from .mappers.device_mapper import to_device_status_dto
@@ -35,7 +36,7 @@ __all__ = [
     "IUnitOfWork",
     "IRepository",
     "ILogger",
-    "ICacheProvider",  # Đã sửa thành ICacheProvider
+    "ICacheProvider",
     # Mappers
     "to_device_status_dto",
     # Use Cases

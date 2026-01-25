@@ -8,8 +8,8 @@ from typing import Optional
 
 from iFactory.application.config.constants import CacheDefaults, CacheKeys
 from iFactory.application.dtos import GanttSegmentDTO
-from iFactory.application.interfaces import CacheProvider, UnitOfWork
-from iFactory.application.mappers import StatusPeriodMapper
+from iFactory.application.interfaces import ICacheProvider, IUnitOfWork
+from iFactory.application.mappers.status_period_mapper import StatusPeriodMapper
 from iFactory.domain.value_objects import EquipmentCode, TimeRange
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class GenerateProductionTimelineUseCase:
     def __init__(
         self,
         unit_of_work_factory: callable,
-        cache_provider: Optional[CacheProvider] = None,
+        cache_provider: Optional[ICacheProvider] = None,
     ):
         self._uow_factory = unit_of_work_factory
         self._cache = cache_provider

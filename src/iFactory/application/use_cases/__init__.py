@@ -12,10 +12,11 @@ from .device.get_device_history import GetDeviceHistoryUseCase
 # 2. Production Use Cases
 from .production.generate_production_timeline import GenerateProductionTimelineUseCase
 
+# TẠM THỜI COMMENT PHẦN ORDER DO CHƯA CODE XONG DOMAIN ENTITY
 # 3. Order Use Cases
-from .order.create_order_use_case import CreateOrderUseCase
-from .order.get_order_use_case import GetOrderUseCase
-from .order.approve_order_use_case import ApproveOrderUseCase
+# from .order.create_order_use_case import CreateOrderUseCase
+# from .order.get_order_use_case import GetOrderUseCase
+# from .order.approve_order_use_case import ApproveOrderUseCase
 
 __all__ = [
     # Device
@@ -25,8 +26,8 @@ __all__ = [
     "GetDeviceHistoryUseCase",
     # Production
     "GenerateProductionTimelineUseCase",
-    # Order
-    "CreateOrderUseCase",
-    "GetOrderUseCase",
-    "ApproveOrderUseCase",
+    # Order (Tạm thời bỏ comment ra khỏi __all__)
+    # "CreateOrderUseCase",
+    # "GetOrderUseCase",
+    # "ApproveOrderUseCase",
 ]
