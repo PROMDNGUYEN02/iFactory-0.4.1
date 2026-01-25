@@ -1,57 +1,25 @@
-"""Sync device status use case."""
-
-import logging
-from typing import Optional, Sequence
-
-from iFactory.application.interfaces import RemoteDataSource, UnitOfWork
-from iFactory.application.mappers import RemoteRecordMapper
-
-logger = logging.getLogger(__name__)
+from iFactory.application.interfaces.unit_of_work import IUnitOfWork
+from iFactory.application.interfaces.remote_data_source import IRemoteDataSource
+from iFactory.application.mappers.remote_record_mapper import to_device_entity
+from iFactory.application.exceptions import ApplicationException
 
 
 class SyncDeviceStatusUseCase:
-    """
-    Use case: Synchronize device statuses from remote data source.
-    Command use case using UnitOfWork.
-    """
+    def __init__(self, uow: IUnitOfWork, remote_api: IRemoteDataSource):
+        self._uow = uow
+        self._remote_api = remote_api
 
-    __slots__ = ("_remote_source", "_uow_factory")
+    async def execute(self, equip_code: str) -> bool:
+        raw_data = await self._remote_api.fetch_device_status(equip_code)
+        if not raw_data:
+            return False
 
-    def __init__(
-        self,
-        remote_data_source: RemoteDataSource,
-        unit_of_work_factory: callable,
-    ):
-        self._remote_source = remote_data_source
-        self._uow_factory = unit_of_work_factory
+        device_entity = to_device_entity(raw_data)
+        if not device_entity:
+            return False
 
-    async def execute(self, equipment_codes: Optional[Sequence[str]] = None) -> int:
-        try:
-            records = await self._remote_source.fetch_latest_status(equipment_codes)
+        async with self._uow:
+            await self._uow.devices.save(device_entity)
+            await self._uow.commit()
 
-            if not records:
-                logger.info("[SyncDeviceStatus] No records to sync")
-                return 0
-
-            synced_count = 0
-
-            async with self._uow_factory() as uow:
-                for record in records:
-                    device = RemoteRecordMapper.to_device(record)
-                    if device is None:
-                        continue
-
-                    await uow.devices.save(device)
-                    synced_count += 1
-
-                await uow.commit()
-
-            logger.info(f"[SyncDeviceStatus] Synced {synced_count} devices")
-            return synced_count
-
-        except ConnectionError as e:
-            logger.error(f"[SyncDeviceStatus] Remote connection failed (Offline?): {e}")
-            return 0
-        except Exception as e:
-            logger.exception(f"[SyncDeviceStatus] Unexpected error during sync: {e}")
-            return 0
+        return True

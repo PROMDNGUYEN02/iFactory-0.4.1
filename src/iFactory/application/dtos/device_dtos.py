@@ -5,12 +5,13 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class DeviceStatusDTO:
-    device_id: str
-    name: str
-    equipment_code: str
-    current_status: str
+    equip_code: str
+    status_code: str
+    status_name: str
+    last_update: Optional[datetime]
+    material_batch: Optional[str]
+    feeding_time: Optional[datetime]
     is_active: bool
-    last_updated: datetime
 
 
 @dataclass(frozen=True)
@@ -19,4 +20,3 @@ class GanttSegmentDTO:
     status: str
     start_time: datetime
     end_time: Optional[datetime]
-    duration_seconds: float

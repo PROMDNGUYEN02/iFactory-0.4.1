@@ -1,4 +1,6 @@
-"""Persistence services."""
+"""
+Persistence Services Package.
+"""
 
 from .sync_service import SyncService, SyncResult, SyncAllResult
 from .sync_orchestrator import SyncOrchestrator

@@ -1,44 +1,21 @@
-"""Get device status history use case."""
-
-import logging
-from datetime import datetime
-from iFactory.application.dtos import GanttSegmentDTO
-from iFactory.domain.repositories import StatusRepository
-from iFactory.domain.value_objects import EquipmentCode, TimeRange
-
-logger = logging.getLogger(__name__)
+from typing import List
+from iFactory.application.interfaces.unit_of_work import IUnitOfWork
+from iFactory.domain.entities.device import Device
+from iFactory.application.exceptions import ResourceNotFoundException
 
 
 class GetDeviceHistoryUseCase:
-    """
-    Use case: Get device status history over a time range.
-    """
+    """Use case to fetch historical data of a device."""
 
-    def __init__(self, status_repository: StatusRepository):
-        self._status_repo = status_repository
+    def __init__(self, uow: IUnitOfWork):
+        self._uow = uow
 
-    async def execute(
-        self,
-        equipment_code: str,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> list[GanttSegmentDTO]:
-        try:
-            code = EquipmentCode(equipment_code)
-            time_range = TimeRange(start=start_time, end=end_time)
-            periods = await self._status_repo.get_history(code, time_range)
+    async def execute(self, equip_code: str) -> List[Device]:
+        async with self._uow:
+            device = await self._uow.devices.get_by_equipment_code(equip_code)
+            if not device:
+                raise ResourceNotFoundException("Device", equip_code)
 
-            from iFactory.application.mappers.status_period_mapper import StatusPeriodMapper
-
-            mapper = StatusPeriodMapper()
-
-            segments = [mapper.to_dto(period, theme="light") for period in periods]
-
-            logger.debug(f"[GetDeviceHistory] Retrieved {len(segments)} segments for {equipment_code}")
-            return segments
-        except ValueError as e:
-            logger.error(f"[GetDeviceHistory] Invalid parameters: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"[GetDeviceHistory] Failed to get history for {equipment_code}: {e}", exc_info=True)
-            return []
+            # Giả định repository có hàm get_history
+            history = await self._uow.devices.get_history(equip_code)
+            return history
