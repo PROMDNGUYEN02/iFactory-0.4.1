@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from typing import TYPE_CHECKING, Optional, Dict, Any
+from typing import Optional, List, Dict, Any
 from PySide6.QtCore import QObject, Signal
 
 logger = logging.getLogger(__name__)
@@ -17,31 +17,41 @@ class DeviceController(QObject):
         self._sync_service = sync_service
         self._presenter = device_presenter
 
-    async def refresh_all_devices(self, codes: Optional[List[str]] = None) -> dict:
-        """FIX: Always return dict to stop 'Refreshing' status in View."""
+    async def refresh_all_devices(self, codes: Optional[List[str]] = None) -> Dict[str, Any]:
         try:
             if self._sync_service:
                 await self._sync_service.sync_status_hot(codes)
 
             statuses = await self._device_service.get_all_latest_status(codes)
-            formatted = self._presenter.format_for_update(statuses) if self._presenter else statuses
 
+            # Presentation logic isolated to Presenter
+            formatted_data = self._presenter.format_for_update(statuses) if self._presenter else statuses
+
+            # Event dispatching
             if self._signal_adapter:
-                self._signal_adapter.emit_device_statuses(formatted)
+                self._signal_adapter.emit_device_statuses(formatted_data)
 
-            # Return result instead of None
-            return formatted if formatted else {}
+            return formatted_data if formatted_data else {}
         except Exception as e:
-            logger.error(f"Refresh task failed: {e}")
+            logger.error(f"Device synchronization failed: {e}", exc_info=True)
+            # Do not leak exceptions to the UI thread
             return {}
 
     async def load_from_cache(self) -> int:
         if not self._device_service:
             return 0
-        statuses = await self._device_service.get_all_latest_status()
-        if statuses:
-            formatted = self._presenter.format_for_update(statuses) if self._presenter else statuses
+
+        try:
+            statuses = await self._device_service.get_all_latest_status()
+            if not statuses:
+                return 0
+
+            formatted_data = self._presenter.format_for_update(statuses) if self._presenter else statuses
+
             if self._signal_adapter:
-                self._signal_adapter.emit_device_statuses(formatted)
+                self._signal_adapter.emit_device_statuses(formatted_data)
+
             return len(statuses)
-        return 0
+        except Exception as e:
+            logger.error(f"Cache loading failed: {e}", exc_info=True)
+            return 0

@@ -291,7 +291,7 @@ class AppContainer:
 
         get_latest_uc = GetLatestDeviceStatusUseCase(SimpleUnitOfWork(device_repo, status_repo), self._cache_provider)
 
-        get_all_uc = GetAllDevicesStatusUseCase(device_repo, self._cache_provider)
+        get_all_uc = GetAllDevicesStatusUseCase(SimpleUnitOfWork(device_repo, status_repo), self._cache_provider)
 
         gantt_uc = GenerateProductionTimelineUseCase(
             unit_of_work_factory=lambda: SimpleUnitOfWork(device_repo, status_repo), cache_provider=self._cache_provider
