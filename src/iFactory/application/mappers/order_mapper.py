@@ -1,5 +1,5 @@
-from src.application.dtos.order_dtos import OrderDTO, OrderItemDTO
-from src.domain.entities.order import Order
+from iFactory.application.dtos.order_dtos import OrderDTO, OrderItemDTO
+from iFactory.domain.entities.order import Order
 from typing import List
 
 

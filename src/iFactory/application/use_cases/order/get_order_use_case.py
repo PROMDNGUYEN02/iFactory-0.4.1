@@ -1,8 +1,8 @@
-from src.application.dtos.order_dtos import OrderDTO
-from src.application.interfaces.repository import IRepository
-from src.application.mappers.order_mapper import to_dto
-from src.domain.entities.order import Order
-from src.application.exceptions import ResourceNotFoundException
+from iFactory.application.dtos.order_dtos import OrderDTO
+from iFactory.application.interfaces.repository import IRepository
+from iFactory.application.mappers.order_mapper import to_dto
+from iFactory.domain.entities.order import Order
+from iFactory.application.exceptions import ResourceNotFoundException
 
 
 class GetOrderUseCase:

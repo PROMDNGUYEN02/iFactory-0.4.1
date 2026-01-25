@@ -1,11 +1,11 @@
-from src.application.dtos.order_dtos import ApproveOrderRequestDTO, OrderDTO
-from src.application.interfaces.unit_of_work import IUnitOfWork
-from src.application.interfaces.repository import IRepository
-from src.application.interfaces.security import ISecurityService
-from src.application.mappers.order_mapper import to_dto
-from src.domain.entities.order import Order
-from src.domain.exceptions import DomainException
-from src.application.exceptions import ResourceNotFoundException, UnauthorizedActionException, DomainConstraintViolationException
+from iFactory.application.dtos.order_dtos import ApproveOrderRequestDTO, OrderDTO
+from iFactory.application.interfaces.unit_of_work import IUnitOfWork
+from iFactory.application.interfaces.repository import IRepository
+from iFactory.application.interfaces.security import ISecurityService
+from iFactory.application.mappers.order_mapper import to_dto
+from iFactory.domain.entities.order import Order
+from iFactory.domain.exceptions import DomainException
+from iFactory.application.exceptions import ResourceNotFoundException, UnauthorizedActionException, DomainConstraintViolationException
 
 
 class ApproveOrderUseCase:
