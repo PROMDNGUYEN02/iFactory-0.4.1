@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -11,7 +10,7 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class DomainEvent:
     occurred_at: datetime
-    event_type: str = field(init=False, repr=False)
+    event_type: str = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "event_type", self.__class__.__name__)

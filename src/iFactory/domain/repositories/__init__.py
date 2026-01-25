@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from .device_repository import DeviceRepository
 from .input_repository import InputRepository
 from .status_repository import StatusRepository

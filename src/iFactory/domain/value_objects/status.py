@@ -1,7 +1,5 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
-
 from ..enums.device_status import DeviceStatus
 
 
@@ -10,16 +8,12 @@ class Status:
     device_status: DeviceStatus
 
     @classmethod
-    def from_code(cls, code: str | None) -> "Status":
+    def from_code(cls, code: str | None) -> Status:
         return cls(DeviceStatus.from_code(code))
 
     @classmethod
-    def unknown(cls) -> "Status":
+    def unknown(cls) -> Status:
         return cls(DeviceStatus.UNKNOWN)
-
-    @classmethod
-    def running(cls) -> "Status":
-        return cls(DeviceStatus.RUNNING)
 
     @property
     def code(self) -> str:
@@ -43,6 +37,3 @@ class Status:
         if isinstance(other, DeviceStatus):
             return self.device_status == other
         return False
-
-    def __hash__(self) -> int:
-        return hash(self.device_status)

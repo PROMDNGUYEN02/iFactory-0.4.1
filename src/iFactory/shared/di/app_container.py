@@ -233,17 +233,21 @@ class AppContainer:
             logger.info("Sync disabled (no remote data source)")
             return
         try:
-            from iFactory.infrastructure.persistence.services import (
-                SyncOrchestrator,
-                SyncService,
-            )
+            from iFactory.infrastructure.persistence.services import SyncOrchestrator, SyncService
+            from iFactory.infrastructure.persistence.repositories import SqliteDeviceRepository, SqliteStatusRepository
+
+            # Khởi tạo repositories và UOW cho SyncService
+            device_repo = SqliteDeviceRepository(self._db_orchestrator.hot)
+            status_repo = SqliteStatusRepository(self._db_orchestrator.hot, self._db_orchestrator.cold)
+            uow = SimpleUnitOfWork(device_repo, status_repo)
 
             self._sync_service = SyncService(
-                db=self._db_orchestrator,
+                db=uow,
                 data_source=self._remote_data_source,
                 history_interval=300,
             )
             await self._sync_service.initialize()
+
             self._sync_orchestrator = SyncOrchestrator(
                 db=self._db_orchestrator,
                 sync_service=self._sync_service,

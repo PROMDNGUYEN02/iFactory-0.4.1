@@ -1,38 +1,30 @@
 from __future__ import annotations
-
 from ..enums.device_status import DeviceStatus
 
 
 class StatusNormalizationService:
-    _NORMALIZATION_MAP = {
-        "unknown": DeviceStatus.UNKNOWN,
-        "running": DeviceStatus.RUNNING,
-        "shutdown": DeviceStatus.SHUTDOWN,
-        "stop": DeviceStatus.STOP,
-        "maintenance": DeviceStatus.MAINTENANCE,
-        "alarm": DeviceStatus.ALARM,
+    _MAP = {
         "run": DeviceStatus.RUNNING,
         "active": DeviceStatus.RUNNING,
         "on": DeviceStatus.RUNNING,
         "off": DeviceStatus.SHUTDOWN,
-        "stopped": DeviceStatus.STOP,
         "idle": DeviceStatus.STOP,
-        "maint": DeviceStatus.MAINTENANCE,
-        "pm": DeviceStatus.MAINTENANCE,
-        "error": DeviceStatus.ALARM,
+        "stopped": DeviceStatus.STOP,
         "fault": DeviceStatus.ALARM,
-        "warning": DeviceStatus.ALARM,
+        "error": DeviceStatus.ALARM,
+        "pm": DeviceStatus.MAINTENANCE,
     }
 
     @classmethod
-    def normalize(cls, value: str | None) -> DeviceStatus:
-        if value is None:
+    def normalize(cls, raw: str | None) -> DeviceStatus:
+        if not raw:
             return DeviceStatus.UNKNOWN
-        clean = str(value).strip().lower()
-        return cls._NORMALIZATION_MAP.get(clean, DeviceStatus.UNKNOWN)
+        clean = raw.strip().lower()
 
-    @classmethod
-    def is_valid(cls, value: str | None) -> bool:
-        if value is None:
-            return False
-        return str(value).strip().lower() in cls._NORMALIZATION_MAP
+        # Check direct mapping
+        status = DeviceStatus.from_code_or_name(clean)
+        if status != DeviceStatus.UNKNOWN:
+            return status
+
+        # Check alias mapping
+        return cls._MAP.get(clean, DeviceStatus.UNKNOWN)

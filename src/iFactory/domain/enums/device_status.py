@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from enum import Enum, unique
 
 
@@ -57,36 +56,8 @@ class DeviceStatus(Enum):
             return "inactive"
         return "unknown"
 
-    @property
-    def is_running(self) -> bool:
-        return self == DeviceStatus.RUNNING
-
-    @property
-    def is_stopped(self) -> bool:
-        return self == DeviceStatus.STOP
-
-    @property
-    def is_alarm(self) -> bool:
-        return self == DeviceStatus.ALARM
-
-    @property
-    def is_maintenance(self) -> bool:
-        return self == DeviceStatus.MAINTENANCE
-
-    @property
-    def is_shutdown(self) -> bool:
-        return self == DeviceStatus.SHUTDOWN
-
-    @property
-    def is_unknown(self) -> bool:
-        return self == DeviceStatus.UNKNOWN
-
-    @property
-    def requires_attention(self) -> bool:
-        return self in (DeviceStatus.ALARM, DeviceStatus.STOP)
-
     @classmethod
-    def from_code(cls, code: str | None) -> "DeviceStatus":
+    def from_code(cls, code: str | None) -> DeviceStatus:
         if code is None:
             return cls.UNKNOWN
         clean_code = str(code).strip()
@@ -96,21 +67,11 @@ class DeviceStatus(Enum):
         return cls.UNKNOWN
 
     @classmethod
-    def from_name(cls, name: str | None) -> "DeviceStatus":
-        if name is None:
-            return cls.UNKNOWN
-        clean_name = name.lower().strip()
-        for status in cls:
-            if status.internal_name == clean_name:
-                return status
-        return cls.UNKNOWN
-
-    @classmethod
-    def from_code_or_name(cls, value: str | None) -> "DeviceStatus":
+    def from_code_or_name(cls, value: str | None) -> DeviceStatus:
         if value is None:
             return cls.UNKNOWN
-        clean = str(value).strip()
+        clean = str(value).strip().lower()
         for status in cls:
-            if status.code == clean or status.internal_name == clean.lower():
+            if status.code == clean or status.internal_name == clean:
                 return status
         return cls.UNKNOWN
