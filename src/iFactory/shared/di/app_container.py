@@ -10,11 +10,11 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-# --- Infrastructure Layer Imports (UPDATED PATHS) ---
-from iFactory.infrastructure.persistence.database_engine import AsyncDatabaseEngine
-from iFactory.infrastructure.persistence.uow import SqliteUnitOfWork
+# --- Infrastructure Layer Imports (UPDATED TO NEW REFACTORED PATHS) ---
+from iFactory.infrastructure.persistence.sqlalchemy.engine import AsyncDatabaseEngine
+from iFactory.infrastructure.persistence.sqlalchemy.uow import SqlAlchemyUnitOfWork
 from iFactory.infrastructure.data_sources.mssql_data_source import MssqlDataSource
-from iFactory.infrastructure.scheduling.sync_orchestrator import SyncOrchestrator
+from iFactory.infrastructure.workers.sync_worker import SyncWorker
 
 # --- Application Layer Imports ---
 from iFactory.application.use_cases.device.get_latest_status import GetLatestDeviceStatusUseCase
@@ -101,7 +101,7 @@ class AppContainer:
         "_db_engine",
         "_uow",
         "_remote_data_source",
-        "_sync_orchestrator",
+        "_sync_worker",
         "_cache_provider",
         "_device_service_adapter",
         "_ui_container",
@@ -116,9 +116,9 @@ class AppContainer:
 
         self._settings = None
         self._db_engine: Optional[AsyncDatabaseEngine] = None
-        self._uow: Optional[SqliteUnitOfWork] = None
+        self._uow: Optional[SqlAlchemyUnitOfWork] = None
         self._remote_data_source: Optional[MssqlDataSource] = None
-        self._sync_orchestrator: Optional[SyncOrchestrator] = None
+        self._sync_worker: Optional[SyncWorker] = None
         self._cache_provider = None
 
         self._device_service_adapter: Optional[DeviceServiceAdapter] = None
@@ -151,19 +151,19 @@ class AppContainer:
     async def _init_infrastructure(self) -> None:
         """Initialize Infrastructure layer: Databases, ORM, and Remote Sources."""
 
-        # 1. Local Database (SQLite)
+        # 1. Local Database (SQLite via Generic SQLAlchemy Engine)
         db_path = self._settings.database.hot_store_path if self._settings and hasattr(self._settings, "database") else "data/hot_store.db"
         self._db_engine = AsyncDatabaseEngine(f"sqlite+aiosqlite:///{db_path}")
         await self._db_engine.init_db()
 
         # 2. Persistence Layer (Unit of Work)
-        self._uow = SqliteUnitOfWork(self._db_engine.get_session_factory())
+        self._uow = SqlAlchemyUnitOfWork(self._db_engine.get_session_factory())
 
-        # 3. Cache (UPDATED TO LRU CACHE)
+        # 3. Cache (Updated to AsyncLRUCache)
         try:
-            from iFactory.infrastructure.cache.lru_cache import LRUCacheStorage
+            from iFactory.infrastructure.cache.async_lru_cache import AsyncLRUCache
 
-            self._cache_provider = LRUCacheStorage(max_size=500)
+            self._cache_provider = AsyncLRUCache(max_size=500)
         except Exception as e:
             logger.warning(f"Cache init failed: {e}")
 
@@ -178,9 +178,9 @@ class AppContainer:
             except Exception as e:
                 logger.warning(f"Remote data source init failed: {e}")
 
-        # 5. Sync Subdomain
+        # 5. Sync Subdomain (Updated to SyncWorker)
         if self._remote_data_source:
-            self._sync_orchestrator = SyncOrchestrator(data_source=self._remote_data_source, uow=self._uow)
+            self._sync_worker = SyncWorker(data_source=self._remote_data_source, uow=self._uow)
 
     def _init_application(self) -> None:
         """
@@ -224,9 +224,9 @@ class AppContainer:
         return {
             "initialized": self._initialized,
             "has_settings": self._settings is not None,
-            "sqlite_connected": self._db_engine is not None,
+            "db_connected": self._db_engine is not None,
             "mssql_connected": self._remote_data_source is not None,
-            "sync_available": self._sync_orchestrator is not None,
+            "sync_available": self._sync_worker is not None,
             "cache_enabled": self._cache_provider is not None,
             "online_mode": self.is_online,
         }

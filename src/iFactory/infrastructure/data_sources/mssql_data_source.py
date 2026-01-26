@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class MssqlDataSource(IRemoteDataSource):
     """
     MSSQL implementation of IRemoteDataSource.
-    Returns RAW data. Mapping to Domain happens in the Application Layer.
+    Returns RAW dictionaries. Mapping to Domain happens via Mappers.
     """
 
     SQL_LATEST_STATUS = """
@@ -44,7 +44,6 @@ class MssqlDataSource(IRemoteDataSource):
         self._engine = create_async_engine(connection_string, echo=False)
 
     async def fetch_latest_status(self, codes: Sequence[str]) -> Sequence[Dict[str, Any]]:
-        """Fetch latest raw status rows for given devices."""
         if not codes:
             return []
 
@@ -54,28 +53,20 @@ class MssqlDataSource(IRemoteDataSource):
             result = await conn.execute(stmt, {"codes": list(codes)})
             rows = result.fetchall()
 
-        records = []
-        for row in rows:
-            # NO BUSINESS LOGIC. Straight mapping from tuple to dict.
-            records.append(
-                {
-                    "equip_code": str(row[0]) if row[0] else "",
-                    "raw_status": str(row[1]) if row[1] is not None else "",
-                    "start_time": row[2],
-                    "end_time": row[3],
-                }
-            )
-
-        return records
+        return [
+            {
+                "equip_code": str(row[0]) if row[0] else "",
+                "raw_status": str(row[1]) if row[1] is not None else "",
+                "start_time": row[2],
+                "end_time": row[3],
+            }
+            for row in rows
+        ]
 
     async def fetch_all_devices(self) -> Sequence[Dict[str, Any]]:
-        """
-        Fetches the latest status for ALL available devices.
-        Satisfies the IRemoteDataSource interface.
-        """
         async with self._engine.connect() as conn:
-            codes_result = await conn.execute(text("SELECT DISTINCT EQUIP_CODE FROM TT_EQ_STATUS WHERE EQUIP_CODE IS NOT NULL"))
-            actual_codes = [str(row[0]) for row in codes_result.fetchall()]
+            result = await conn.execute(text("SELECT DISTINCT EQUIP_CODE FROM TT_EQ_STATUS WHERE EQUIP_CODE IS NOT NULL"))
+            actual_codes = [str(row[0]) for row in result.fetchall()]
 
             if not actual_codes:
                 return []
@@ -83,10 +74,6 @@ class MssqlDataSource(IRemoteDataSource):
         return await self.fetch_latest_status(actual_codes)
 
     async def fetch_device_status(self, equip_code: str) -> Dict[str, Any]:
-        """
-        Fetches the status for a single device.
-        Satisfies the IRemoteDataSource interface.
-        """
         results = await self.fetch_latest_status([equip_code])
         return results[0] if results else {"equip_code": equip_code, "raw_status": "unknown"}
 

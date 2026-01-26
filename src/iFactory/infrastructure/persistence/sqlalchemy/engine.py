@@ -1,10 +1,10 @@
 """
-Database Engine Configuration.
+SQLAlchemy Async Engine Configuration.
 """
 
 import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from iFactory.infrastructure.persistence.models import Base
+from iFactory.infrastructure.persistence.sqlalchemy.models import Base
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,6 @@ class AsyncDatabaseEngine:
         self._session_factory = async_sessionmaker(bind=self._engine, class_=AsyncSession, expire_on_commit=False, autoflush=False)
 
     async def init_db(self) -> None:
-        """Initialize database schema."""
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 

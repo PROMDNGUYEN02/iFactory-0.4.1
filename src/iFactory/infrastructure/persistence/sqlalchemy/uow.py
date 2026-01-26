@@ -1,6 +1,6 @@
 """
 SQLAlchemy Unit of Work.
-Coordinates transactional boundaries.
+Coordinates transactional boundaries. Database Agnostic.
 """
 
 from __future__ import annotations
@@ -9,10 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from iFactory.application.interfaces.unit_of_work import IUnitOfWork
 from iFactory.domain.repositories.device_repository import DeviceRepository
-from iFactory.infrastructure.repositories.sqlite_device_repo import SqliteDeviceRepository
+from iFactory.infrastructure.repositories.sqlalchemy_device_repo import SqlAlchemyDeviceRepository
 
 
-class SqliteUnitOfWork(IUnitOfWork):
+class SqlAlchemyUnitOfWork(IUnitOfWork):
     """
     Implementation of the IUnitOfWork pattern using SQLAlchemy.
     Binds Application interface contracts to Infrastructure implementations.
@@ -25,7 +25,7 @@ class SqliteUnitOfWork(IUnitOfWork):
 
     async def __aenter__(self):
         self._session = self._session_factory()
-        self.devices = SqliteDeviceRepository(self._session)
+        self.devices = SqlAlchemyDeviceRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

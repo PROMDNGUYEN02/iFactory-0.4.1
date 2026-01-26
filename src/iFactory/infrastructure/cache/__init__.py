@@ -1,3 +1,0 @@
-"""
-Cache infrastructure - LRU cache.
-"""

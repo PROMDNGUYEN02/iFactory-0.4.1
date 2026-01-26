@@ -1,5 +1,6 @@
 """
-Infrastructure Mappers for Database ORM.
+Infrastructure Mapper for Database ORM.
+Strictly bi-directional mapping between Domain and Persistence.
 """
 
 from __future__ import annotations
@@ -7,17 +8,16 @@ from datetime import datetime
 from typing import Sequence
 
 from iFactory.domain.entities.device import Device
-from iFactory.infrastructure.persistence.models import DeviceORM
+from iFactory.infrastructure.persistence.sqlalchemy.models import DeviceORM
 from iFactory.domain.enums.machine_status import MachineStatus
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
 
 
-class DeviceMapper:
-    """Bi-directional mapping between Domain Aggregate and ORM Model."""
+class OrmDeviceMapper:
+    """Translates between Domain Aggregates and SQLAlchemy Models."""
 
     @staticmethod
     def to_entity(model: DeviceORM) -> Device:
-        """Hydrate a domain entity from DB model."""
         device = Device(equipment_code=EquipmentCode(model.equip_code))
         device.current_status = MachineStatus(model.equip_status)
         device.last_update = model.last_update
@@ -25,7 +25,6 @@ class DeviceMapper:
 
     @staticmethod
     def to_model(entity: Device) -> DeviceORM:
-        """Dehydrate a domain entity to DB model."""
         return DeviceORM(
             id=entity.equipment_code.value,
             equip_code=entity.equipment_code.value,
@@ -36,4 +35,4 @@ class DeviceMapper:
 
     @staticmethod
     def to_entities(models: Sequence[DeviceORM]) -> list[Device]:
-        return [DeviceMapper.to_entity(m) for m in models]
+        return [OrmDeviceMapper.to_entity(m) for m in models]
