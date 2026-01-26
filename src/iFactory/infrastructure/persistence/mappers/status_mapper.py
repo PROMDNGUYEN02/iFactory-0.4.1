@@ -1,7 +1,10 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Sequence
-from iFactory.domain.value_objects import EquipmentCode, MachineStatus, TimeRange, StatusPeriod
+
+# FIXED: Separated MachineStatus import to its new location
+from iFactory.domain.value_objects import EquipmentCode, TimeRange, StatusPeriod
+from iFactory.domain.enums.machine_status import MachineStatus
 from iFactory.infrastructure.database.models.cold_models import StatusHistoryModel
 
 

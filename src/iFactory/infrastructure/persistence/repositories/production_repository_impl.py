@@ -7,12 +7,9 @@ import logging
 from typing import Optional, Sequence
 from sqlalchemy import select, desc
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-# Domain imports - Đã đổi Status -> MachineStatus
 from iFactory.domain.repositories import ProductionRepository
-from iFactory.domain.value_objects import EquipmentCode, StatusPeriod, TimeRange, MaterialInput, MachineStatus
-
-# Infrastructure imports
+from iFactory.domain.value_objects import EquipmentCode, StatusPeriod, TimeRange, MaterialInput
+from iFactory.domain.enums.machine_status import MachineStatus
 from iFactory.infrastructure.database.engines.sqlite_engine import AsyncSQLiteEngine
 from iFactory.infrastructure.database.models import StatusHistory, LatestInput, InputHistory
 
@@ -93,9 +90,10 @@ class SqliteProductionRepository(ProductionRepository):
             return [MaterialInput.create(r.equip_code, r.material_batch, r.feeding_time) for r in rows]
 
     async def save_material_input(self, record: MaterialInput) -> None:
+        # Note: MaterialBatch is now a Value Object in the domain, so we extract the raw string value
         values = {
             "equip_code": record.equipment_code.value,
-            "material_batch": record.material_batch,
+            "material_batch": record.material_batch.value,
             "feeding_time": record.feeding_time,
         }
 

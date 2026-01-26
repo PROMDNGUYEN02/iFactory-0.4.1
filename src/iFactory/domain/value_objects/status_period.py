@@ -1,12 +1,11 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 from .equipment_code import EquipmentCode
-from .machine_status import MachineStatus
 from .time_range import TimeRange
-from ..exceptions import StatusMergeError
+from ..enums.machine_status import MachineStatus
+from ..exceptions.time_exceptions import StatusMergeError
 
 
 @dataclass(frozen=True, slots=True)

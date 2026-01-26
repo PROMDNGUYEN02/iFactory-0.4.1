@@ -10,7 +10,7 @@ class DeviceMapper:
     def to_entity(model: LatestStatus) -> Device:
         return Device.create(
             code=model.equip_code,
-            status=model.equip_status,
+            raw_status=model.equip_status,
             last_update=model.last_update,
         )
 
@@ -22,6 +22,6 @@ class DeviceMapper:
     def to_model(entity: Device) -> LatestStatus:
         return LatestStatus(
             equip_code=entity.code,
-            equip_status=entity.current_status.code,
+            equip_status=entity.current_status.value,
             last_update=entity.last_update or datetime.now(),
         )

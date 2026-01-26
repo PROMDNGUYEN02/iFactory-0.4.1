@@ -1,7 +1,7 @@
 from __future__ import annotations
 import re
 from dataclasses import dataclass
-from ..exceptions import InvalidEquipmentCodeError
+from ..exceptions.device_exceptions import InvalidEquipmentCodeError
 
 
 @dataclass(frozen=True, slots=True)

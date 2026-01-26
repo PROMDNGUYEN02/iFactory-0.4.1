@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
-from ..exceptions import InvalidTimeRangeError
+from ..exceptions.time_exceptions import InvalidTimeRangeError
 
 
 @dataclass(frozen=True, slots=True)

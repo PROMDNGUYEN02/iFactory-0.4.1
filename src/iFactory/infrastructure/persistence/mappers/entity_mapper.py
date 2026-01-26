@@ -4,10 +4,9 @@ from datetime import datetime
 from iFactory.domain.entities.device import Device
 from iFactory.domain.value_objects.status_period import StatusPeriod
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
-from iFactory.domain.value_objects.machine_status import MachineStatus
+from iFactory.domain.enums.machine_status import MachineStatus
 from iFactory.domain.value_objects.time_range import TimeRange
 from iFactory.domain.value_objects.material_input import MaterialInput
-
 from iFactory.infrastructure.database.models.hot_models import DeviceStateModel, DeviceInputModel
 from iFactory.infrastructure.database.models.cold_models import StatusHistoryModel, InputHistoryModel
 

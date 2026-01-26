@@ -1,7 +1,7 @@
-# File: src/iFactory/infrastructure/persistence/mappers/status_period_orm_mapper.py
 """
 Status period ORM mapper - Maps between StatusPeriod entity and StatusHistory model.
 """
+
 from __future__ import annotations
 from datetime import datetime
 from typing import Sequence

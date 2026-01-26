@@ -1,13 +1,14 @@
-# File: src/iFactory/infrastructure/persistence/mappers/device_orm_mapper.py
 """
 Device ORM mapper - Maps between Device entity and LatestStatus model.
 """
+
 from __future__ import annotations
 from datetime import datetime
 from typing import Sequence
 
 from iFactory.domain.entities import Device
-from iFactory.domain.value_objects import EquipmentCode, Status
+from iFactory.domain.value_objects import EquipmentCode
+from iFactory.domain.enums.machine_status import MachineStatus
 from iFactory.infrastructure.database.models.hot_models import LatestStatus
 
 __all__ = ["DeviceOrmMapper"]
@@ -22,10 +23,9 @@ class DeviceOrmMapper:
     @staticmethod
     def to_entity(model: LatestStatus) -> Device:
         """Convert ORM model to domain entity."""
-        # Use Domain factory/VOs to ensure integrity
         return Device.create(
             code=model.equip_code,
-            status=model.equip_status,
+            raw_status=model.equip_status,
             last_update=model.last_update,
         )
 
@@ -39,13 +39,13 @@ class DeviceOrmMapper:
         """Convert domain entity to ORM model."""
         return LatestStatus(
             equip_code=entity.equipment_code.value,
-            equip_status=entity.current_status.code,
+            equip_status=entity.current_status.value,
             last_update=entity.last_update or datetime.now(),
         )
 
     @staticmethod
     def update_model(model: LatestStatus, entity: Device) -> LatestStatus:
         """Update existing ORM model from domain entity."""
-        model.equip_status = entity.current_status.code
+        model.equip_status = entity.current_status.value
         model.last_update = entity.last_update or datetime.now()
         return model

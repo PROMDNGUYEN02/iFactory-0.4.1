@@ -1,3 +1,4 @@
+from .base import AggregateRoot
 from .device import Device
 
-__all__ = ["Device"]
+__all__ = ["AggregateRoot", "Device"]

@@ -1,12 +1,12 @@
 from __future__ import annotations
-from ..value_objects.machine_status import MachineStatus
-from ..exceptions import InvalidStatusTransitionError
+from ..enums.machine_status import MachineStatus
+from ..exceptions.device_exceptions import InvalidStatusTransitionError
 
 
 class StatusTransitionPolicy:
     """
     Domain Policy enforcing rules about valid machine state transitions.
-    Keeps business rule complexity out of the Entity.
+    Keeps business rule complexity out of the Entity, allowing for easy expansion.
     """
 
     @staticmethod

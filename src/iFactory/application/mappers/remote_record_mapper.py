@@ -4,7 +4,7 @@ from typing import Optional
 
 from iFactory.domain.entities.device import Device
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
-from iFactory.domain.value_objects.machine_status import MachineStatus
+from iFactory.domain.enums.machine_status import MachineStatus
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,6 @@ def to_device_entity(record: dict) -> Optional[Device]:
         if not equip_code:
             return None
 
-        # Domain layer now handles normalization via MachineStatus.from_business_term()
         return Device(
             equipment_code=EquipmentCode(equip_code),
             current_status=MachineStatus.from_business_term(raw_status),

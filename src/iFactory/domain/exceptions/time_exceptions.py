@@ -1,25 +1,6 @@
 from __future__ import annotations
 from datetime import datetime
-from typing import Any, Optional
-
-
-class DomainError(Exception):
-    """Base exception for all domain-level business rule violations."""
-
-    def __init__(self, message: str, details: Optional[dict[str, Any]] = None) -> None:
-        self.message = message
-        self.details = details or {}
-        super().__init__(self.message)
-
-
-class InvalidEquipmentCodeError(DomainError):
-    @classmethod
-    def empty(cls) -> InvalidEquipmentCodeError:
-        return cls("Equipment code cannot be empty.")
-
-    @classmethod
-    def invalid_format(cls, code: str) -> InvalidEquipmentCodeError:
-        return cls(f"Invalid equipment code format: '{code}'. Expected 2-4 uppercase letters followed by numbers.")
+from .base import DomainError
 
 
 class InvalidTimeRangeError(DomainError):
@@ -44,9 +25,3 @@ class StatusMergeError(DomainError):
     @classmethod
     def non_adjacent(cls) -> StatusMergeError:
         return cls("Cannot merge time ranges that are not adjacent or overlapping.")
-
-
-class InvalidStatusTransitionError(DomainError):
-    @classmethod
-    def illegal_transition(cls, from_status: str, to_status: str) -> InvalidStatusTransitionError:
-        return cls(f"Illegal status transition from '{from_status}' to '{to_status}'.")

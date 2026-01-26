@@ -11,7 +11,7 @@ from ..value_objects.material_input import MaterialInput
 class ProductionRepository(ABC):
     """
     Abstract interface for querying and persisting historical production logs.
-    Handles Status Periods and Material Inputs.
+    Handles Value Objects like Status Periods and Material Inputs.
     """
 
     @abstractmethod
