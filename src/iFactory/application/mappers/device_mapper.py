@@ -29,17 +29,26 @@ def to_device_status_dto(
 
     return DeviceStatusDTO(
         equip_code=str(device.equipment_code),
-        status_code=device.current_status.code if device.current_status else "0",
-        status_name=device.current_status.name if device.current_status else "unknown",
-        last_update=device.updated_at,
+        # MachineStatus is a standard Enum now, so we use .value for the code and .name for the key
+        status_code=device.current_status.value if device.current_status else "unknown",
+        status_name=device.current_status.name if device.current_status else "UNKNOWN",
+        status_display=device.current_status.name if device.current_status else "UNKNOWN",
+        status_color="#cccccc",  # Placeholder, UI layer overwrites this
+        last_update=device.last_update,
         material_batch=material_batch,
         feeding_time=feeding_time,
-        is_active=device.is_active,
     )
 
 
 def create_unknown_device_dto(equip_code: str) -> DeviceStatusDTO:
     """Create a DTO representing an unknown device state."""
     return DeviceStatusDTO(
-        equip_code=equip_code, status_code="0", status_name="unknown", last_update=None, material_batch=None, feeding_time=None, is_active=False
+        equip_code=equip_code,
+        status_code="unknown",
+        status_name="UNKNOWN",
+        status_display="UNKNOWN",
+        status_color="#cccccc",
+        last_update=None,
+        material_batch=None,
+        feeding_time=None,
     )

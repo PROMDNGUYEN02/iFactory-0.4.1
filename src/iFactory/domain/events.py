@@ -1,10 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .value_objects.status import Status
+from .value_objects.machine_status import MachineStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,5 +20,5 @@ class StatusChangedEvent(DomainEvent):
     """Event emitted when a device successfully transitions to a new business status."""
 
     equipment_code: str
-    previous_status: Status
-    new_status: Status
+    previous_status: MachineStatus
+    new_status: MachineStatus

@@ -236,13 +236,21 @@ class AppContainer:
             from iFactory.infrastructure.persistence.services import SyncOrchestrator, SyncService
             from iFactory.infrastructure.persistence.repositories import SqliteDeviceRepository, SqliteProductionRepository
 
+            # FIX: Imported from _impl
+            from iFactory.infrastructure.persistence.repositories.sync_metadata_repository_impl import SqliteSyncMetadataRepository
+
             device_repo = SqliteDeviceRepository(self._db_orchestrator.hot)
             production_repo = SqliteProductionRepository(self._db_orchestrator.hot, self._db_orchestrator.cold)
             uow = SimpleUnitOfWork(device_repo, production_repo)
 
+            # Instantiate Metadata Repo
+            metadata_repo = SqliteSyncMetadataRepository(self._db_orchestrator.hot)
+
+            # Updated instantiation to match SyncService signature
             self._sync_service = SyncService(
-                db=uow,
                 data_source=self._remote_data_source,
+                uow=uow,
+                metadata_repo=metadata_repo,
                 history_interval=300,
             )
             await self._sync_service.initialize()

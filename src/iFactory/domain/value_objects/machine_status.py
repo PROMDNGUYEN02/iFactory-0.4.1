@@ -3,10 +3,10 @@ from enum import Enum, unique
 
 
 @unique
-class DeviceStatus(Enum):
+class MachineStatus(Enum):
     """
     Canonical core states of a manufacturing device.
-    Strictly business definitions. No UI colors or strings allowed.
+    Strictly business definitions. UI colors and translations are explicitly forbidden here.
     """
 
     UNKNOWN = "unknown"
@@ -19,20 +19,25 @@ class DeviceStatus(Enum):
     @property
     def implies_downtime(self) -> bool:
         """Business rule: Determine if status constitutes machine downtime."""
-        return self in (DeviceStatus.SHUTDOWN, DeviceStatus.MAINTENANCE, DeviceStatus.STOPPED, DeviceStatus.ALARM)
+        return self in (MachineStatus.SHUTDOWN, MachineStatus.MAINTENANCE, MachineStatus.STOPPED, MachineStatus.ALARM)
+
+    @property
+    def requires_attention(self) -> bool:
+        """Business rule: Determine if operations should be alerted."""
+        return self in (MachineStatus.ALARM, MachineStatus.STOPPED)
+
+    @property
+    def is_running(self) -> bool:
+        return self == MachineStatus.RUNNING
 
     @classmethod
-    def from_business_term(cls, value: str | None) -> DeviceStatus:
-        """
-        Maps shop-floor vernacular to canonical system states.
-        This captures the domain language invariant (e.g., 'PM' means Maintenance).
-        """
+    def from_business_term(cls, value: str | None) -> MachineStatus:
+        """Maps shop-floor vernacular to canonical system states."""
         if not value:
             return cls.UNKNOWN
 
         clean = str(value).strip().lower()
 
-        # Business vernacular dictionary
         aliases = {
             "run": cls.RUNNING,
             "active": cls.RUNNING,

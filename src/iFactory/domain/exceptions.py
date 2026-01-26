@@ -19,13 +19,13 @@ class InvalidEquipmentCodeError(DomainError):
 
     @classmethod
     def invalid_format(cls, code: str) -> InvalidEquipmentCodeError:
-        return cls(f"Invalid equipment code format: '{code}'. Expected 2-4 uppercase letters optionally followed by numbers.", {"code": code})
+        return cls(f"Invalid equipment code format: '{code}'. Expected 2-4 uppercase letters followed by numbers.")
 
 
 class InvalidTimeRangeError(DomainError):
     @classmethod
     def end_before_start(cls, start: datetime, end: datetime) -> InvalidTimeRangeError:
-        return cls(f"Start time ({start}) cannot be after end time ({end}).", {"start": start, "end": end})
+        return cls(f"Start time ({start}) cannot be after end time ({end}).")
 
     @classmethod
     def non_contiguous(cls) -> InvalidTimeRangeError:
@@ -35,11 +35,11 @@ class InvalidTimeRangeError(DomainError):
 class StatusMergeError(DomainError):
     @classmethod
     def different_devices(cls, code1: str, code2: str) -> StatusMergeError:
-        return cls(f"Cannot merge status periods for different devices: {code1} and {code2}.")
+        return cls(f"Cannot merge periods for different devices: {code1} and {code2}.")
 
     @classmethod
     def different_statuses(cls, status1: str, status2: str) -> StatusMergeError:
-        return cls(f"Cannot merge contiguous periods of different statuses: {status1} and {status2}.")
+        return cls(f"Cannot merge periods of different statuses: {status1} and {status2}.")
 
     @classmethod
     def non_adjacent(cls) -> StatusMergeError:
@@ -49,4 +49,4 @@ class StatusMergeError(DomainError):
 class InvalidStatusTransitionError(DomainError):
     @classmethod
     def illegal_transition(cls, from_status: str, to_status: str) -> InvalidStatusTransitionError:
-        return cls(f"Illegal machine status transition from '{from_status}' to '{to_status}'.", {"from": from_status, "to": to_status})
+        return cls(f"Illegal status transition from '{from_status}' to '{to_status}'.")

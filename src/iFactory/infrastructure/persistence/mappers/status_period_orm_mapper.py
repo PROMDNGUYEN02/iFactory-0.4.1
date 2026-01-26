@@ -34,7 +34,7 @@ class StatusPeriodOrmMapper:
         """Convert domain entity to ORM model."""
         return StatusHistory(
             equip_code=entity.equipment_code.value,
-            equip_status=entity.status.name,
+            equip_status=entity.status.value,
             start_time=entity.time_range.start,
             end_time=entity.time_range.end,
             duration=entity.time_range.duration_seconds,

@@ -42,9 +42,9 @@ class StatusPeriodMapper:
         return GanttSegmentDTO(
             start_time=entity.time_range.start,
             end_time=entity.time_range.end,
-            status_code=entity.status.code,
+            status_code=entity.status.value,
             status_name=entity.status.name,
-            status_color=self._ui_mapper.get_color(entity.status.code, theme),
+            status_color=self._ui_mapper.get_color(entity.status.value, theme),
         )
 
     @staticmethod

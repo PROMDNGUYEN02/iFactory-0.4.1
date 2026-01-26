@@ -8,9 +8,9 @@ from typing import Optional, Sequence
 from sqlalchemy import select, desc
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-# Domain imports
+# Domain imports - Đã đổi Status -> MachineStatus
 from iFactory.domain.repositories import ProductionRepository
-from iFactory.domain.value_objects import EquipmentCode, StatusPeriod, TimeRange, MaterialInput, Status
+from iFactory.domain.value_objects import EquipmentCode, StatusPeriod, TimeRange, MaterialInput, MachineStatus
 
 # Infrastructure imports
 from iFactory.infrastructure.database.engines.sqlite_engine import AsyncSQLiteEngine
@@ -56,10 +56,10 @@ class SqliteProductionRepository(ProductionRepository):
     async def save_status_period(self, period: StatusPeriod) -> None:
         values = {
             "equip_code": period.equipment_code.value,
-            "equip_status": period.status.name,  # mapped to standard name
+            "equip_status": period.status.value,  # Cập nhật: Dùng .value thay vì .name hoặc .code
             "start_time": period.time_range.start,
             "end_time": period.time_range.end,
-            "duration": period.duration_seconds,
+            "duration": period.time_range.duration_seconds,
         }
         stmt = sqlite_insert(StatusHistory).values(**values)
         stmt = stmt.on_conflict_do_update(

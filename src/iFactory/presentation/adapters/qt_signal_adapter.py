@@ -1,15 +1,17 @@
-# File: presentation/adapters/qt_signal_adapter.py
 """
 Qt Signal Adapter - Bridge async services with Qt signals.
 
 Provides type-safe signal emission from async context.
 """
+
 from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 import random
-from PySide6.QtCore import QObject, Signal
+
+# Import QTimer to safely queue signals
+from PySide6.QtCore import QObject, Signal, QTimer
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +45,6 @@ class QtSignalAdapter:
     Adapter to emit Qt signals from async services.
 
     Thread-safe signal emission for async operations.
-
-    Example:
-        adapter = QtSignalAdapter()
-
-        # In async code:
-        await service.sync()
-        adapter.emit_sync_completed(count)
-
-        # Set gantt provider:
-        adapter.set_gantt_provider(device_service)
     """
 
     def __init__(self):
@@ -66,39 +58,24 @@ class QtSignalAdapter:
         return self._signals
 
     def set_gantt_provider(self, provider: Any) -> None:
-        """
-        Set the Gantt data provider.
-
-        Provider should have method: get_device_history(device_code, start, end) -> List[segments]
-
-        Args:
-            provider: Object that provides Gantt data (typically DeviceDataService)
-        """
         self._gantt_provider = provider
         logger.debug(f"[QtSignalAdapter] Gantt provider set: {(type(provider).__name__ if provider else None)}")
 
     def get_gantt_provider(self) -> Optional[Any]:
-        """Get current Gantt provider."""
         return self._gantt_provider
 
     def has_gantt_provider(self) -> bool:
-        """Check if Gantt provider is configured."""
         return self._gantt_provider is not None
 
     def request_gantt_data(self, device_code: str, frame_name: str) -> None:
         """
         Request Gantt data for a device.
-
-        This is called by MainView when it needs Gantt data.
-
-        Args:
-            device_code: Device code to get data for
-            frame_name: Frame name requesting the data
         """
         logger.info(f"[QtSignalAdapter] request_gantt_data: device={device_code}, frame={frame_name}")
         end_time = datetime.now()
         start_time = end_time - timedelta(hours=24)
         segments = []
+
         if self._gantt_provider:
             try:
                 if hasattr(self._gantt_provider, "get_device_history"):
@@ -112,7 +89,9 @@ class QtSignalAdapter:
         else:
             segments = self._generate_demo_segments(start_time, end_time)
             logger.debug(f"[QtSignalAdapter] Generated {len(segments)} demo segments")
-        self._signals.gantt_data_ready.emit(device_code, segments, start_time, end_time)
+
+        # FIX: Defer the emission to the next event loop to prevent QPainter recursive repaint crashes
+        QTimer.singleShot(0, lambda: self._signals.gantt_data_ready.emit(device_code, segments, start_time, end_time))
 
     def _convert_to_segments(self, raw_data: List[Any], start_time: datetime, end_time: datetime) -> List[Tuple[datetime, datetime, str]]:
         """Convert raw data to segment tuples (start, end, status)."""
@@ -149,25 +128,12 @@ class QtSignalAdapter:
         return segments
 
     def emit_device_statuses(self, statuses: Dict[str, Any]) -> None:
-        """
-        Emit batch device status update.
-
-        Args:
-            statuses: Dictionary of code -> DeviceStatusDTO
-        """
         try:
             self._signals.device_statuses_updated.emit(statuses)
         except Exception as e:
             logger.error(f"Failed to emit device statuses: {e}")
 
     def emit_device_status_changed(self, equipment_code: str, status_name: str) -> None:
-        """
-        Emit single device status change.
-
-        Args:
-            equipment_code: Device code
-            status_name: New status name
-        """
         try:
             self._signals.device_status_changed.emit(equipment_code, status_name)
         except Exception as e:
@@ -180,17 +146,9 @@ class QtSignalAdapter:
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        """
-        Emit Gantt chart data.
-
-        Args:
-            device_code: Device code
-            segments: List of (start, end, status) tuples
-            start_time: Time range start
-            end_time: Time range end
-        """
         try:
-            self._signals.gantt_data_ready.emit(device_code, segments, start_time, end_time)
+            # FIX: Defer emission for manual triggers as well
+            QTimer.singleShot(0, lambda: self._signals.gantt_data_ready.emit(device_code, segments, start_time, end_time))
         except Exception as e:
             logger.error(f"Failed to emit gantt data: {e}")
 
@@ -202,16 +160,6 @@ class QtSignalAdapter:
         rows: List[Dict[str, Any]],
         status_col: int = -1,
     ) -> None:
-        """
-        Emit table data for history display.
-
-        Args:
-            device_code: Device code
-            data_type: Type of data (status, input, output)
-            headers: Column headers
-            rows: Row data
-            status_col: Status column index (-1 if none)
-        """
         try:
             data = {
                 "device_code": device_code,
@@ -225,44 +173,24 @@ class QtSignalAdapter:
             logger.error(f"Failed to emit table data: {e}")
 
     def emit_summary_data(self, records: List[Any]) -> None:
-        """
-        Emit summary data.
-
-        Args:
-            records: Summary records
-        """
         try:
             self._signals.summary_data_ready.emit(records)
         except Exception as e:
             logger.error(f"Failed to emit summary data: {e}")
 
     def emit_sync_started(self) -> None:
-        """Emit sync started signal."""
         try:
             self._signals.sync_started.emit()
         except Exception as e:
             logger.error(f"Failed to emit sync started: {e}")
 
     def emit_sync_completed(self, count: int) -> None:
-        """
-        Emit sync completed signal.
-
-        Args:
-            count: Number of devices synced
-        """
         try:
             self._signals.sync_completed.emit(count)
         except Exception as e:
             logger.error(f"Failed to emit sync completed: {e}")
 
     def emit_error(self, context: str, message: str) -> None:
-        """
-        Emit error signal.
-
-        Args:
-            context: Error context (e.g., "sync", "gantt")
-            message: Error message
-        """
         try:
             self._signals.error_occurred.emit(context, message)
         except Exception as e:
@@ -270,44 +198,35 @@ class QtSignalAdapter:
 
     @property
     def device_statuses_updated(self):
-        """Delegate to signals.device_statuses_updated."""
         return self._signals.device_statuses_updated
 
     @property
     def device_status_changed(self):
-        """Delegate to signals.device_status_changed."""
         return self._signals.device_status_changed
 
     @property
     def gantt_data_ready(self):
-        """Delegate to signals.gantt_data_ready."""
         return self._signals.gantt_data_ready
 
     @property
     def table_data_ready(self):
-        """Delegate to signals.table_data_ready."""
         return self._signals.table_data_ready
 
     @property
     def summary_data_ready(self):
-        """Delegate to signals.summary_data_ready."""
         return self._signals.summary_data_ready
 
     @property
     def sync_completed(self):
-        """Delegate to signals.sync_completed."""
         return self._signals.sync_completed
 
     @property
     def sync_started(self):
-        """Delegate to signals.sync_started."""
         return self._signals.sync_started
 
     @property
     def error_occurred(self):
-        """Delegate to signals.error_occurred."""
         return self._signals.error_occurred
 
     def clear_cache(self) -> None:
-        """Clear any cached data (for cleanup)."""
         self._gantt_provider = None

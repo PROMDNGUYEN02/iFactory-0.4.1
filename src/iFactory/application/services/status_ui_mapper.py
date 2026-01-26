@@ -1,7 +1,7 @@
 """
 Status UI Mapper Service.
 
-Maps Domain DeviceStatus to UI-specific data (colors, emojis, display).
+Maps Domain MachineStatus to UI-specific data (colors, emojis, display).
 This responsibility moved from Domain layer to Application layer.
 
 Business Rules:
@@ -14,14 +14,12 @@ from __future__ import annotations
 
 from typing import ClassVar, Dict
 
-from ...domain.enums.device_status import DeviceStatus
-
 __all__ = ["StatusUIMapper"]
 
 
 class StatusUIMapper:
     """
-    Maps Domain DeviceStatus to UI-specific presentation data.
+    Maps Domain MachineStatus to UI-specific presentation data.
 
     Trách nhiệm:
         - Map status code → color (light/dark theme)
@@ -35,44 +33,44 @@ class StatusUIMapper:
         - Display text for labels
     """
 
-    # UI data (moved from Domain enum)
+    # UI data (keys now match MachineStatus.value)
     _UI_DATA: ClassVar[Dict[str, Dict[str, str]]] = {
-        "0": {
+        "unknown": {
             "display": "UNKNOWN",
             "emoji": "❓",
             "color_light": "#9E9E9E",
             "color_dark": "#757575",
             "category": "unknown",
         },
-        "1": {
+        "running": {
             "display": "RUNNING",
             "emoji": "🟢",
             "color_light": "#4CAF50",
             "color_dark": "#66BB6A",
             "category": "running",
         },
-        "2": {
+        "shutdown": {
             "display": "SHUTDOWN",
             "emoji": "⚪",
             "color_light": "#9E9E9E",
             "color_dark": "#E0E0E0",
             "category": "inactive",
         },
-        "3": {
+        "stopped": {
             "display": "STOP",
             "emoji": "🔴",
             "color_light": "#F44336",
             "color_dark": "#EF5350",
             "category": "stopped",
         },
-        "4": {
+        "maintenance": {
             "display": "MAINTENANCE",
             "emoji": "🔵",
             "color_light": "#2196F3",
             "color_dark": "#42A5F5",
             "category": "inactive",
         },
-        "5": {
+        "alarm": {
             "display": "ALARM",
             "emoji": "🟡",
             "color_light": "#FFEB3B",
@@ -87,14 +85,14 @@ class StatusUIMapper:
         Get UI information for a status code.
 
         Args:
-            status_code: Database status code (e.g., '1')
+            status_code: Database status code (e.g., 'running')
             theme: UI theme ('light' or 'dark')
 
         Returns:
             Dictionary with 'display', 'emoji', 'color', 'category',
             'is_running', 'requires_attention'
         """
-        ui_data = cls._UI_DATA.get(status_code, cls._UI_DATA["0"])
+        ui_data = cls._UI_DATA.get(status_code, cls._UI_DATA["unknown"])
 
         is_running = ui_data["category"] == "running"
         requires_attention = ui_data["category"] in ("alarm", "stopped")
@@ -110,66 +108,28 @@ class StatusUIMapper:
 
     @classmethod
     def get_display_text(cls, status_code: str) -> str:
-        """
-        Get display text for a status code.
-
-        Args:
-            status_code: Database status code
-
-        Returns:
-            Display text (e.g., 'RUNNING')
-        """
-        return cls._UI_DATA.get(status_code, cls._UI_DATA["0"])["display"]
+        """Get display text for a status code."""
+        return cls._UI_DATA.get(status_code, cls._UI_DATA["unknown"])["display"]
 
     @classmethod
     def get_emoji(cls, status_code: str) -> str:
-        """
-        Get emoji for a status code.
-
-        Args:
-            status_code: Database status code
-
-        Returns:
-            Emoji unicode character
-        """
-        return cls._UI_DATA.get(status_code, cls._UI_DATA["0"])["emoji"]
+        """Get emoji for a status code."""
+        return cls._UI_DATA.get(status_code, cls._UI_DATA["unknown"])["emoji"]
 
     @classmethod
     def get_color(cls, status_code: str, theme: str = "light") -> str:
-        """
-        Get color for a status code and theme.
-
-        Args:
-            status_code: Database status code
-            theme: UI theme ('light' or 'dark')
-
-        Returns:
-            Hex color string
-        """
-        ui_data = cls._UI_DATA.get(status_code, cls._UI_DATA["0"])
+        """Get color for a status code and theme."""
+        ui_data = cls._UI_DATA.get(status_code, cls._UI_DATA["unknown"])
         return ui_data["color_light"] if theme == "light" else ui_data["color_dark"]
 
     @classmethod
     def get_category(cls, status_code: str) -> str:
-        """
-        Get category for a status code.
-
-        Args:
-            status_code: Database status code
-
-        Returns:
-            Category: 'running', 'stopped', 'alarm', 'inactive', 'unknown'
-        """
-        return cls._UI_DATA.get(status_code, cls._UI_DATA["0"])["category"]
+        """Get category for a status code."""
+        return cls._UI_DATA.get(status_code, cls._UI_DATA["unknown"])["category"]
 
     @classmethod
     def get_all_ui_data(cls) -> Dict[str, Dict[str, str]]:
-        """
-        Get all UI data (for debugging, theme selection).
-
-        Returns:
-            Dictionary mapping status code to UI data dict
-        """
+        """Get all UI data (for debugging, theme selection)."""
         return cls._UI_DATA.copy()
 
     @classmethod

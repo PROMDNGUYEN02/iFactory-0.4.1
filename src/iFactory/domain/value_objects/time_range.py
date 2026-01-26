@@ -35,6 +35,3 @@ class TimeRange:
         if not self.overlaps(other) and not self.is_adjacent_to(other):
             raise InvalidTimeRangeError.non_contiguous()
         return TimeRange(start=min(self.start, other.start), end=max(self.end, other.end))
-
-    def __lt__(self, other: TimeRange) -> bool:
-        return self.start < other.start

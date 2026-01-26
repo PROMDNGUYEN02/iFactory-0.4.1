@@ -1,5 +1,5 @@
 from __future__ import annotations
-from ..value_objects.status import Status
+from ..value_objects.machine_status import MachineStatus
 from ..exceptions import InvalidStatusTransitionError
 
 
@@ -10,18 +10,18 @@ class StatusTransitionPolicy:
     """
 
     @staticmethod
-    def validate(current_status: Status, next_status: Status) -> None:
+    def validate(current_status: MachineStatus, next_status: MachineStatus) -> None:
         """
         Validates if moving from current_status to next_status is legally allowed.
         Throws InvalidStatusTransitionError if the transition is prohibited by business rules.
         """
-        # Example Business Rule: A machine in ALARM cannot directly go to RUNNING without going through STOPPED or MAINTENANCE first.
-        if current_status.is_alarm and next_status.is_running:
-            raise InvalidStatusTransitionError.illegal_transition(current_status.name, next_status.name)
+        if current_status == next_status:
+            return
 
-        # Example Business Rule: SHUTDOWN can only transition to STOPPED or UNKNOWN.
-        if current_status.is_shutdown and next_status.is_running:
-            raise InvalidStatusTransitionError.illegal_transition(current_status.name, next_status.name)
+        # Business Rule: Machine in ALARM cannot directly go to RUNNING without passing through STOPPED/MAINTENANCE.
+        if current_status == MachineStatus.ALARM and next_status == MachineStatus.RUNNING:
+            raise InvalidStatusTransitionError.illegal_transition(current_status.value, next_status.value)
 
-        # Other transitions are considered valid.
-        return
+        # Business Rule: SHUTDOWN can only transition to STOPPED or UNKNOWN.
+        if current_status == MachineStatus.SHUTDOWN and next_status == MachineStatus.RUNNING:
+            raise InvalidStatusTransitionError.illegal_transition(current_status.value, next_status.value)

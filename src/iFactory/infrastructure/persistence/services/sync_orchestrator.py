@@ -27,8 +27,9 @@ class SyncOrchestrator:
         "_status_interval",
         "_input_interval",
         "_history_interval",
+        "_interval_seconds",  # Đã thêm vào slots
         "_running",
-        "_tasks",
+        "_task",  # Đã sửa từ _tasks thành _task
         "_device_codes",
     )
 
@@ -50,6 +51,7 @@ class SyncOrchestrator:
             status_interval: Seconds between status syncs
             input_interval: Seconds between input syncs
             history_interval: Seconds between history syncs
+            interval_seconds: Seconds between general sync loops
         """
         self._db = db
         if sync_service is not None:
@@ -59,11 +61,13 @@ class SyncOrchestrator:
                 "[SyncOrchestrator] SyncService not injected, creating new instance (this is inefficient - should be injected from app_container)"
             )
             self._sync_service = SyncService(db)
+
         self._status_interval = status_interval
         self._input_interval = input_interval
         self._history_interval = history_interval
+        self._interval_seconds = interval_seconds  # Đã sửa: Khởi tạo biến
         self._running = False
-        self._tasks: List[asyncio.Task] = []
+        self._task: Optional[asyncio.Task] = None  # Đã sửa: Khởi tạo biến Task đơn
         self._device_codes: List[str] = []
 
     async def start(self):
@@ -81,6 +85,7 @@ class SyncOrchestrator:
                 await self._task
             except asyncio.CancelledError:
                 pass
+            self._task = None
         logger.info("SyncOrchestrator stopped.")
 
     async def _run_loop(self):
