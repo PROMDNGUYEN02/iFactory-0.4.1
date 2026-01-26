@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any, Optional
 from .base import HotBase, ColdBase
 from .config import DBConfig, RemoteDBParams, HealthStatus
-from .engines import AsyncSQLiteEngine, SQLiteStoreType, MSSQLEngine
+from .engines.sqlite_engine import AsyncSQLiteEngine, SQLiteStoreType
+from .engines.mssql_engine import MSSQLEngine
 
 __all__ = ["DatabaseOrchestrator"]
 logger = logging.getLogger(__name__)
@@ -116,23 +117,13 @@ class DatabaseOrchestrator:
             )
         else:
             self._data_dir = _get_default_data_dir()
-            self._hot = AsyncSQLiteEngine.for_hot_store(
-                base_class=HotBase, config=self._config
-            )
-            self._cold = AsyncSQLiteEngine.for_cold_store(
-                base_class=ColdBase, config=self._config
-            )
-        self._mssql = MSSQLEngine(
-            remote=remote or RemoteDBParams(), config=self._config, name="RemoteDB"
-        )
-        logger.debug(
-            f"DatabaseOrchestrator created: data_dir={self._data_dir}, centralized_paths={self._use_centralized_paths}"
-        )
+            self._hot = AsyncSQLiteEngine.for_hot_store(base_class=HotBase, config=self._config)
+            self._cold = AsyncSQLiteEngine.for_cold_store(base_class=ColdBase, config=self._config)
+        self._mssql = MSSQLEngine(remote=remote or RemoteDBParams(), config=self._config, name="RemoteDB")
+        logger.debug(f"DatabaseOrchestrator created: data_dir={self._data_dir}, centralized_paths={self._use_centralized_paths}")
 
     @classmethod
-    def with_defaults(
-        cls, remote: Optional[RemoteDBParams] = None, config: Optional[DBConfig] = None
-    ) -> "DatabaseOrchestrator":
+    def with_defaults(cls, remote: Optional[RemoteDBParams] = None, config: Optional[DBConfig] = None) -> "DatabaseOrchestrator":
         """
         Create orchestrator with default paths from PATHS.
 
@@ -225,9 +216,7 @@ class DatabaseOrchestrator:
                 status[name] = False
             else:
                 status[name] = True
-        logger.info(
-            f"DatabaseOrchestrator initialized: hot={status['hot']}, cold={status['cold']}, mssql={status['mssql']}"
-        )
+        logger.info(f"DatabaseOrchestrator initialized: hot={status['hot']}, cold={status['cold']}, mssql={status['mssql']}")
         return status
 
     async def dispose(self) -> None:
@@ -271,9 +260,7 @@ class DatabaseOrchestrator:
 
     async def get_stats(self) -> dict[str, Any]:
         """Get statistics for all databases."""
-        (hot_stats, cold_stats, mssql_stats) = await asyncio.gather(
-            self._hot.get_stats(), self._cold.get_stats(), self._mssql.get_stats()
-        )
+        (hot_stats, cold_stats, mssql_stats) = await asyncio.gather(self._hot.get_stats(), self._cold.get_stats(), self._mssql.get_stats())
         return {
             "hot": hot_stats,
             "cold": cold_stats,
@@ -306,9 +293,7 @@ class DatabaseOrchestrator:
         Returns:
             Dictionary with success status for each store
         """
-        (hot_result, cold_result) = await asyncio.gather(
-            self._hot.checkpoint(mode), self._cold.checkpoint(mode)
-        )
+        (hot_result, cold_result) = await asyncio.gather(self._hot.checkpoint(mode), self._cold.checkpoint(mode))
         return {"hot": hot_result, "cold": cold_result}
 
     async def vacuum_all(self) -> dict[str, bool]:
@@ -317,9 +302,7 @@ class DatabaseOrchestrator:
 
         Warning: This can be slow for large databases.
         """
-        (hot_result, cold_result) = await asyncio.gather(
-            self._hot.vacuum(), self._cold.vacuum()
-        )
+        (hot_result, cold_result) = await asyncio.gather(self._hot.vacuum(), self._cold.vacuum())
         return {"hot": hot_result, "cold": cold_result}
 
     async def optimize_all(self) -> dict[str, bool]:

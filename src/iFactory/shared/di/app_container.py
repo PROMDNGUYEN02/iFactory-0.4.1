@@ -181,6 +181,8 @@ class AppContainer:
 
     async def _init_infrastructure(self) -> None:
         """Initialize infrastructure layer."""
+        from iFactory.infrastructure.database.models.hot_models import LatestStatus, SyncMeta
+        from iFactory.infrastructure.database.models.cold_models import StatusHistory
         from iFactory.infrastructure.database.orchestrator import DatabaseOrchestrator
 
         remote_params = self._build_remote_params()

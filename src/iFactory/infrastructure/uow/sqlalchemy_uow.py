@@ -1,8 +1,7 @@
-from typing import Optional
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from iFactory.application.interfaces.unit_of_work import IUnitOfWork
-from iFactory.infrastructure.database.engines.sqlite_engine import AsyncSQLiteEngine
 from iFactory.infrastructure.persistence.repositories.device_repository_impl import SqliteDeviceRepository
-from iFactory.infrastructure.exceptions import PersistenceError
+from iFactory.application.exceptions import ApplicationException
 
 
 class SqliteUnitOfWork(IUnitOfWork):
