@@ -7,7 +7,8 @@ from __future__ import annotations
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from iFactory.application.interfaces.unit_of_work import IUnitOfWork
+# --- FIX: Import from 'ports' instead of 'interfaces' ---
+from iFactory.application.ports.unit_of_work import IUnitOfWork
 from iFactory.domain.repositories.device_repository import DeviceRepository
 from iFactory.infrastructure.persistence.sqlalchemy.repository import SqlAlchemyDeviceRepository
 

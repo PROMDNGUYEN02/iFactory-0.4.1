@@ -9,7 +9,8 @@ from typing import Sequence, Dict, Any
 from sqlalchemy import text, bindparam
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from iFactory.application.interfaces.remote_data_source import IRemoteDataSource
+# --- FIX: Import from 'ports' instead of 'interfaces' ---
+from iFactory.application.ports.remote_data_source import IRemoteDataSource
 
 logger = logging.getLogger(__name__)
 

@@ -16,11 +16,11 @@ from iFactory.infrastructure.persistence.sqlalchemy.uow import SqlAlchemyUnitOfW
 from iFactory.infrastructure.data_sources.mssql_data_source import MssqlDataSource
 from iFactory.infrastructure.scheduling.background_scheduler import BackgroundScheduler
 
-# --- Application Layer Imports ---
-from iFactory.application.use_cases.device.get_latest_status import GetLatestDeviceStatusUseCase
-from iFactory.application.use_cases.device.get_all_devices_status import GetAllDevicesStatusUseCase
-from iFactory.application.use_cases.production.generate_production_timeline import GenerateProductionTimelineUseCase
-from iFactory.application.use_cases.sync.sync_all_devices_use_case import SyncAllDevicesUseCase
+# --- FIX: Application Layer Imports (CQRS Structure) ---
+from iFactory.application.queries.get_latest_status import GetLatestDeviceStatusQuery
+from iFactory.application.queries.get_all_devices_status import GetAllDevicesStatusQuery
+from iFactory.application.queries.generate_production_timeline import GenerateProductionTimelineQuery
+from iFactory.application.commands.sync_all_devices import SyncAllDevicesCommand
 
 if TYPE_CHECKING:
     from iFactory.presentation.qt.di import UIContainer
@@ -30,36 +30,36 @@ logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
-# Adapter: Bridges the gap between UI expectations and new Use Cases
+# Adapter: Bridges the gap between UI expectations and new CQRS Handlers
 # ==============================================================================
 class DeviceServiceAdapter:
     """
-    Adapter to present Use Cases to the UIContainer using the old service interface.
+    Adapter to present Commands and Queries to the UIContainer using the old service interface.
     """
 
     def __init__(
         self,
-        sync_uc: Optional[SyncAllDevicesUseCase],
-        get_latest_uc: GetLatestDeviceStatusUseCase,
-        get_all_uc: GetAllDevicesStatusUseCase,
-        gantt_uc: GenerateProductionTimelineUseCase,
+        sync_cmd: Optional[SyncAllDevicesCommand],
+        get_latest_qry: GetLatestDeviceStatusQuery,
+        get_all_qry: GetAllDevicesStatusQuery,
+        gantt_qry: GenerateProductionTimelineQuery,
     ):
-        self._sync_uc = sync_uc
-        self._get_latest_uc = get_latest_uc
-        self._get_all_uc = get_all_uc
-        self._gantt_uc = gantt_uc
+        self._sync_cmd = sync_cmd
+        self._get_latest_qry = get_latest_qry
+        self._get_all_qry = get_all_qry
+        self._gantt_qry = gantt_qry
 
     async def sync_device_status(self, equipment_codes=None):
-        if not self._sync_uc:
+        if not self._sync_cmd:
             logger.warning("Sync requested but no remote data source configured.")
             return None
-        return await self._sync_uc.execute(equipment_codes)
+        return await self._sync_cmd.execute(equipment_codes)
 
     async def get_device_status(self, equipment_code, theme="light"):
-        return await self._get_latest_uc.execute(equipment_code, theme)
+        return await self._get_latest_qry.execute(equipment_code, theme)
 
     async def get_all_devices_status(self, equipment_codes=None):
-        return await self._get_all_uc.execute(equipment_codes)
+        return await self._get_all_qry.execute(equipment_codes)
 
     async def get_gantt_segments(self, equipment_code, start_time=None, end_time=None, fill_gaps=True):
         from datetime import datetime
@@ -69,7 +69,7 @@ class DeviceServiceAdapter:
         if start_time is None:
             start_time = end_time.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        return await self._gantt_uc.execute(equipment_code, start_time, end_time, fill_gaps)
+        return await self._gantt_qry.execute(equipment_code, start_time, end_time, fill_gaps)
 
     async def get_all_latest_status(self, equipment_codes=None):
         return await self.get_all_devices_status(equipment_codes)
@@ -84,7 +84,7 @@ class DeviceServiceAdapter:
 
     @property
     def is_online(self):
-        return self._sync_uc is not None
+        return self._sync_cmd is not None
 
 
 # ==============================================================================
@@ -185,22 +185,23 @@ class AppContainer:
 
     def _init_application(self) -> None:
         """
-        Initialize Application layer, injecting the Infrastructure (UoW, Remote Source) into Use Cases.
+        Initialize Application layer, injecting the Infrastructure (UoW, Remote Source) into Commands/Queries.
         """
-        # Inject UoW and Cache into Use Cases
-        get_latest_uc = GetLatestDeviceStatusUseCase(uow=self._uow, cache=self._cache_provider)
-        get_all_uc = GetAllDevicesStatusUseCase(uow=self._uow, cache=self._cache_provider)
+        # Inject UoW and Cache into Queries
+        get_latest_qry = GetLatestDeviceStatusQuery(uow=self._uow, cache=self._cache_provider)
+        get_all_qry = GetAllDevicesStatusQuery(uow=self._uow, cache=self._cache_provider)
 
-        gantt_uc = GenerateProductionTimelineUseCase(unit_of_work_factory=lambda: self._uow, cache_provider=self._cache_provider)
+        gantt_qry = GenerateProductionTimelineQuery(unit_of_work_factory=lambda: self._uow, cache_provider=self._cache_provider)
 
-        sync_uc = SyncAllDevicesUseCase(remote_source=self._remote_data_source, uow=self._uow) if self._remote_data_source else None
+        # Inject UoW and Remote Source into Commands
+        sync_cmd = SyncAllDevicesCommand(remote_source=self._remote_data_source, uow=self._uow) if self._remote_data_source else None
 
         # Start the background scheduler if sync is available
-        if self._scheduler and sync_uc:
-            self._scheduler.start(lambda: sync_uc.execute())
+        if self._scheduler and sync_cmd:
+            self._scheduler.start(lambda: sync_cmd.execute())
 
         # Bind to Presentation Adapter
-        self._device_service_adapter = DeviceServiceAdapter(sync_uc, get_latest_uc, get_all_uc, gantt_uc)
+        self._device_service_adapter = DeviceServiceAdapter(sync_cmd, get_latest_qry, get_all_qry, gantt_qry)
 
     def _init_presentation(self) -> None:
         """Initialize Presentation layer."""
