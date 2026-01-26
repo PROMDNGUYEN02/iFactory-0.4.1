@@ -8,7 +8,7 @@ from typing import Sequence
 
 from iFactory.domain.entities import Device
 from iFactory.domain.value_objects import EquipmentCode, Status
-from iFactory.infrastructure.database.models import LatestStatus
+from iFactory.infrastructure.database.models.hot_models import LatestStatus
 
 __all__ = ["DeviceOrmMapper"]
 
