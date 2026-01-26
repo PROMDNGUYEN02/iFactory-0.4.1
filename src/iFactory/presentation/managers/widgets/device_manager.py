@@ -1,4 +1,3 @@
-# File: src/iFactory/ui/main_window/device_manager.py
 """
 Device Integration Manager - Bridges infrastructure and presentation.
 Accepts pre-created infrastructure managers via dependency injection.
@@ -8,12 +7,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from collections import NamedTuple
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+
+# FIX: NamedTuple is imported from typing in Python 3.11+, not collections.
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, NamedTuple
 
 from PySide6.QtWidgets import QMessageBox
 
-from iFactory.ui.widgets.constants import (
+from iFactory.presentation.managers.widgets.constants import (
     CONTEXT_MENU_STYLESHEET,
     GANTT_PAGE_MAPPING,
     DefaultGanttDevices,
@@ -24,16 +24,17 @@ if TYPE_CHECKING:
     from PySide6.QtCore import QPoint
     from PySide6.QtWidgets import QMenu, QWidget
 
-    from iFactory.infrastructure.configuration.device_config_loader import (
-        DeviceLayoutManager,
+    from iFactory.presentation.managers.widgets.device_canvas import (
+        DeviceConfigLoader as DeviceLayoutManager,
     )
-    from iFactory.infrastructure.configuration.legend.manager import (
-        LegendManager,
+    from iFactory.presentation.managers.widgets.legend.manager import (
+        StatusLegendProvider as LegendManager,
     )
-    from iFactory.infrastructure.factories.timeline_segment_factory import (
-        GanttManager,
+    from iFactory.presentation.qt.widgets.factories.timeline_segment_factory import (
+        TimelineSegmentFactory as GanttManager,
     )
-    from iFactory.ui.widgets.constants import WindowConstants
+    from iFactory.presentation.managers.widgets.constants import WindowConstants
+
 logger = logging.getLogger(__name__)
 
 DeviceClickCallback = Callable[[str, str], None]
@@ -154,7 +155,7 @@ class DeviceDataCache:
         return None
 
     def get_status_info(self, device_id: str) -> Optional[Dict]:
-        """Lấy thông tin status đầy đủ (name, color) từ cache nếu có."""
+        """Get status info from cache."""
         return self.status.get(device_id)
 
 
@@ -178,6 +179,7 @@ class DeviceLayoutManager:
         "_show_history_cb",
         "_request_gantt_cb",
         "_initialized_frames",
+        "_status_registry",
     )
 
     def __init__(
@@ -203,15 +205,14 @@ class DeviceLayoutManager:
         self._device_click_cb: Optional[DeviceClickCallback] = None
         self._show_history_cb: Optional[HistoryCallback] = None
         self._request_gantt_cb: Optional[GanttRequestCallback] = None
-        from iFactory.infrastructure.configuration.legend.status_registry import (
-            get_status_registry,
-        )
+
+        from iFactory.presentation.managers.widgets.legend.status_registry import get_status_registry
 
         self._status_registry = get_status_registry()
 
     @staticmethod
     def _load_constants() -> WindowConstants:
-        from iFactory.ui.widgets.constants import WindowConstants
+        from iFactory.presentation.managers.widgets.constants import WindowConstants
 
         return WindowConstants()
 
@@ -227,7 +228,7 @@ class DeviceLayoutManager:
     def initialize_device_manager(self, frames: Dict[str, Any], mode: str) -> None:
         """Initialize device manager with frames."""
         if not self._device_mgr:
-            self._device_mgr = self._create_manager("devices", "DeviceLayoutManager")
+            self._device_mgr = self._create_manager("device_canvas", "DeviceConfigLoader")
             if not self._device_mgr:
                 return
         self._device_mgr.set_theme(mode)
@@ -240,7 +241,7 @@ class DeviceLayoutManager:
     def initialize_gantt_manager(self, frames: Dict[str, Any], mode: str) -> None:
         """Initialize gantt manager with frames."""
         if not self._gantt_mgr:
-            self._gantt_mgr = self._create_manager("gantt", "GanttManager", parent=self._parent)
+            self._gantt_mgr = self._create_manager("factories.timeline_segment_factory", "TimelineSegmentFactory", parent=self._parent)
             if not self._gantt_mgr:
                 return
         self._gantt_mgr.set_theme(mode)
@@ -252,7 +253,7 @@ class DeviceLayoutManager:
     def initialize_legend_manager(self, frames: Dict[str, Any], mode: str) -> None:
         """Initialize legend manager with frames."""
         if not self._legend_mgr:
-            self._legend_mgr = self._create_manager("legend", "LegendManager")
+            self._legend_mgr = self._create_manager("legend.manager", "StatusLegendProvider")
             if not self._legend_mgr:
                 return
         self._legend_mgr.set_theme(mode)
@@ -262,18 +263,14 @@ class DeviceLayoutManager:
     def _create_manager(self, module: str, class_name: str, **kwargs: Any) -> Optional[Any]:
         """Create a manager instance dynamically."""
         try:
-            mod = __import__(f"iFactory.infrastructure.{module}.manager", fromlist=[class_name])
+            mod = __import__(f"iFactory.presentation.managers.widgets.{module}", fromlist=[class_name])
             return getattr(mod, class_name)(**kwargs)
         except (ImportError, AttributeError) as e:
             logger.warning(f"{class_name} not available: {e}")
             return None
 
     def _register_frames(self, manager: Any, frames: Dict[str, Any]) -> None:
-        """
-        Register frames with a manager.
-
-        FIX: Prevents duplicate UI registration by tracking initialized frames.
-        """
+        """Register frames with a manager."""
         if not hasattr(manager, "register_frame"):
             return
         for name, frame in frames.items():
@@ -374,9 +371,7 @@ class DeviceLayoutManager:
             self.request_gantt_for_device(device_id, frame)
 
     def _find_frame_for_device(self, device_id: str, fallback: bool = False) -> Optional[str]:
-        """
-        Find appropriate frame for a device.
-        """
+        """Find appropriate frame for a device."""
         for frame, mapped in self._default_gantt_devices.items():
             if mapped == device_id:
                 return frame

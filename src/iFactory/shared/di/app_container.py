@@ -9,16 +9,21 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
-from types import TracebackType
+
+# --- Infrastructure Layer Imports ---
+from iFactory.infrastructure.database.engine import AsyncDatabaseEngine
+from iFactory.infrastructure.persistence.uow import SqliteUnitOfWork
+from iFactory.infrastructure.remote.mssql_data_source import MssqlDataSource
+from iFactory.infrastructure.sync.sync_orchestrator import SyncOrchestrator
+
+# --- Application Layer Imports ---
+from iFactory.application.use_cases.device.get_latest_status import GetLatestDeviceStatusUseCase
+from iFactory.application.use_cases.device.get_all_devices_status import GetAllDevicesStatusUseCase
+from iFactory.application.use_cases.production.generate_production_timeline import GenerateProductionTimelineUseCase
+from iFactory.application.use_cases.sync.sync_all_devices_use_case import SyncAllDevicesUseCase
 
 if TYPE_CHECKING:
     from iFactory.presentation.qt.di import UIContainer
-    from iFactory.infrastructure.database.orchestrator import DatabaseOrchestrator
-    from iFactory.infrastructure.persistence.data_sources import MssqlDataSource
-    from iFactory.infrastructure.persistence.services import (
-        SyncOrchestrator,
-        SyncService,
-    )
     from iFactory.presentation.adapters import QtSignalAdapter
 
 logger = logging.getLogger(__name__)
@@ -30,15 +35,14 @@ logger = logging.getLogger(__name__)
 class DeviceServiceAdapter:
     """
     Adapter to present Use Cases to the UIContainer using the old service interface.
-    This prevents massive changes in the Presentation layer.
     """
 
     def __init__(
         self,
-        sync_uc,
-        get_latest_uc,
-        get_all_uc,
-        gantt_uc,
+        sync_uc: Optional[SyncAllDevicesUseCase],
+        get_latest_uc: GetLatestDeviceStatusUseCase,
+        get_all_uc: GetAllDevicesStatusUseCase,
+        gantt_uc: GenerateProductionTimelineUseCase,
     ):
         self._sync_uc = sync_uc
         self._get_latest_uc = get_latest_uc
@@ -46,6 +50,9 @@ class DeviceServiceAdapter:
         self._gantt_uc = gantt_uc
 
     async def sync_device_status(self, equipment_codes=None):
+        if not self._sync_uc:
+            logger.warning("Sync requested but no remote data source configured.")
+            return None
         return await self._sync_uc.execute(equipment_codes)
 
     async def get_device_status(self, equipment_code, theme="light"):
@@ -64,7 +71,6 @@ class DeviceServiceAdapter:
 
         return await self._gantt_uc.execute(equipment_code, start_time, end_time, fill_gaps)
 
-    # Backward compatibility aliases used by controllers
     async def get_all_latest_status(self, equipment_codes=None):
         return await self.get_all_devices_status(equipment_codes)
 
@@ -82,34 +88,6 @@ class DeviceServiceAdapter:
 
 
 # ==============================================================================
-# Simple UnitOfWork Implementation
-# ==============================================================================
-class SimpleUnitOfWork:
-    """
-    Minimal UnitOfWork implementation to satisfy Use Cases.
-    Updated to support the consolidated domain repositories.
-    """
-
-    def __init__(self, device_repo, production_repo):
-        self.devices = device_repo
-        self.production = production_repo
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: Optional[type],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
-    ):
-        pass
-
-    async def commit(self):
-        pass
-
-
-# ==============================================================================
 # Main Container
 # ==============================================================================
 class AppContainer:
@@ -119,16 +97,13 @@ class AppContainer:
 
     __slots__ = (
         "_base_dir",
-        "_db_config",
         "_settings",
-        "_db_orchestrator",
-        "_sync_orchestrator",
-        "_sync_service",
+        "_db_engine",
+        "_uow",
         "_remote_data_source",
+        "_sync_orchestrator",
         "_cache_provider",
         "_device_service_adapter",
-        "_summary_provider",
-        "_right_menu_provider",
         "_ui_container",
         "_signal_adapter",
         "_initialized",
@@ -137,35 +112,28 @@ class AppContainer:
     def __init__(self, base_dir: Optional[Path] = None) -> None:
         from iFactory.shared.utils.paths import get_project_root
 
-        if base_dir is None:
-            self._base_dir = get_project_root()
-        else:
-            self._base_dir = base_dir
+        self._base_dir = base_dir if base_dir is not None else get_project_root()
 
-        from iFactory.infrastructure.database.config import DBConfig
-
-        self._db_config = DBConfig.production()
         self._settings = None
-        self._db_orchestrator: Optional[DatabaseOrchestrator] = None
-        self._sync_orchestrator: Optional[SyncOrchestrator] = None
-        self._sync_service: Optional[SyncService] = None
+        self._db_engine: Optional[AsyncDatabaseEngine] = None
+        self._uow: Optional[SqliteUnitOfWork] = None
         self._remote_data_source: Optional[MssqlDataSource] = None
+        self._sync_orchestrator: Optional[SyncOrchestrator] = None
         self._cache_provider = None
+
         self._device_service_adapter: Optional[DeviceServiceAdapter] = None
-        self._summary_provider = None
-        self._right_menu_provider = None
         self._ui_container: Optional[UIContainer] = None
         self._signal_adapter: Optional[QtSignalAdapter] = None
         self._initialized = False
 
     async def initialize(self) -> None:
-        """Initialize all components in correct order."""
+        """Initialize all components in correct dependency order."""
         if self._initialized:
             return
-        logger.info("[AppContainer] Initializing...")
+
+        logger.info("[AppContainer] Initializing Clean Architecture stack...")
         self._load_settings()
         await self._init_infrastructure()
-        await self._init_sync()
         self._init_application()
         self._init_presentation()
         self._initialized = True
@@ -181,140 +149,57 @@ class AppContainer:
             logger.warning(f"Settings load failed: {e}")
 
     async def _init_infrastructure(self) -> None:
-        """Initialize infrastructure layer."""
-        from iFactory.infrastructure.database.orchestrator import DatabaseOrchestrator
+        """Initialize Infrastructure layer: Databases, ORM, and Remote Sources."""
 
-        remote_params = self._build_remote_params()
-        self._db_orchestrator = DatabaseOrchestrator(base_dir=self._base_dir, remote=remote_params, config=self._db_config)
-        await self._db_orchestrator.initialize()
+        # 1. Local Database (SQLite)
+        db_path = self._settings.database.hot_store_path if self._settings and hasattr(self._settings, "database") else "data/hot_store.db"
+        self._db_engine = AsyncDatabaseEngine(f"sqlite+aiosqlite:///{db_path}")
+        await self._db_engine.init_db()
 
+        # 2. Persistence Layer (Unit of Work)
+        self._uow = SqliteUnitOfWork(self._db_engine.get_session_factory())
+
+        # 3. Cache
         try:
-            from iFactory.infrastructure.cache import InMemoryCacheProvider
+            from iFactory.infrastructure.cache.cache_provider import InMemoryCacheProvider
 
             self._cache_provider = InMemoryCacheProvider(max_size=500)
         except Exception as e:
             logger.warning(f"Cache init failed: {e}")
 
-        if self._db_orchestrator.mssql.is_connected:
-            try:
-                from iFactory.infrastructure.persistence.data_sources import MssqlDataSource
-
-                self._remote_data_source = MssqlDataSource(self._db_orchestrator.mssql)
-            except Exception as e:
-                logger.warning(f"Remote data source failed: {e}")
-
-    def _build_remote_params(self) -> Optional[Any]:
-        """Build remote database parameters from settings."""
-        if not self._settings:
-            return None
-        try:
+        # 4. Remote Data Source (MSSQL)
+        if self._settings and hasattr(self._settings, "db_settings"):
             db_cfg = self._settings.db_settings
-            required = (db_cfg.mssql_host, db_cfg.mssql_db, db_cfg.mssql_user)
-            if not all((f and str(f).strip() for f in required)):
-                return None
-            from iFactory.infrastructure.database.config import RemoteDBParams
-
-            return RemoteDBParams(
-                host=db_cfg.mssql_host,
-                database=db_cfg.mssql_db,
-                user=db_cfg.mssql_user,
-                password=db_cfg.mssql_password,
-                driver=db_cfg.mssql_driver,
-                encrypt=True,
-                trust_cert=True,
+            mssql_conn_string = (
+                f"mssql+aioodbc://{db_cfg.mssql_user}:{db_cfg.mssql_password}@{db_cfg.mssql_host}/{db_cfg.mssql_db}?driver={db_cfg.mssql_driver}"
             )
-        except Exception as e:
-            logger.warning(f"Failed to build remote params: {e}")
-            return None
+            try:
+                self._remote_data_source = MssqlDataSource(mssql_conn_string)
+            except Exception as e:
+                logger.warning(f"Remote data source init failed: {e}")
 
-    async def _init_sync(self) -> None:
-        """Initialize sync service and orchestrator."""
-        if not self._remote_data_source:
-            logger.info("Sync disabled (no remote data source)")
-            return
-        try:
-            from iFactory.infrastructure.persistence.services import SyncOrchestrator, SyncService
-            from iFactory.infrastructure.persistence.repositories import SqliteDeviceRepository, SqliteProductionRepository
-
-            # FIX: Imported from _impl
-            from iFactory.infrastructure.persistence.repositories.sync_metadata_repository_impl import SqliteSyncMetadataRepository
-
-            device_repo = SqliteDeviceRepository(self._db_orchestrator.hot)
-            production_repo = SqliteProductionRepository(self._db_orchestrator.hot, self._db_orchestrator.cold)
-            uow = SimpleUnitOfWork(device_repo, production_repo)
-
-            # Instantiate Metadata Repo
-            metadata_repo = SqliteSyncMetadataRepository(self._db_orchestrator.hot)
-
-            # Updated instantiation to match SyncService signature
-            self._sync_service = SyncService(
-                data_source=self._remote_data_source,
-                uow=uow,
-                metadata_repo=metadata_repo,
-                history_interval=300,
-            )
-            await self._sync_service.initialize()
-
-            self._sync_orchestrator = SyncOrchestrator(
-                db=self._db_orchestrator,
-                sync_service=self._sync_service,
-                status_interval=3.0,
-                input_interval=3.0,
-                history_interval=5.0,
-            )
-            await self._sync_orchestrator.start()
-            logger.info("Sync Orchestrator started")
-        except Exception as e:
-            logger.warning(f"Sync init failed: {e}")
-            self._sync_service = None
-            self._sync_orchestrator = None
+        # 5. Sync Subdomain
+        if self._remote_data_source:
+            self._sync_orchestrator = SyncOrchestrator(data_source=self._remote_data_source, uow=self._uow)
 
     def _init_application(self) -> None:
         """
-        Initialize application layer using Use Cases directly.
+        Initialize Application layer, injecting the Infrastructure (UoW, Remote Source) into Use Cases.
         """
-        from iFactory.application.use_cases import (
-            GenerateProductionTimelineUseCase,
-            GetAllDevicesStatusUseCase,
-            GetLatestDeviceStatusUseCase,
-        )
-        from iFactory.application.use_cases.sync.sync_all_devices_use_case import (
-            SyncAllDevicesUseCase,
-        )
-        from iFactory.application.services.summary_provider import SummaryDataProvider
-        from iFactory.application.services.right_menu_provider import RightMenuDataProvider
-        from iFactory.infrastructure.persistence.repositories import (
-            SqliteDeviceRepository,
-            SqliteProductionRepository,
-        )
+        # FIX: The Device Use Cases expect 'cache' as the keyword argument, not 'cache_provider'
+        get_latest_uc = GetLatestDeviceStatusUseCase(uow=self._uow, cache=self._cache_provider)
+        get_all_uc = GetAllDevicesStatusUseCase(uow=self._uow, cache=self._cache_provider)
 
-        hot = self._db_orchestrator.hot
-        cold = self._db_orchestrator.cold
+        # FIX: The Production/Gantt Use Case expects 'unit_of_work_factory' and 'cache_provider'
+        gantt_uc = GenerateProductionTimelineUseCase(unit_of_work_factory=lambda: self._uow, cache_provider=self._cache_provider)
 
-        # Repositories
-        device_repo = SqliteDeviceRepository(hot)
-        production_repo = SqliteProductionRepository(hot, cold)
+        sync_uc = SyncAllDevicesUseCase(remote_source=self._remote_data_source, uow=self._uow) if self._remote_data_source else None
 
-        # Use Cases
-        sync_uc = SyncAllDevicesUseCase(self._remote_data_source, device_repo) if self._remote_data_source else None
-
-        get_latest_uc = GetLatestDeviceStatusUseCase(SimpleUnitOfWork(device_repo, production_repo), self._cache_provider)
-
-        get_all_uc = GetAllDevicesStatusUseCase(SimpleUnitOfWork(device_repo, production_repo), self._cache_provider)
-
-        gantt_uc = GenerateProductionTimelineUseCase(
-            unit_of_work_factory=lambda: SimpleUnitOfWork(device_repo, production_repo), cache_provider=self._cache_provider
-        )
-
-        # Application Services
-        self._summary_provider = SummaryDataProvider(production_repo)
-        self._right_menu_provider = RightMenuDataProvider(production_repo)
-
-        # Wrap Use Cases in Adapter for UI compatibility
+        # Bind to Presentation Adapter
         self._device_service_adapter = DeviceServiceAdapter(sync_uc, get_latest_uc, get_all_uc, gantt_uc)
 
     def _init_presentation(self) -> None:
-        """Initialize presentation layer."""
+        """Initialize Presentation layer."""
         from iFactory.presentation.adapters import QtSignalAdapter
         from iFactory.presentation.qt.di import UIContainer
 
@@ -325,84 +210,44 @@ class AppContainer:
             settings=self._settings,
         )
 
-    def get_device_service(self) -> Optional[DeviceServiceAdapter]:
-        return self._device_service_adapter
-
-    def get_sync_service(self) -> Optional[SyncService]:
-        return self._sync_service
+    # --- Getters ---
 
     def get_ui_container(self) -> Optional[UIContainer]:
         return self._ui_container
 
-    def get_signal_adapter(self) -> Optional[QtSignalAdapter]:
-        return self._signal_adapter
-
-    def get_remote_data_source(self) -> Optional[MssqlDataSource]:
-        return self._remote_data_source
-
-    def get_summary_provider(self) -> Optional[SummaryDataProvider]:
-        return self._summary_provider
-
-    def get_right_menu_provider(self) -> Optional[RightMenuDataProvider]:
-        return self._right_menu_provider
-
     @property
-    def hot_engine(self):
-        return self._db_orchestrator.hot if self._db_orchestrator else None
-
-    @property
-    def cold_engine(self):
-        return self._db_orchestrator.cold if self._db_orchestrator else None
-
-    @property
-    def mssql_engine(self):
-        return self._db_orchestrator.mssql if self._db_orchestrator else None
+    def is_online(self) -> bool:
+        """Check if running in online mode (Remote DB connected)."""
+        return self._remote_data_source is not None
 
     def get_status(self) -> Dict[str, bool]:
         """Get container status information."""
-        db_init = self._db_orchestrator.is_initialized if self._db_orchestrator else False
-        remote_conn = self._db_orchestrator.is_remote_connected if self._db_orchestrator else False
         return {
             "initialized": self._initialized,
             "has_settings": self._settings is not None,
-            "sqlite_connected": db_init,
-            "mssql_connected": remote_conn,
-            "sync_available": self._sync_service is not None,
+            "sqlite_connected": self._db_engine is not None,
+            "mssql_connected": self._remote_data_source is not None,
+            "sync_available": self._sync_orchestrator is not None,
             "cache_enabled": self._cache_provider is not None,
-            "online_mode": self._remote_data_source is not None,
+            "online_mode": self.is_online,
         }
 
-    @property
-    def is_online(self) -> bool:
-        """Check if running in online mode."""
-        return self._remote_data_source is not None
-
     async def dispose(self) -> None:
-        """Dispose all resources."""
+        """Dispose all resources gracefully."""
         logger.info("[AppContainer] Disposing...")
-        if self._sync_orchestrator:
-            try:
-                await self._sync_orchestrator.stop()
-            except Exception as e:
-                logger.warning(f"Sync stop error: {e}")
+
         if self._ui_container and hasattr(self._ui_container, "cleanup"):
-            try:
-                self._ui_container.cleanup()
-            except Exception as e:
-                logger.warning(f"UI cleanup error: {e}")
-        if self._cache_provider:
-            try:
-                if hasattr(self._cache_provider, "stop"):
-                    await self._cache_provider.stop()
-                elif hasattr(self._cache_provider, "clear"):
-                    self._cache_provider.clear()
-            except Exception as e:
-                logger.warning(f"Cache cleanup error: {e}")
-        if self._db_orchestrator:
-            try:
-                await self._db_orchestrator.dispose()
-            except Exception as e:
-                logger.warning(f"DB cleanup error: {e}")
+            self._ui_container.cleanup()
+
+        if self._cache_provider and hasattr(self._cache_provider, "clear"):
+            self._cache_provider.clear()
+
+        if self._remote_data_source:
+            await self._remote_data_source.dispose()
+
+        if self._db_engine:
+            await self._db_engine.dispose()
+
         self._initialized = False
         logger.info("[AppContainer] Disposed")
 

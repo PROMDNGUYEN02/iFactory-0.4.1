@@ -1,12 +1,5 @@
 """
-Infrastructure Layer Package.
+Infrastructure Layer.
+Provides concrete implementations for database access, caching, configuration,
+remote data sources, and background synchronization.
 """
-
-from .database.config import DBConfig, DatabaseType
-from .database.orchestrator import DatabaseOrchestrator
-
-__all__ = [
-    "DBConfig",
-    "DatabaseType",
-    "DatabaseOrchestrator",
-]

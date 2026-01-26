@@ -47,7 +47,7 @@ from iFactory.presentation.managers.widgets.constants import (
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QListWidgetItem
     from iFactory.presentation.managers import IconManager, ThemeManager
-    from iFactory.infrastructure.configuration.device_config_loader import (
+    from iFactory.infrastructure.configuration.file_config_loader import (
         DeviceLayoutManager,
     )
     from iFactory.infrastructure.factories.timeline_segment_factory import GanttManager

@@ -17,8 +17,8 @@ from iFactory.config import THEME_BASE_PATH, THEME_VARS_PATH, ThemeMode, APP_TIT
 if TYPE_CHECKING:
     from iFactory.application.services.__init__ import DeviceDataService
     from iFactory.config import SettingsManager
-    from iFactory.infrastructure.configuration.device_config_loader import (
-        DeviceConfigLoader,
+    from iFactory.presentation.managers.widgets.device_manager import (
+        DeviceLayoutManager,
     )
     from iFactory.presentation.qt.widgets.factories.timeline_segment_factory import (
         TimelineSegmentFactory,
@@ -63,7 +63,7 @@ class UIContainer(QObject):
         self._async_executor = AsyncExecutor(parent=self)
         self._theme_manager = None
         self._icon_manager = None
-        self._device_layout_mgr: Optional["DeviceConfigLoader"] = None
+        self._device_layout_mgr: Optional["DeviceLayoutManager"] = None
         self._gantt_mgr: Optional["TimelineSegmentFactory"] = None
         self._legend_mgr: Optional["StatusLegendProvider"] = None
         self._main_controller = None
@@ -228,15 +228,18 @@ class UIContainer(QObject):
     def _create_infrastructure_managers(self) -> None:
         """Create infrastructure managers."""
         logger.debug("  Creating infrastructure managers...")
-        with profile_block("DeviceConfigLoader creation"):
+
+        # FIX: Instantiate the Presentation DeviceLayoutManager, not the ConfigLoader.
+        with profile_block("DeviceLayoutManager creation"):
             try:
-                from iFactory.infrastructure.configuration.device_config_loader import (
-                    DeviceConfigLoader,
+                from iFactory.presentation.managers.widgets.device_manager import (
+                    DeviceLayoutManager,
                 )
 
-                self._device_layout_mgr = DeviceConfigLoader()
+                self._device_layout_mgr = DeviceLayoutManager(theme_manager=self._theme_manager)
             except Exception as e:
-                logger.warning(f"DeviceConfigLoader failed: {e}")
+                logger.warning(f"DeviceLayoutManager failed: {e}")
+
         with profile_block("TimelineSegmentFactory creation"):
             try:
                 from iFactory.presentation.qt.widgets.factories.timeline_segment_factory import (
@@ -639,7 +642,7 @@ class UIContainer(QObject):
     def get_main_view(self):
         return self._view
 
-    def get_device_layout_manager(self) -> Optional["DeviceConfigLoader"]:
+    def get_device_layout_manager(self) -> Optional["DeviceLayoutManager"]:
         return self._device_layout_mgr
 
     def get_gantt_manager(self) -> Optional["TimelineSegmentFactory"]:

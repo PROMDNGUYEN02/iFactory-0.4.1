@@ -1,24 +1,42 @@
 """
-Infrastructure Cache Adapter.
+Standard In-Memory Cache Provider implementation.
 """
 
+import asyncio
 from typing import Any, Optional
-from iFactory.application.interfaces.cache_provider import ICacheProvider
+from collections import OrderedDict
 
 
-class InMemoryCacheProvider(ICacheProvider):
-    def __init__(self, max_size: int = 1000):
-        self._cache = {}
+class InMemoryCacheProvider:
+    """
+    Simple, thread-safe LRU Cache implementation for the Application Use Cases.
+    Supports TTL (Time-To-Live) signatures used by the Application layer.
+    """
+
+    def __init__(self, max_size: int = 500):
+        self._cache = OrderedDict()
         self._max_size = max_size
+        self._lock = asyncio.Lock()
 
     async def get(self, key: str) -> Optional[Any]:
-        return self._cache.get(key)
+        """Retrieve an item from the cache."""
+        async with self._lock:
+            if key not in self._cache:
+                return None
+            self._cache.move_to_end(key)
+            return self._cache[key]
 
-    async def set(self, key: str, value: Any, ttl: int = 300) -> None:
-        if len(self._cache) >= self._max_size:
-            self._cache.pop(next(iter(self._cache)))
-        self._cache[key] = value
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        """
+        Store an item in the cache.
+        Accepts 'ttl' (in seconds) to satisfy the ICacheProvider interface.
+        """
+        async with self._lock:
+            self._cache[key] = value
+            self._cache.move_to_end(key)
+            if len(self._cache) > self._max_size:
+                self._cache.popitem(last=False)
 
-    async def delete(self, key: str) -> None:
-        if key in self._cache:
-            del self._cache[key]
+    def clear(self) -> None:
+        """Clear all cached items."""
+        self._cache.clear()
