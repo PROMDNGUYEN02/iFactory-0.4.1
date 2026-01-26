@@ -4,13 +4,13 @@ Status mapping utilities and entity-to-DTO mapping.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from iFactory.application.dtos import GanttSegmentDTO
 from iFactory.application.services.status_ui_mapper import StatusUIMapper
 
 if TYPE_CHECKING:
-    from iFactory.domain import DeviceHistory
+    from iFactory.domain.value_objects import StatusPeriod
 
 __all__ = [
     "StatusPeriodMapper",
@@ -30,30 +30,24 @@ def _get_default_mapper() -> "StatusPeriodMapper":
 
 # --- Entity Mapper ---
 class StatusPeriodMapper:
-    """Maps DeviceHistory domain entity to GanttSegmentDTO."""
+    """Maps StatusPeriod domain value object to GanttSegmentDTO."""
 
     __slots__ = ("_ui_mapper",)
 
     def __init__(self, ui_mapper: StatusUIMapper = None) -> None:
-        """
-        Initialize mapper with UI mapper.
-
-        Args:
-            ui_mapper: StatusUIMapper for UI data mapping. Defaults to StatusUIMapper.
-        """
         self._ui_mapper = ui_mapper or StatusUIMapper()
 
-    def to_dto(self, entity: "DeviceHistory", theme: str = "light") -> GanttSegmentDTO:
-        """Convert a DeviceHistory entity to a GanttSegmentDTO."""
+    def to_dto(self, entity: "StatusPeriod", theme: str = "light") -> GanttSegmentDTO:
+        """Convert a StatusPeriod entity to a GanttSegmentDTO."""
         return GanttSegmentDTO(
-            start_time=entity.start_time,
-            end_time=entity.end_time,
-            status_code=entity.status_code,
-            status_name=entity.status_name,
-            status_color=self._ui_mapper.get_color(entity.status_code, theme),
+            start_time=entity.time_range.start,
+            end_time=entity.time_range.end,
+            status_code=entity.status.code,
+            status_name=entity.status.name,
+            status_color=self._ui_mapper.get_color(entity.status.code, theme),
         )
 
     @staticmethod
-    def to_dto(entity: "DeviceHistory", theme: str = "light") -> GanttSegmentDTO:
+    def to_dto(entity: "StatusPeriod", theme: str = "light") -> GanttSegmentDTO:
         """Static method for backward compatibility. Uses default mapper instance."""
         return _get_default_mapper().to_dto(entity, theme)

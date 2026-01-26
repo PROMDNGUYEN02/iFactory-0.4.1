@@ -4,66 +4,51 @@ from enum import Enum, unique
 
 @unique
 class DeviceStatus(Enum):
-    UNKNOWN = ("unknown", "0")
-    RUNNING = ("running", "1")
-    SHUTDOWN = ("shutdown", "2")
-    STOP = ("stop", "3")
-    MAINTENANCE = ("maintenance", "4")
-    ALARM = ("alarm", "5")
+    """
+    Canonical core states of a manufacturing device.
+    Strictly business definitions. No UI colors or strings allowed.
+    """
 
-    def __init__(self, internal_name: str, code: str) -> None:
-        self._internal_name = internal_name
-        self._code = code
-
-    @property
-    def internal_name(self) -> str:
-        return self._internal_name
-
-    @property
-    def code(self) -> str:
-        return self._code
+    UNKNOWN = "unknown"
+    RUNNING = "running"
+    SHUTDOWN = "shutdown"
+    STOPPED = "stopped"
+    MAINTENANCE = "maintenance"
+    ALARM = "alarm"
 
     @property
     def implies_downtime(self) -> bool:
         """Business rule: Determine if status constitutes machine downtime."""
-        return self in (DeviceStatus.SHUTDOWN, DeviceStatus.MAINTENANCE, DeviceStatus.STOP, DeviceStatus.ALARM)
+        return self in (DeviceStatus.SHUTDOWN, DeviceStatus.MAINTENANCE, DeviceStatus.STOPPED, DeviceStatus.ALARM)
 
     @classmethod
-    def from_code(cls, code: str | None) -> DeviceStatus:
-        if not code:
-            return cls.UNKNOWN
-        clean_code = str(code).strip()
-        for status in cls:
-            if status.code == clean_code:
-                return status
-        return cls.UNKNOWN
-
-    @classmethod
-    def from_string(cls, value: str | None) -> DeviceStatus:
+    def from_business_term(cls, value: str | None) -> DeviceStatus:
         """
-        Domain factory logic to convert business vernacular into canonical states.
-        Replaces external 'StatusNormalizationService'.
+        Maps shop-floor vernacular to canonical system states.
+        This captures the domain language invariant (e.g., 'PM' means Maintenance).
         """
         if not value:
             return cls.UNKNOWN
 
         clean = str(value).strip().lower()
 
-        # Direct match
-        for status in cls:
-            if status.code == clean or status.internal_name == clean:
-                return status
-
-        # Business vernacular aliases
+        # Business vernacular dictionary
         aliases = {
             "run": cls.RUNNING,
             "active": cls.RUNNING,
             "on": cls.RUNNING,
             "off": cls.SHUTDOWN,
-            "idle": cls.STOP,
-            "stopped": cls.STOP,
+            "idle": cls.STOPPED,
+            "stop": cls.STOPPED,
             "fault": cls.ALARM,
             "error": cls.ALARM,
             "pm": cls.MAINTENANCE,
         }
-        return aliases.get(clean, cls.UNKNOWN)
+
+        if clean in aliases:
+            return aliases[clean]
+
+        try:
+            return cls(clean)
+        except ValueError:
+            return cls.UNKNOWN

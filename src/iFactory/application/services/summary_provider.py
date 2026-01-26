@@ -6,7 +6,8 @@ import logging
 from typing import List, Dict
 
 from iFactory.domain.value_objects.time_range import TimeRange
-from iFactory.domain.repositories import StatusRepository
+from iFactory.domain.value_objects.equipment_code import EquipmentCode
+from iFactory.domain.repositories import ProductionRepository
 
 from .right_menu_provider import StatusSummaryRow
 
@@ -20,10 +21,10 @@ class SummaryDataProvider:
     Provides aggregated summary data.
     """
 
-    __slots__ = ("_status_repo",)
+    __slots__ = ("_production_repo",)
 
-    def __init__(self, status_repository: StatusRepository):
-        self._status_repo = status_repository
+    def __init__(self, production_repository: ProductionRepository):
+        self._production_repo = production_repository
 
     async def get_summary(self, device_codes: List[str], days: int = 7) -> List[StatusSummaryRow]:
         """Get aggregated summary for devices."""
@@ -33,29 +34,35 @@ class SummaryDataProvider:
         time_range = TimeRange.last_days(days)
 
         def _normalize_status(status_name: str) -> str:
-            # Should ideally use StatusMapper utility, but keeping simple here to avoid circular import if mapper is in application/mappers
-            # Ideally import from application.mappers.status_period_mapper import StatusMapper
             if not status_name:
                 return "unknown"
             return str(status_name).strip().lower()
 
         try:
-            for code in device_codes:
-                records = await self._status_repo.get_history(code, time_range)
+            for code_str in device_codes:
+                # Convert string to Domain Value Object
+                code = EquipmentCode(code_str)
+
+                # Call Domain Repository
+                records = await self._production_repo.get_status_history(code, time_range)
                 for period in records:
-                    date_str = period.start_time.strftime("%Y-%m-%d")
-                    key = f"{date_str}|{code}"
+                    # Access the new TimeRange value object for the start time
+                    date_str = period.time_range.start.strftime("%Y-%m-%d")
+                    key = f"{date_str}|{code_str}"
                     if key not in summaries:
-                        summaries[key] = StatusSummaryRow(date=date_str, equip_code=code)
+                        summaries[key] = StatusSummaryRow(date=date_str, equip_code=code_str)
                     row = summaries[key]
+
+                    # Access the new Status value object for the name
                     duration = period.duration_seconds
-                    status_name = _normalize_status(str(period.status_name))  # Assuming status_name is available
+                    status_name = _normalize_status(period.status.name)
 
                     if status_name == "running":
                         row.running += duration
                     elif status_name == "shutdown":
                         row.shutdown += duration
-                    elif status_name == "stop":
+                    # Handle both 'stop' and the domain-canonical 'stopped'
+                    elif status_name == "stopped" or status_name == "stop":
                         row.stop += duration
                     elif status_name == "maintenance":
                         row.maintenance += duration

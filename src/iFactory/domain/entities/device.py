@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from ..value_objects.equipment_code import EquipmentCode
 from ..value_objects.status import Status
-from ..events.device_events import StatusChangedEvent
+from ..events import StatusChangedEvent
 
 
 @dataclass(slots=True)
@@ -18,12 +18,12 @@ class Device:
     name: Optional[str] = None
     description: Optional[str] = None
 
-    # Internal list of state-change events
+    # Internal list of state-change events (Aggregate Event Sourcing Lite)
     _events: List[StatusChangedEvent] = field(default_factory=list, init=False, repr=False)
 
     @classmethod
     def create(cls, code: str, raw_status: str | None = None, name: str | None = None, last_update: datetime | None = None) -> Device:
-        """Factory method to reconstruct or create a Device entity."""
+        """Factory method to reconstitute a Device aggregate."""
         return cls(equipment_code=EquipmentCode(code), current_status=Status.from_raw(raw_status), name=name, last_update=last_update)
 
     @property
@@ -47,7 +47,7 @@ class Device:
         ts = update_time or datetime.now()
 
         event = StatusChangedEvent(
-            equipment_code=self.equipment_code.value, previous_status=self.current_status, new_status=new_status, occurred_at=ts
+            occurred_at=ts, equipment_code=self.equipment_code.value, previous_status=self.current_status, new_status=new_status
         )
         self._events.append(event)
 

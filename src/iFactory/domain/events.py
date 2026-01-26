@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..value_objects.status import Status
+    from .value_objects.status import Status
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +20,7 @@ class DomainEvent:
 
 @dataclass(frozen=True, slots=True)
 class StatusChangedEvent(DomainEvent):
-    """Event emitted when a device successfully transitions to a new status."""
+    """Event emitted when a device successfully transitions to a new business status."""
 
     equipment_code: str
     previous_status: Status

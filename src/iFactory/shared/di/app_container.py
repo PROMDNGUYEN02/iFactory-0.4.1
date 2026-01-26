@@ -1,4 +1,3 @@
-# File: src/iFactory/shared/di/app_container.py
 """
 Main Application DI Container.
 
@@ -9,7 +8,7 @@ This is the ONLY place where all layers know about each other.
 from __future__ import annotations
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, Callable
+from typing import TYPE_CHECKING, Any, Dict, Optional
 from types import TracebackType
 
 if TYPE_CHECKING:
@@ -56,7 +55,6 @@ class DeviceServiceAdapter:
         return await self._get_all_uc.execute(equipment_codes)
 
     async def get_gantt_segments(self, equipment_code, start_time=None, end_time=None, fill_gaps=True):
-        # Adapter signature matches the old service, maps to Use Case
         from datetime import datetime
 
         if end_time is None:
@@ -76,7 +74,6 @@ class DeviceServiceAdapter:
         end_time = datetime.now()
         start_time = end_time - timedelta(days=days)
         segments = await self.get_gantt_segments(equipment_code, start_time, end_time, fill_gaps)
-        # Return dict format expected by old controller
         return {"segments": segments, "start": start_time, "end": end_time}
 
     @property
@@ -90,12 +87,12 @@ class DeviceServiceAdapter:
 class SimpleUnitOfWork:
     """
     Minimal UnitOfWork implementation to satisfy Use Cases.
-    Updated to support both device and status repositories.
+    Updated to support the consolidated domain repositories.
     """
 
-    def __init__(self, device_repo, status_repo):
+    def __init__(self, device_repo, production_repo):
         self.devices = device_repo
-        self.statuses = status_repo  # <--- THÊM DÒNG NÀY
+        self.production = production_repo
 
     async def __aenter__(self):
         return self
@@ -129,7 +126,9 @@ class AppContainer:
         "_sync_service",
         "_remote_data_source",
         "_cache_provider",
-        "_device_service_adapter",  # Changed from _device_data_service
+        "_device_service_adapter",
+        "_summary_provider",
+        "_right_menu_provider",
         "_ui_container",
         "_signal_adapter",
         "_initialized",
@@ -153,6 +152,8 @@ class AppContainer:
         self._remote_data_source: Optional[MssqlDataSource] = None
         self._cache_provider = None
         self._device_service_adapter: Optional[DeviceServiceAdapter] = None
+        self._summary_provider = None
+        self._right_menu_provider = None
         self._ui_container: Optional[UIContainer] = None
         self._signal_adapter: Optional[QtSignalAdapter] = None
         self._initialized = False
@@ -181,15 +182,12 @@ class AppContainer:
 
     async def _init_infrastructure(self) -> None:
         """Initialize infrastructure layer."""
-        from iFactory.infrastructure.database.models import LatestStatus, SyncMeta
-        from iFactory.infrastructure.database.models import StatusHistory
         from iFactory.infrastructure.database.orchestrator import DatabaseOrchestrator
 
         remote_params = self._build_remote_params()
         self._db_orchestrator = DatabaseOrchestrator(base_dir=self._base_dir, remote=remote_params, config=self._db_config)
         await self._db_orchestrator.initialize()
 
-        # FIXED: Use correct class name InMemoryCacheProvider
         try:
             from iFactory.infrastructure.cache import InMemoryCacheProvider
 
@@ -236,12 +234,11 @@ class AppContainer:
             return
         try:
             from iFactory.infrastructure.persistence.services import SyncOrchestrator, SyncService
-            from iFactory.infrastructure.persistence.repositories import SqliteDeviceRepository, SqliteStatusRepository
+            from iFactory.infrastructure.persistence.repositories import SqliteDeviceRepository, SqliteProductionRepository
 
-            # Khởi tạo repositories và UOW cho SyncService
             device_repo = SqliteDeviceRepository(self._db_orchestrator.hot)
-            status_repo = SqliteStatusRepository(self._db_orchestrator.hot, self._db_orchestrator.cold)
-            uow = SimpleUnitOfWork(device_repo, status_repo)
+            production_repo = SqliteProductionRepository(self._db_orchestrator.hot, self._db_orchestrator.cold)
+            uow = SimpleUnitOfWork(device_repo, production_repo)
 
             self._sync_service = SyncService(
                 db=uow,
@@ -276,11 +273,11 @@ class AppContainer:
         from iFactory.application.use_cases.sync.sync_all_devices_use_case import (
             SyncAllDevicesUseCase,
         )
+        from iFactory.application.services.summary_provider import SummaryDataProvider
+        from iFactory.application.services.right_menu_provider import RightMenuDataProvider
         from iFactory.infrastructure.persistence.repositories import (
             SqliteDeviceRepository,
-            SqliteInputRepository,
-            SqliteStatusRepository,
-            SqliteSyncMetadataRepository,
+            SqliteProductionRepository,
         )
 
         hot = self._db_orchestrator.hot
@@ -288,20 +285,22 @@ class AppContainer:
 
         # Repositories
         device_repo = SqliteDeviceRepository(hot)
-        status_repo = SqliteStatusRepository(hot, cold)
-        input_repo = SqliteInputRepository(hot, cold)
-        sync_meta_repo = SqliteSyncMetadataRepository(hot)
+        production_repo = SqliteProductionRepository(hot, cold)
 
         # Use Cases
         sync_uc = SyncAllDevicesUseCase(self._remote_data_source, device_repo) if self._remote_data_source else None
 
-        get_latest_uc = GetLatestDeviceStatusUseCase(SimpleUnitOfWork(device_repo, status_repo), self._cache_provider)
+        get_latest_uc = GetLatestDeviceStatusUseCase(SimpleUnitOfWork(device_repo, production_repo), self._cache_provider)
 
-        get_all_uc = GetAllDevicesStatusUseCase(SimpleUnitOfWork(device_repo, status_repo), self._cache_provider)
+        get_all_uc = GetAllDevicesStatusUseCase(SimpleUnitOfWork(device_repo, production_repo), self._cache_provider)
 
         gantt_uc = GenerateProductionTimelineUseCase(
-            unit_of_work_factory=lambda: SimpleUnitOfWork(device_repo, status_repo), cache_provider=self._cache_provider
+            unit_of_work_factory=lambda: SimpleUnitOfWork(device_repo, production_repo), cache_provider=self._cache_provider
         )
+
+        # Application Services
+        self._summary_provider = SummaryDataProvider(production_repo)
+        self._right_menu_provider = RightMenuDataProvider(production_repo)
 
         # Wrap Use Cases in Adapter for UI compatibility
         self._device_service_adapter = DeviceServiceAdapter(sync_uc, get_latest_uc, get_all_uc, gantt_uc)
@@ -313,7 +312,7 @@ class AppContainer:
 
         self._signal_adapter = QtSignalAdapter()
         self._ui_container = UIContainer(
-            device_service=self._device_service_adapter,  # Pass the adapter
+            device_service=self._device_service_adapter,
             signal_adapter=self._signal_adapter,
             settings=self._settings,
         )
@@ -332,6 +331,12 @@ class AppContainer:
 
     def get_remote_data_source(self) -> Optional[MssqlDataSource]:
         return self._remote_data_source
+
+    def get_summary_provider(self) -> Optional[SummaryDataProvider]:
+        return self._summary_provider
+
+    def get_right_menu_provider(self) -> Optional[RightMenuDataProvider]:
+        return self._right_menu_provider
 
     @property
     def hot_engine(self):

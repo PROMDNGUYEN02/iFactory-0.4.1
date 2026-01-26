@@ -6,7 +6,7 @@ from ..exceptions import InvalidEquipmentCodeError
 
 @dataclass(frozen=True, slots=True)
 class EquipmentCode:
-    """Identity Value Object for Factory Equipment."""
+    """Identity Value Object for Factory Equipment. Enforces naming conventions."""
 
     value: str
     _PATTERN = re.compile(r"^[A-Z]{2,4}[0-9]*$")

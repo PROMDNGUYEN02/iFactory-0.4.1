@@ -12,8 +12,8 @@ from ..exceptions import StatusMergeError
 @dataclass(frozen=True, slots=True)
 class StatusPeriod:
     """
-    Represents a continuous period where a specific device was in a specific state.
-    Consolidates previously duplicated 'DeviceHistory' and 'StatusPeriod' concepts.
+    A continuous period where a specific device was in a specific state.
+    Used for machine history and production reporting.
     """
 
     equipment_code: EquipmentCode
@@ -29,6 +29,7 @@ class StatusPeriod:
         return self.time_range.duration_seconds
 
     def is_mergeable_with(self, other: StatusPeriod) -> bool:
+        """Business rule: Two periods can merge if they are the same device, same state, and touch in time."""
         if self.equipment_code != other.equipment_code:
             return False
         if self.status != other.status:

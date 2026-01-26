@@ -7,6 +7,8 @@ from ..exceptions import InvalidTimeRangeError
 
 @dataclass(frozen=True, slots=True)
 class TimeRange:
+    """Immutable value object representing a contiguous block of time."""
+
     start: datetime
     end: datetime
 

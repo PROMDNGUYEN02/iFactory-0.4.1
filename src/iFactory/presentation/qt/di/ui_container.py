@@ -3,10 +3,8 @@
 from __future__ import annotations
 import asyncio
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 from PySide6.QtCore import QObject, Signal, QTimer
-from PySide6.QtWidgets import QApplication
 from iFactory.presentation.adapters import QtSignalAdapter, AsyncExecutor
 from iFactory.shared.utils.profiler import (
     profile_block,
@@ -132,7 +130,6 @@ class UIContainer(QObject):
     async def initialize_async(self) -> None:
         """
         Initialize async components - FAST.
-
         Only does minimal setup. Heavy data loading is deferred.
         """
         startup_profiler.checkpoint("UIContainer.initialize_async start")
@@ -143,11 +140,7 @@ class UIContainer(QObject):
         logger.info("[UIContainer] Async init complete (data loading deferred)")
 
     def schedule_deferred_data_load(self) -> None:
-        """
-        Schedule data loading to run after window is visible.
-
-        Call this AFTER window.show() has been called.
-        """
+        """Schedule data loading to run after window is visible."""
         if self._data_loaded or self._deferred_task is not None:
             logger.debug("[UIContainer] Deferred load already scheduled/complete")
             return
@@ -164,11 +157,7 @@ class UIContainer(QObject):
             self._async_executor.run_async(self._load_data_deferred())
 
     async def _load_data_deferred(self) -> None:
-        """
-        Load data in background after window is visible.
-
-        This is heavy operation that was blocking startup.
-        """
+        """Load data in background after window is visible."""
         if self._data_loaded:
             return
         logger.info("[UIContainer] Starting deferred data load...")
@@ -259,7 +248,6 @@ class UIContainer(QObject):
                 logger.warning(f"TimelineSegmentFactory failed: {e}")
         with profile_block("StatusLegendProvider creation"):
             try:
-                # FIXED: Corrected import path to existing module
                 from iFactory.presentation.managers.widgets.legend.manager import (
                     StatusLegendProvider,
                 )
@@ -398,9 +386,6 @@ class UIContainer(QObject):
 
     def _create_device_widgets(self) -> None:
         """Create device widgets."""
-        # FIXED: If the DeviceLayoutManager is already set, it handles widget creation
-        # internally via register_frame during initialization. This prevents the redundant
-        # and failing attempt to import a non-existent DeviceWidgetFactory.
         if self._device_layout_mgr:
             logger.debug("  Device widgets handled by DeviceLayoutManager, skipping redundant creation.")
             return
@@ -410,7 +395,7 @@ class UIContainer(QObject):
         logger.debug("  Creating device widgets...")
         try:
             with profile_block("Import device widget factory"):
-                from iFactory.ui.widgets.device_canvas import (
+                from iFactory.presentation.managers.widgets.device_canvas import (
                     DeviceWidgetFactory as WidgetFactory,
                 )
             with profile_block("Load device config"):

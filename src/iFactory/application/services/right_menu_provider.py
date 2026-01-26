@@ -3,13 +3,12 @@ Data providers for Right Menu UI components.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 from iFactory.domain.value_objects.time_range import TimeRange
-from iFactory.domain.repositories import StatusRepository, InputRepository
-from iFactory.domain.value_objects.equipment_code import EquipmentCode
+from iFactory.domain.repositories import ProductionRepository
 from ...shared.utils.formatters import format_datetime, format_duration, safe_str
 
 __all__ = ["RightMenuDataProvider", "StatusSummaryRow"]
@@ -41,23 +40,20 @@ class StatusSummaryRow:
 class RightMenuDataProvider:
     """
     Provides data for right slide menu.
-
-    Refactored to inject Repository Interfaces, ensuring clean architecture.
+    Refactored to inject the unified ProductionRepository Interface.
     """
 
     STATUS_HEADERS = ["Device", "Status", "Start Time", "End Time", "Duration"]
     INPUT_HEADERS = ["Device", "Material Batch", "Feed Time"]
 
     __slots__ = (
-        "_status_repo",
-        "_input_repo",
+        "_production_repo",
         "_cache",
         "_cache_ttl",
     )
 
-    def __init__(self, status_repository: StatusRepository, input_repository: InputRepository, cache_ttl: int = 30):
-        self._status_repo = status_repository
-        self._input_repo = input_repository
+    def __init__(self, production_repository: ProductionRepository, cache_ttl: int = 30):
+        self._production_repo = production_repository
         # Type fix: cache stores tuple of (datetime, dict)
         self._cache: Dict[str, Tuple[datetime, Dict]] = {}
         self._cache_ttl = cache_ttl
@@ -75,15 +71,15 @@ class RightMenuDataProvider:
 
         try:
             time_range = TimeRange.last_days(days)
-            # Call Domain Repository (Interface)
-            records = await self._status_repo.get_history(device_code, time_range)
+            # Call Domain Repository
+            records = await self._production_repo.get_status_history(device_code, time_range)
 
             rows = [
                 [
-                    safe_str(period.code),
-                    safe_str(period.status.display),
-                    format_datetime(period.start_time),
-                    format_datetime(period.end_time),
+                    safe_str(period.equipment_code.value),
+                    safe_str(period.status.name),
+                    format_datetime(period.time_range.start),
+                    format_datetime(period.time_range.end),
                     format_duration(period.duration_seconds),
                 ]
                 for period in records[:limit]
@@ -116,12 +112,12 @@ class RightMenuDataProvider:
 
         try:
             time_range = TimeRange.last_days(days)
-            # Call Domain Repository (Interface)
-            records = await self._input_repo.get_history(device_code, time_range)
+            # Call Domain Repository
+            records = await self._production_repo.get_input_history(device_code, time_range)
 
             rows = [
                 [
-                    safe_str(inp.equip_code),
+                    safe_str(inp.equipment_code.value),
                     safe_str(inp.material_batch),
                     format_datetime(inp.feeding_time),
                 ]

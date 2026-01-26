@@ -4,7 +4,7 @@ from typing import Any
 
 
 class DomainError(Exception):
-    """Base exception for all domain-level errors."""
+    """Base exception for all domain-level business rule violations."""
 
     __slots__ = ("message", "details", "code")
 
@@ -15,13 +15,9 @@ class DomainError(Exception):
         super().__init__(self.message)
 
 
-class DeviceError(DomainError):
-    pass
-
-
 class InvalidEquipmentCodeError(DomainError):
     def __init__(self, code: str, reason: str = "") -> None:
-        super().__init__(f"Invalid equipment code: {code} - {reason}", details={"code": code, "reason": reason})
+        super().__init__(f"Invalid equipment code: '{code}' - {reason}", details={"code": code, "reason": reason})
 
     @classmethod
     def empty(cls) -> InvalidEquipmentCodeError:
@@ -49,18 +45,12 @@ class InvalidTimeRangeError(DomainError):
 class StatusMergeError(DomainError):
     @classmethod
     def different_devices(cls, code1: str, code2: str) -> StatusMergeError:
-        return cls(f"Cannot merge statuses for different devices: {code1} and {code2}.")
+        return cls(f"Cannot merge status periods for different devices: {code1} and {code2}.")
 
     @classmethod
     def different_statuses(cls, status1: str, status2: str) -> StatusMergeError:
-        return cls(f"Cannot merge different statuses: {status1} and {status2}.")
+        return cls(f"Cannot merge contiguous periods of different statuses: {status1} and {status2}.")
 
     @classmethod
     def non_adjacent(cls) -> StatusMergeError:
-        return cls("Cannot merge non-adjacent or non-overlapping time ranges.")
-
-
-class ValidationError(DomainError):
-    @classmethod
-    def required_field(cls, field: str) -> ValidationError:
-        return cls(f"Field is required: {field}", details={"field": field})
+        return cls("Cannot merge time ranges that are not adjacent or overlapping.")

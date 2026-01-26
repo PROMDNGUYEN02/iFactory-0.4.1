@@ -1,3 +1,4 @@
-from .value_objects.time_range import TimeRange
-
-__all__ = ["TimeRange"]
+"""
+iFactory Core Domain.
+This module contains pure business logic and has NO dependencies on infrastructure or UI.
+"""

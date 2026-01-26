@@ -8,7 +8,7 @@ from typing import Optional
 
 from iFactory.application.config.constants import CacheDefaults, CacheKeys
 from iFactory.application.dtos import GanttSegmentDTO
-from iFactory.application.interfaces import ICacheProvider, IUnitOfWork
+from iFactory.application.interfaces import ICacheProvider
 from iFactory.application.mappers.status_period_mapper import StatusPeriodMapper
 from iFactory.domain.value_objects import EquipmentCode, TimeRange
 
@@ -57,7 +57,8 @@ class GenerateProductionTimelineUseCase:
 
         async with self._uow_factory() as uow:
             try:
-                history_entities = await uow.statuses.get_history(code_vo, range_vo)
+                # Updated to use the new ProductionRepository via UOW
+                history_entities = await uow.production.get_status_history(code_vo, range_vo)
                 segments = [mapper.to_dto(entity, theme="light") for entity in history_entities]
             except Exception as e:
                 logger.error(f"[GanttUseCase] Failed to fetch history: {e}")
