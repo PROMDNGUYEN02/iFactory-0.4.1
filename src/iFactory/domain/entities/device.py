@@ -6,11 +6,15 @@ from typing import List, Optional
 from ..value_objects.equipment_code import EquipmentCode
 from ..value_objects.status import Status
 from ..events import StatusChangedEvent
+from ..policies.status_transition_policy import StatusTransitionPolicy
 
 
 @dataclass(slots=True)
 class Device:
-    """Aggregate Root representing a manufacturing device."""
+    """
+    Aggregate Root representing a manufacturing device.
+    Responsible for maintaining business invariants regarding device state.
+    """
 
     equipment_code: EquipmentCode
     current_status: Status = field(default_factory=Status.unknown)
@@ -18,13 +22,12 @@ class Device:
     name: Optional[str] = None
     description: Optional[str] = None
 
-    # Internal list of state-change events (Aggregate Event Sourcing Lite)
     _events: List[StatusChangedEvent] = field(default_factory=list, init=False, repr=False)
 
     @classmethod
-    def create(cls, code: str, raw_status: str | None = None, name: str | None = None, last_update: datetime | None = None) -> Device:
+    def create(cls, code: str, raw_status: Optional[str] = None, name: Optional[str] = None) -> Device:
         """Factory method to reconstitute a Device aggregate."""
-        return cls(equipment_code=EquipmentCode(code), current_status=Status.from_raw(raw_status), name=name, last_update=last_update)
+        return cls(equipment_code=EquipmentCode(code), current_status=Status.from_raw(raw_status), name=name, last_update=datetime.now())
 
     @property
     def code(self) -> str:
@@ -34,15 +37,18 @@ class Device:
     def is_operational(self) -> bool:
         return self.current_status.is_running
 
-    def update_status(self, raw_status: str, update_time: datetime | None = None) -> bool:
+    def update_status(self, raw_status: str, update_time: Optional[datetime] = None) -> bool:
         """
-        Business policy: Update the device status.
-        Ignores idempotent updates. Generates Domain Events.
+        Business policy: Updates the device status.
+        Ignores idempotent updates. Validates transitions. Generates Domain Events.
         """
         new_status = Status.from_raw(raw_status)
 
         if self.current_status == new_status:
             return False
+
+        # Apply business transition rules
+        StatusTransitionPolicy.validate(self.current_status, new_status)
 
         ts = update_time or datetime.now()
 

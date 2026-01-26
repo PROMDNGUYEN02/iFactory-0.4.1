@@ -1,4 +1,5 @@
 """
-iFactory Core Domain.
-This module contains pure business logic and has NO dependencies on infrastructure or UI.
+iFactory Domain Core.
+This module contains the pure business logic of the application.
+It has zero dependencies on external frameworks, databases, or UI components.
 """
