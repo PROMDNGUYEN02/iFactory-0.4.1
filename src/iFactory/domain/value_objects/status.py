@@ -5,11 +5,13 @@ from ..enums.device_status import DeviceStatus
 
 @dataclass(frozen=True, slots=True)
 class Status:
+    """Value object wrapping the DeviceStatus with business queries."""
+
     device_status: DeviceStatus
 
     @classmethod
-    def from_code(cls, code: str | None) -> Status:
-        return cls(DeviceStatus.from_code(code))
+    def from_raw(cls, value: str | None) -> Status:
+        return cls(DeviceStatus.from_string(value))
 
     @classmethod
     def unknown(cls) -> Status:
@@ -30,6 +32,10 @@ class Status:
     @property
     def requires_attention(self) -> bool:
         return self.device_status in (DeviceStatus.ALARM, DeviceStatus.STOP)
+
+    @property
+    def implies_downtime(self) -> bool:
+        return self.device_status.implies_downtime
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Status):

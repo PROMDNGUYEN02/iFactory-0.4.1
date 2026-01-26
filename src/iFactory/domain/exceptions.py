@@ -4,9 +4,11 @@ from typing import Any
 
 
 class DomainError(Exception):
+    """Base exception for all domain-level errors."""
+
     __slots__ = ("message", "details", "code")
 
-    def __init__(self, message: str = "A domain error occurred", details: dict[str, Any] | None = None, code: str | None = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None, code: str | None = None) -> None:
         self.message = message
         self.details = details or {}
         self.code = code or self.__class__.__name__
@@ -17,30 +19,17 @@ class DeviceError(DomainError):
     pass
 
 
-class DeviceNotFoundError(DeviceError):
-    def __init__(self, device_id: str) -> None:
-        super().__init__(f"Device not found: {device_id}", details={"device_id": device_id})
-
-
-class InvalidStatusError(DeviceError):
-    def __init__(self, status: Any, device_id: str | None = None) -> None:
-        details: dict[str, Any] = {"status": str(status)}
-        if device_id:
-            details["device_id"] = device_id
-        super().__init__(f"Invalid status: {status}", details=details)
-
-
 class InvalidEquipmentCodeError(DomainError):
     def __init__(self, code: str, reason: str = "") -> None:
         super().__init__(f"Invalid equipment code: {code} - {reason}", details={"code": code, "reason": reason})
 
     @classmethod
     def empty(cls) -> InvalidEquipmentCodeError:
-        return cls("", "Equipment code cannot be empty")
+        return cls("", "Equipment code cannot be empty.")
 
     @classmethod
     def invalid_format(cls, code: str) -> InvalidEquipmentCodeError:
-        return cls(code, "Expected 2-4 uppercase letters optionally followed by alphanumerics")
+        return cls(code, "Expected 2-4 uppercase letters optionally followed by numbers.")
 
 
 class InvalidTimeRangeError(DomainError):
@@ -54,18 +43,24 @@ class InvalidTimeRangeError(DomainError):
 
     @classmethod
     def end_before_start(cls, start: datetime, end: datetime) -> InvalidTimeRangeError:
-        return cls(f"Start time ({start}) cannot be after end time ({end})", start=start, end=end)
+        return cls(f"Start time ({start}) cannot be after end time ({end}).", start=start, end=end)
 
 
 class StatusMergeError(DomainError):
-    pass
+    @classmethod
+    def different_devices(cls, code1: str, code2: str) -> StatusMergeError:
+        return cls(f"Cannot merge statuses for different devices: {code1} and {code2}.")
+
+    @classmethod
+    def different_statuses(cls, status1: str, status2: str) -> StatusMergeError:
+        return cls(f"Cannot merge different statuses: {status1} and {status2}.")
+
+    @classmethod
+    def non_adjacent(cls) -> StatusMergeError:
+        return cls("Cannot merge non-adjacent or non-overlapping time ranges.")
 
 
 class ValidationError(DomainError):
     @classmethod
     def required_field(cls, field: str) -> ValidationError:
         return cls(f"Field is required: {field}", details={"field": field})
-
-
-class RepositoryError(DomainError):
-    pass

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 from ..exceptions import InvalidTimeRangeError
 
@@ -31,5 +31,8 @@ class TimeRange:
 
     def union(self, other: TimeRange) -> TimeRange:
         if not self.overlaps(other) and not self.is_adjacent_to(other):
-            raise InvalidTimeRangeError("Cannot union non-contiguous ranges")
+            raise InvalidTimeRangeError("Cannot union non-contiguous ranges.")
         return TimeRange(start=min(self.start, other.start), end=max(self.end, other.end))
+
+    def __lt__(self, other: TimeRange) -> bool:
+        return self.start < other.start

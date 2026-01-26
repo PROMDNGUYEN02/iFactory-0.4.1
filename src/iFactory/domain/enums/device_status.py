@@ -2,15 +2,6 @@ from __future__ import annotations
 from enum import Enum, unique
 
 
-class StatusCode:
-    UNKNOWN = "0"
-    RUNNING = "1"
-    SHUTDOWN = "2"
-    STOP = "3"
-    MAINTENANCE = "4"
-    ALARM = "5"
-
-
 @unique
 class DeviceStatus(Enum):
     UNKNOWN = ("unknown", "0")
@@ -33,32 +24,13 @@ class DeviceStatus(Enum):
         return self._code
 
     @property
-    def severity(self) -> int:
-        severity_map = {
-            DeviceStatus.UNKNOWN: -1,
-            DeviceStatus.RUNNING: 0,
-            DeviceStatus.SHUTDOWN: 1,
-            DeviceStatus.MAINTENANCE: 1,
-            DeviceStatus.STOP: 2,
-            DeviceStatus.ALARM: 3,
-        }
-        return severity_map.get(self, -1)
-
-    @property
-    def category(self) -> str:
-        if self == DeviceStatus.RUNNING:
-            return "running"
-        if self == DeviceStatus.STOP:
-            return "stopped"
-        if self == DeviceStatus.ALARM:
-            return "alarm"
-        if self in (DeviceStatus.SHUTDOWN, DeviceStatus.MAINTENANCE):
-            return "inactive"
-        return "unknown"
+    def implies_downtime(self) -> bool:
+        """Business rule: Determine if status constitutes machine downtime."""
+        return self in (DeviceStatus.SHUTDOWN, DeviceStatus.MAINTENANCE, DeviceStatus.STOP, DeviceStatus.ALARM)
 
     @classmethod
     def from_code(cls, code: str | None) -> DeviceStatus:
-        if code is None:
+        if not code:
             return cls.UNKNOWN
         clean_code = str(code).strip()
         for status in cls:
@@ -67,11 +39,31 @@ class DeviceStatus(Enum):
         return cls.UNKNOWN
 
     @classmethod
-    def from_code_or_name(cls, value: str | None) -> DeviceStatus:
-        if value is None:
+    def from_string(cls, value: str | None) -> DeviceStatus:
+        """
+        Domain factory logic to convert business vernacular into canonical states.
+        Replaces external 'StatusNormalizationService'.
+        """
+        if not value:
             return cls.UNKNOWN
+
         clean = str(value).strip().lower()
+
+        # Direct match
         for status in cls:
             if status.code == clean or status.internal_name == clean:
                 return status
-        return cls.UNKNOWN
+
+        # Business vernacular aliases
+        aliases = {
+            "run": cls.RUNNING,
+            "active": cls.RUNNING,
+            "on": cls.RUNNING,
+            "off": cls.SHUTDOWN,
+            "idle": cls.STOP,
+            "stopped": cls.STOP,
+            "fault": cls.ALARM,
+            "error": cls.ALARM,
+            "pm": cls.MAINTENANCE,
+        }
+        return aliases.get(clean, cls.UNKNOWN)
