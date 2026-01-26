@@ -47,11 +47,11 @@ from iFactory.presentation.managers.widgets.constants import (
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QListWidgetItem
     from iFactory.presentation.managers import IconManager, ThemeManager
-    from iFactory.infrastructure.configuration.file_config_loader import (
+    from iFactory.infrastructure.config.json_file_loader import (
         DeviceLayoutManager,
     )
     from iFactory.infrastructure.factories.timeline_segment_factory import GanttManager
-    from iFactory.infrastructure.configuration.legend.manager import LegendManager
+    from iFactory.infrastructure.config.legend.manager import LegendManager
 logger = logging.getLogger(__name__)
 TooltipProvider = Callable[[str], Dict[str, Any]]
 ContextMenuProvider = Callable[[str, str, QPoint], None]

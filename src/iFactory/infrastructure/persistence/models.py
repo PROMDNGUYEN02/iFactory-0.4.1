@@ -1,3 +1,8 @@
+"""
+SQLAlchemy ORM Models.
+Pure database representation. No business logic.
+"""
+
 from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -5,8 +10,6 @@ Base = declarative_base()
 
 
 class DeviceORM(Base):
-    """Pure ORM representation of the Device table."""
-
     __tablename__ = "devices"
 
     id = Column(String(50), primary_key=True)
@@ -19,8 +22,6 @@ class DeviceORM(Base):
 
 
 class StatusPeriodORM(Base):
-    """Pure ORM representation of the Status Period table."""
-
     __tablename__ = "status_periods"
 
     id = Column(String(50), primary_key=True)

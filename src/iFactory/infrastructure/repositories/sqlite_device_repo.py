@@ -1,3 +1,7 @@
+"""
+Concrete SQLAlchemy implementation of the Domain DeviceRepository.
+"""
+
 from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Sequence
@@ -8,14 +12,13 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from iFactory.domain.entities.device import Device
 from iFactory.domain.repositories.device_repository import DeviceRepository
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
-from iFactory.infrastructure.database.models import DeviceORM
+from iFactory.infrastructure.persistence.models import DeviceORM
 from iFactory.infrastructure.mappers.device_mapper import DeviceMapper
 
 
 class SqliteDeviceRepository(DeviceRepository):
     """
-    SQLAlchemy implementation of the DeviceRepository.
-    Relies entirely on the injected AsyncSession from the Unit of Work.
+    Persists and reconstructs Device aggregates using SQLite/SQLAlchemy.
     """
 
     def __init__(self, session: AsyncSession):
@@ -33,12 +36,19 @@ class SqliteDeviceRepository(DeviceRepository):
         return DeviceMapper.to_entities(result.scalars().all())
 
     async def save(self, device: Device) -> None:
+        """
+        Upsert operation. Ensures idempotency.
+        """
+        orm_model = DeviceMapper.to_model(device)
+
         values = {
-            "id": device.code,
-            "equip_code": device.code,
-            "equip_status": device.current_status.value,
-            "last_update": device.last_update or datetime.now(),
+            "id": orm_model.id,
+            "equip_code": orm_model.equip_code,
+            "equip_status": orm_model.equip_status,
+            "last_update": orm_model.last_update,
+            "is_active": orm_model.is_active,
         }
+
         stmt = sqlite_insert(DeviceORM).values(**values)
         stmt = stmt.on_conflict_do_update(
             index_elements=["equip_code"], set_={"equip_status": stmt.excluded.equip_status, "last_update": stmt.excluded.last_update}

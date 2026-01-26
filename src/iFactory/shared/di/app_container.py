@@ -10,11 +10,11 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-# --- Infrastructure Layer Imports ---
-from iFactory.infrastructure.database.engine import AsyncDatabaseEngine
+# --- Infrastructure Layer Imports (UPDATED PATHS) ---
+from iFactory.infrastructure.persistence.database_engine import AsyncDatabaseEngine
 from iFactory.infrastructure.persistence.uow import SqliteUnitOfWork
-from iFactory.infrastructure.remote.mssql_data_source import MssqlDataSource
-from iFactory.infrastructure.sync.sync_orchestrator import SyncOrchestrator
+from iFactory.infrastructure.data_sources.mssql_data_source import MssqlDataSource
+from iFactory.infrastructure.scheduling.sync_orchestrator import SyncOrchestrator
 
 # --- Application Layer Imports ---
 from iFactory.application.use_cases.device.get_latest_status import GetLatestDeviceStatusUseCase
@@ -159,11 +159,11 @@ class AppContainer:
         # 2. Persistence Layer (Unit of Work)
         self._uow = SqliteUnitOfWork(self._db_engine.get_session_factory())
 
-        # 3. Cache
+        # 3. Cache (UPDATED TO LRU CACHE)
         try:
-            from iFactory.infrastructure.cache.cache_provider import InMemoryCacheProvider
+            from iFactory.infrastructure.cache.lru_cache import LRUCacheStorage
 
-            self._cache_provider = InMemoryCacheProvider(max_size=500)
+            self._cache_provider = LRUCacheStorage(max_size=500)
         except Exception as e:
             logger.warning(f"Cache init failed: {e}")
 
@@ -186,11 +186,10 @@ class AppContainer:
         """
         Initialize Application layer, injecting the Infrastructure (UoW, Remote Source) into Use Cases.
         """
-        # FIX: The Device Use Cases expect 'cache' as the keyword argument, not 'cache_provider'
+        # Inject UoW and Cache into Use Cases
         get_latest_uc = GetLatestDeviceStatusUseCase(uow=self._uow, cache=self._cache_provider)
         get_all_uc = GetAllDevicesStatusUseCase(uow=self._uow, cache=self._cache_provider)
 
-        # FIX: The Production/Gantt Use Case expects 'unit_of_work_factory' and 'cache_provider'
         gantt_uc = GenerateProductionTimelineUseCase(unit_of_work_factory=lambda: self._uow, cache_provider=self._cache_provider)
 
         sync_uc = SyncAllDevicesUseCase(remote_source=self._remote_data_source, uow=self._uow) if self._remote_data_source else None
@@ -240,7 +239,7 @@ class AppContainer:
             self._ui_container.cleanup()
 
         if self._cache_provider and hasattr(self._cache_provider, "clear"):
-            self._cache_provider.clear()
+            await self._cache_provider.clear()
 
         if self._remote_data_source:
             await self._remote_data_source.dispose()

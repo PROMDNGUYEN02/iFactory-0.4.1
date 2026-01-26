@@ -1,8 +1,11 @@
+"""
+MSSQL Data Source Adapter.
+Fetches raw data. Does not interpret business meaning of data.
+"""
+
 from __future__ import annotations
-import asyncio
 import logging
-from datetime import datetime
-from typing import Optional, Sequence, Dict, Any
+from typing import Sequence, Dict, Any
 from sqlalchemy import text, bindparam
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -14,8 +17,7 @@ logger = logging.getLogger(__name__)
 class MssqlDataSource(IRemoteDataSource):
     """
     MSSQL implementation of IRemoteDataSource.
-    Strictly translates legacy data into raw application dictionaries.
-    NO UI or Domain logic included.
+    Returns RAW data. Mapping to Domain happens in the Application Layer.
     """
 
     SQL_LATEST_STATUS = """
@@ -38,25 +40,11 @@ class MssqlDataSource(IRemoteDataSource):
         WHERE rn = 1
     """
 
-    _STATUS_MAPPING = {
-        "0": "unknown",
-        "1": "running",
-        "2": "shutdown",
-        "3": "stopped",
-        "4": "maintenance",
-        "5": "alarm",
-    }
-
     def __init__(self, connection_string: str):
         self._engine = create_async_engine(connection_string, echo=False)
 
-    def _map_db_status(self, raw_status: Any) -> str:
-        if raw_status is None:
-            return "unknown"
-        return self._STATUS_MAPPING.get(str(raw_status).strip(), "unknown")
-
     async def fetch_latest_status(self, codes: Sequence[str]) -> Sequence[Dict[str, Any]]:
-        """Fetch latest status for given devices."""
+        """Fetch latest raw status rows for given devices."""
         if not codes:
             return []
 
@@ -66,16 +54,15 @@ class MssqlDataSource(IRemoteDataSource):
             result = await conn.execute(stmt, {"codes": list(codes)})
             rows = result.fetchall()
 
-        now = datetime.now()
         records = []
         for row in rows:
+            # NO BUSINESS LOGIC. Straight mapping from tuple to dict.
             records.append(
                 {
                     "equip_code": str(row[0]) if row[0] else "",
-                    "equip_status": self._map_db_status(row[1]),
+                    "raw_status": str(row[1]) if row[1] is not None else "",
                     "start_time": row[2],
                     "end_time": row[3],
-                    "last_update": row[2] if row[3] is None else row[3] or now,
                 }
             )
 
@@ -96,8 +83,12 @@ class MssqlDataSource(IRemoteDataSource):
         return await self.fetch_latest_status(actual_codes)
 
     async def fetch_device_status(self, equip_code: str) -> Dict[str, Any]:
+        """
+        Fetches the status for a single device.
+        Satisfies the IRemoteDataSource interface.
+        """
         results = await self.fetch_latest_status([equip_code])
-        return results[0] if results else {"equip_code": equip_code, "equip_status": "unknown"}
+        return results[0] if results else {"equip_code": equip_code, "raw_status": "unknown"}
 
     async def dispose(self) -> None:
         await self._engine.dispose()
