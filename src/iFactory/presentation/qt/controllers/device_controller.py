@@ -16,26 +16,19 @@ class DeviceController(QObject):
         self._async_executor = async_executor
         self._sync_service = sync_service
         self._presenter = device_presenter
+        self._view = None
+        self._logger = logging.getLogger(__name__)
 
-    async def refresh_all_devices(self, codes: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def refresh_all_devices(self, codes: list[str] = None):
         try:
-            if self._sync_service:
-                await self._sync_service.sync_status_hot(codes)
-
             statuses = await self._device_service.get_all_latest_status(codes)
+            formatted_data = self._presenter.format_for_update(statuses)
 
-            # Presentation logic isolated to Presenter
-            formatted_data = self._presenter.format_for_update(statuses) if self._presenter else statuses
+            if self._view:
+                self._view.update_devices(formatted_data)
 
-            # Event dispatching
-            if self._signal_adapter:
-                self._signal_adapter.emit_device_statuses(formatted_data)
-
-            return formatted_data if formatted_data else {}
         except Exception as e:
-            logger.error(f"Device synchronization failed: {e}", exc_info=True)
-            # Do not leak exceptions to the UI thread
-            return {}
+            self._logger.error(f"Device synchronization failed: {e}", exc_info=True)
 
     async def load_from_cache(self) -> int:
         if not self._device_service:

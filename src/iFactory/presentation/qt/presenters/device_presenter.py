@@ -62,49 +62,18 @@ class DevicePresenter:
 
     # ====== PUBLIC API FOR UI ======
 
-    def format_for_update(
-        self,
-        statuses: Dict[str, Any],
-    ) -> Dict[str, Dict[str, Any]]:
+    def format_for_update(self, statuses: list) -> dict:
         """
-        Format raw status data for UI update (device refresh).
-
-        This is used by DeviceController.refresh_all_devices() to convert
-        DeviceStatusDTO or dict data into UI-ready format.
-
-        Args:
-            statuses: Dictionary of device statuses (DeviceStatusDTO or dict)
-
-        Returns:
-            Dictionary suitable for Qt widgets and managers
+        Format list of DeviceStatusDTO for UI update.
         """
         result = {}
-        for code, data in statuses.items():
-            if hasattr(data, "to_dict"):
-                data = data.to_dict()
-            elif not isinstance(data, dict):
-                logger.warning(f"[DevicePresenter] Unexpected type for {code}: {type(data)}")
-                continue
-
-            result[code] = {
-                "device_id": data.get("equip_code", code),
-                "display_name": data.get("display_name", code),
-                "status_code": str(data.get("status_code", "0")),
-                "status_display": data.get("status_display", "UNKNOWN"),
-                "status_emoji": data.get("status_emoji", ""),
-                "status_color": data.get("status_color", "#808080"),
-                "status_category": data.get("status_category", "unknown"),
-                "is_running": data.get("is_running", False),
-                "requires_attention": data.get("requires_attention", False),
-                "last_update": data.get("last_update"),
-                # Legacy field names (backward compatibility)
-                "equip_code": data.get("equip_code", code),
-                "equipment_code": data.get("equip_code", code),
-                "name": data.get("display_name", code),
-                "status": str(data.get("status_code", "0")),
-                "color": data.get("status_color", "#808080"),
+        for item in statuses:
+            result[item.equip_code] = {
+                "status": item.equip_status,
+                "is_active": item.is_active,
+                "last_update": item.last_update,
+                "start_time": item.start_time,
             }
-        logger.debug(f"[DevicePresenter] Formatted {len(result)} devices for update")
         return result
 
     def present_device_list(
