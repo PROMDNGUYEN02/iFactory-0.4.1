@@ -1,19 +1,15 @@
-"""
-Database infrastructure module.
-
-Provides:
-    - Base classes for ORM models
-    - Database configuration
-    - SQLite and MSSQL engines
-    - Database orchestrator
-    - ORM models for hot and cold stores
-"""
-
 from .base import BaseModel, HotBase, ColdBase, TimestampMixin
 from .config import DatabaseType, DBConfig, RemoteDBParams, HealthStatus
 from .orchestrator import DatabaseOrchestrator
 from .engines import DatabaseEngine, EngineConfig, AsyncSQLiteEngine, MSSQLEngine
-from .models import LatestStatus, LatestInput, SyncMeta, StatusHistory, InputHistory
+from .models import (
+    DeviceStateModel,
+    DeviceInputModel,
+    SyncMetadataModel,
+    StatusHistoryModel,
+    InputHistoryModel,
+    LatestInput,
+)
 
 __all__ = [
     "BaseModel",
@@ -29,9 +25,10 @@ __all__ = [
     "EngineConfig",
     "AsyncSQLiteEngine",
     "MSSQLEngine",
-    "LatestStatus",
+    "DeviceStateModel",
+    "DeviceInputModel",
+    "SyncMetadataModel",
+    "StatusHistoryModel",
+    "InputHistoryModel",
     "LatestInput",
-    "SyncMeta",
-    "StatusHistory",
-    "InputHistory",
 ]

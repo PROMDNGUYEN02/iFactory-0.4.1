@@ -1,17 +1,15 @@
-"""
-Database ORM models.
+from .hot_models import DeviceStateModel, SyncMetadataModel, DeviceInputModel
+from .cold_models import StatusHistoryModel, InputHistoryModel
 
-Hot Store Models (frequently updated):
-    - LatestStatus: Current device status
-    - LatestInput: Current material input
-    - SyncMeta: Synchronization metadata
+LatestInput = DeviceInputModel
+InputHistory = InputHistoryModel
 
-Cold Store Models (historical):
-    - StatusHistory: Status change history
-    - InputHistory: Material input history
-"""
-
-from .models_hot import LatestStatus, LatestInput, SyncMeta
-from .models_cold import StatusHistory, InputHistory
-
-__all__ = ["LatestStatus", "LatestInput", "SyncMeta", "StatusHistory", "InputHistory"]
+__all__ = [
+    "DeviceStateModel",
+    "SyncMetadataModel",
+    "DeviceInputModel",
+    "StatusHistoryModel",
+    "InputHistoryModel",
+    "LatestInput",
+    "InputHistory",
+]

@@ -1,7 +1,7 @@
 from typing import Optional
 from iFactory.application.interfaces.unit_of_work import IUnitOfWork
 from iFactory.infrastructure.database.engines.sqlite_engine import AsyncSQLiteEngine
-from iFactory.infrastructure.persistence.repositories.device_repository_impl import SqliteDeviceRepository
+from iFactory.infrastructure.persistence.repositories.device_repository import SqliteDeviceRepository
 from iFactory.infrastructure.exceptions import PersistenceError
 
 
@@ -18,7 +18,7 @@ class SqliteUnitOfWork(IUnitOfWork):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if exc_type:
-            await self.rollback()
+            await self._session.rollback()
         if self._session:
             await self._session.close()
 
@@ -27,8 +27,7 @@ class SqliteUnitOfWork(IUnitOfWork):
             if self._session:
                 await self._session.commit()
         except Exception as e:
-            await self.rollback()
-            raise PersistenceError("Database transaction commit failed", e)
+            raise PersistenceError("Database commit failed", e)
 
     async def rollback(self):
         if self._session:

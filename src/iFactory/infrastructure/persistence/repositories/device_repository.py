@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import datetime
 from typing import Optional, Sequence
 from sqlalchemy import select, delete
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -6,7 +7,7 @@ from iFactory.domain.entities.device import Device
 from iFactory.domain.repositories.device_repository import DeviceRepository
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
 from iFactory.infrastructure.database.engines.sqlite_engine import AsyncSQLiteEngine
-from iFactory.infrastructure.database.models import DeviceStateModel
+from iFactory.infrastructure.database.models.hot_models import DeviceStateModel
 from iFactory.infrastructure.persistence.mappers.entity_mapper import EntityMapper
 
 
