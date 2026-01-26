@@ -12,7 +12,7 @@ from iFactory.domain.entities.device import Device
 from iFactory.domain.repositories.device_repository import DeviceRepository
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
 from iFactory.infrastructure.persistence.sqlalchemy.models import DeviceORM
-from iFactory.infrastructure.mappers.orm_mapper import OrmDeviceMapper
+from iFactory.infrastructure.persistence.sqlalchemy.mapper import OrmDeviceMapper
 
 
 class SqlAlchemyDeviceRepository(DeviceRepository):

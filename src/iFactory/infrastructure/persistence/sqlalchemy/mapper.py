@@ -1,6 +1,7 @@
 """
 Infrastructure Mapper for Database ORM.
-Strictly bi-directional mapping between Domain and Persistence.
+Strictly bi-directional static mapping between Domain and Persistence.
+No side effects, no database queries.
 """
 
 from __future__ import annotations
@@ -8,9 +9,9 @@ from datetime import datetime
 from typing import Sequence
 
 from iFactory.domain.entities.device import Device
-from iFactory.infrastructure.persistence.sqlalchemy.models import DeviceORM
 from iFactory.domain.enums.machine_status import MachineStatus
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
+from iFactory.infrastructure.persistence.sqlalchemy.models import DeviceORM
 
 
 class OrmDeviceMapper:

@@ -10,11 +10,11 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-# --- Infrastructure Layer Imports (UPDATED TO NEW REFACTORED PATHS) ---
+# --- Infrastructure Layer Imports ---
 from iFactory.infrastructure.persistence.sqlalchemy.engine import AsyncDatabaseEngine
 from iFactory.infrastructure.persistence.sqlalchemy.uow import SqlAlchemyUnitOfWork
 from iFactory.infrastructure.data_sources.mssql_data_source import MssqlDataSource
-from iFactory.infrastructure.workers.sync_worker import SyncWorker
+from iFactory.infrastructure.scheduling.background_scheduler import BackgroundScheduler
 
 # --- Application Layer Imports ---
 from iFactory.application.use_cases.device.get_latest_status import GetLatestDeviceStatusUseCase
@@ -101,7 +101,7 @@ class AppContainer:
         "_db_engine",
         "_uow",
         "_remote_data_source",
-        "_sync_worker",
+        "_scheduler",
         "_cache_provider",
         "_device_service_adapter",
         "_ui_container",
@@ -118,7 +118,7 @@ class AppContainer:
         self._db_engine: Optional[AsyncDatabaseEngine] = None
         self._uow: Optional[SqlAlchemyUnitOfWork] = None
         self._remote_data_source: Optional[MssqlDataSource] = None
-        self._sync_worker: Optional[SyncWorker] = None
+        self._scheduler: Optional[BackgroundScheduler] = None
         self._cache_provider = None
 
         self._device_service_adapter: Optional[DeviceServiceAdapter] = None
@@ -159,7 +159,7 @@ class AppContainer:
         # 2. Persistence Layer (Unit of Work)
         self._uow = SqlAlchemyUnitOfWork(self._db_engine.get_session_factory())
 
-        # 3. Cache (Updated to AsyncLRUCache)
+        # 3. Cache (AsyncLRUCache)
         try:
             from iFactory.infrastructure.cache.async_lru_cache import AsyncLRUCache
 
@@ -178,9 +178,10 @@ class AppContainer:
             except Exception as e:
                 logger.warning(f"Remote data source init failed: {e}")
 
-        # 5. Sync Subdomain (Updated to SyncWorker)
+        # 5. Scheduling Subdomain (Replaces old SyncWorker)
         if self._remote_data_source:
-            self._sync_worker = SyncWorker(data_source=self._remote_data_source, uow=self._uow)
+            # Configure background job interval (e.g., every 60 seconds)
+            self._scheduler = BackgroundScheduler(interval_seconds=60.0)
 
     def _init_application(self) -> None:
         """
@@ -193,6 +194,10 @@ class AppContainer:
         gantt_uc = GenerateProductionTimelineUseCase(unit_of_work_factory=lambda: self._uow, cache_provider=self._cache_provider)
 
         sync_uc = SyncAllDevicesUseCase(remote_source=self._remote_data_source, uow=self._uow) if self._remote_data_source else None
+
+        # Start the background scheduler if sync is available
+        if self._scheduler and sync_uc:
+            self._scheduler.start(lambda: sync_uc.execute())
 
         # Bind to Presentation Adapter
         self._device_service_adapter = DeviceServiceAdapter(sync_uc, get_latest_uc, get_all_uc, gantt_uc)
@@ -226,7 +231,7 @@ class AppContainer:
             "has_settings": self._settings is not None,
             "db_connected": self._db_engine is not None,
             "mssql_connected": self._remote_data_source is not None,
-            "sync_available": self._sync_worker is not None,
+            "sync_available": self._scheduler is not None,
             "cache_enabled": self._cache_provider is not None,
             "online_mode": self.is_online,
         }
@@ -234,6 +239,9 @@ class AppContainer:
     async def dispose(self) -> None:
         """Dispose all resources gracefully."""
         logger.info("[AppContainer] Disposing...")
+
+        if self._scheduler:
+            await self._scheduler.stop()
 
         if self._ui_container and hasattr(self._ui_container, "cleanup"):
             self._ui_container.cleanup()

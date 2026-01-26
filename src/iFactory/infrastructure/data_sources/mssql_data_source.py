@@ -1,6 +1,6 @@
 """
 MSSQL Data Source Adapter.
-Fetches raw data. Does not interpret business meaning of data.
+Fetches raw primitive data. Does not interpret business meaning.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class MssqlDataSource(IRemoteDataSource):
     """
     MSSQL implementation of IRemoteDataSource.
-    Returns RAW dictionaries. Mapping to Domain happens via Mappers.
+    Returns primitive RAW dictionaries. Translation to Domain logic happens in the Application Layer.
     """
 
     SQL_LATEST_STATUS = """

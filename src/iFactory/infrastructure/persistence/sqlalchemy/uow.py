@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from iFactory.application.interfaces.unit_of_work import IUnitOfWork
 from iFactory.domain.repositories.device_repository import DeviceRepository
-from iFactory.infrastructure.repositories.sqlalchemy_device_repo import SqlAlchemyDeviceRepository
+from iFactory.infrastructure.persistence.sqlalchemy.repository import SqlAlchemyDeviceRepository
 
 
 class SqlAlchemyUnitOfWork(IUnitOfWork):
