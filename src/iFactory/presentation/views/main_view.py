@@ -1,14 +1,13 @@
 """
 Main View - Tối thượng UI/UX.
-FIX: Đồng bộ Redux State ngay khi khởi động (Click 1 lần là mở).
-FIX: Tăng width lên 240px để hiện đủ chữ.
+FIX: Khắc phục lỗi Header bị trắng khi khởi động. Ép vẽ Icon ngay lập tức.
 """
 
 from __future__ import annotations
 import sys
 import logging
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QListWidgetItem
-from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QPixmap, QMouseEvent
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QPixmap
 from PySide6.QtCore import Qt, QSize, QEvent, QRect
 
 import iFactory.resources.resources_rc
@@ -40,7 +39,8 @@ class MainView(QMainWindow):
         self._store = store
         self._controller = controller
         self._current_theme = "light"
-        self._is_menu_open = True
+
+        self._is_menu_open = False
         self._is_right_panel_open = False
 
         self.ui = Ui_MainWindow()
@@ -60,26 +60,29 @@ class MainView(QMainWindow):
         self._setup_legend()
         self._setup_shortcuts()
 
-        self._connect_ui_events()
-        self._store.state_changed.connect(self._on_state_changed)
-
         # =====================================================================
-        # FIX LỖI "CLICK 2 LẦN": ĐỒNG BỘ REDUX VÀ UI VỀ TRẠNG THÁI "THU NHỎ"
+        # FIX TỐI THƯỢNG: ÉP UI KHỞI ĐỘNG CHUẨN XÁC
         # =====================================================================
-        # Ép ListWidget bôi xanh Dashboard
-        self.ui.listWidget.setCurrentRow(0)
+        # 1. Ép giao diện thu nhỏ
+        self.ui.left_slide_menu_frame.setFixedWidth(50)
+        self.ui.title_frame.setFixedWidth(50)
+        self.ui.title_label.setVisible(False)
+        self.ui.title_icon.setVisible(False)
 
-        # Lấy state hiện tại, nếu Redux đang hiểu là "Mở" (True) thì ép nó "Đóng" (False)
+        # 2. FIX LỖI "TRẮNG HEADER": Ép vẽ Icon Open và áp dụng Theme ngay lập tức
+        self._apply_theme(self._current_theme)
+
+        # 3. Đồng bộ với Redux
         current_state = self._store.get_state()
         if current_state.get("left_menu_expanded", True):
             self._controller.handle_left_menu_toggle()
         # =====================================================================
 
-        logger.debug("[MainView] Full UI Restored and Initialized properly.")
+        self._connect_ui_events()
+        self._store.state_changed.connect(self._on_state_changed)
 
-    # =========================================================================
-    # EVENT FILTER (CLICK OUTSIDE LOGIC)
-    # =========================================================================
+        logger.debug("[MainView] Full UI Restored.")
+
     def eventFilter(self, obj, event):
         if event.type() == QEvent.MouseButtonPress:
             click_pos = event.globalPosition().toPoint()
@@ -106,14 +109,11 @@ class MainView(QMainWindow):
 
         return super().eventFilter(obj, event)
 
-    # =========================================================================
-    # UI SETUP
-    # =========================================================================
     def _setup_header(self) -> None:
         if hasattr(self.ui, "title_icon"):
             self.ui.title_icon.setPixmap(QPixmap(":/icon/logo.png").scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             self.ui.title_icon.setText("")
-            self.ui.title_icon.setContentsMargins(13, 0, 0, 0)
+            self.ui.title_icon.setContentsMargins(10, 0, 0, 0)
 
         if hasattr(self.ui, "title_label"):
             self.ui.title_label.setText("Welcome to iFactory")
@@ -249,8 +249,6 @@ class MainView(QMainWindow):
         devices = select_all_devices(state)
         summary = select_factory_summary(state)
         gantt_data = select_gantt_timeline(state)
-
-        # Lấy trạng thái ĐÚNG TỪ REDUX
         menu_expanded = state.get("left_menu_expanded", False)
         self._is_right_panel_open = state.get("right_panel_expanded", False)
 
@@ -263,9 +261,6 @@ class MainView(QMainWindow):
         if target and self.ui.stackedWidget.currentWidget() != target:
             self.ui.stackedWidget.setCurrentWidget(target)
 
-        # =====================================================================
-        # FIX LỖI "CHE CHỮ": MỞ RỘNG LÊN 240px (Thay vì 200px)
-        # =====================================================================
         menu_w = 240 if menu_expanded else 50
         self.ui.left_slide_menu_frame.setFixedWidth(menu_w)
         self.ui.title_frame.setFixedWidth(menu_w)
@@ -290,7 +285,7 @@ class MainView(QMainWindow):
         selected_data = select_selected_device_data(state)
         if selected_data and hasattr(self, "rp_title"):
             dev_id = selected_data.get("id", "Unknown")
-            status = selected_data.get("status", "N/A")
+            status = selected_data.get("status", "Loading...")
             color = selected_data.get("color", "#888888")
             inputs = selected_data.get("inputs", 0)
             outputs = selected_data.get("outputs", 0)
@@ -305,8 +300,8 @@ class MainView(QMainWindow):
             self.rp_status.setStyleSheet(f"font-size: 14px; padding: 8px 15px; color: {color}; font-weight: bold;")
 
             info_qss = f"font-size: 14px; padding: 8px 15px; color: {sec_text_color};"
-            self.rp_inputs.setText(f"Inputs: {inputs} units")
-            self.rp_outputs.setText(f"Outputs: {outputs} units")
+            self.rp_inputs.setText(f"Inputs: {inputs:,} units")
+            self.rp_outputs.setText(f"Outputs: {outputs:,} units")
             self.rp_error.setText(f"Last Error: {error}")
             self.rp_inputs.setStyleSheet(info_qss)
             self.rp_outputs.setStyleSheet(info_qss)
@@ -316,9 +311,9 @@ class MainView(QMainWindow):
 
     def _update_lcd_numbers(self, summary: dict) -> None:
         if hasattr(self.ui, "lcdNumber_20"):
-            self.ui.lcdNumber_20.display(summary["output"])
+            self.ui.lcdNumber_20.display(summary.get("output", 0))
         if hasattr(self.ui, "lcdNumber_15"):
-            self.ui.lcdNumber_15.display(summary["yield_rate"])
+            self.ui.lcdNumber_15.display(summary.get("yield_rate", 0))
 
     def _update_menu_icons(self, mode: str) -> None:
         suffix = "-white.svg" if mode == "dark" else ".svg"
@@ -341,8 +336,8 @@ class MainView(QMainWindow):
 
         common_qss = """
             QListWidget { background: transparent; border: none; outline: none; icon-size: 24px; }
-            QListWidget::item { padding-left: 9px; height: 45px; font-size: 14px; font-weight: 500; text-align: left; }
-            QPushButton#pushButton { background: transparent; border: none; padding-left: 13px; text-align: left; }
+            QListWidget::item { padding-left: 10px; height: 45px; font-size: 14px; font-weight: 500; text-align: left; }
+            QPushButton#pushButton { background: transparent; border: none; padding-left: 10px; text-align: left; }
         """
 
         if mode == "dark":

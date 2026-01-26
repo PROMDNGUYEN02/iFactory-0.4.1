@@ -1,6 +1,6 @@
 """
 Selectors for querying the Redux Store.
-Đã fix lỗi thuộc tính để lấy đúng dữ liệu từ Database.
+ĐÃ CHUYỂN SANG CHẾ ĐỘ DỮ LIỆU THẬT 100% (REAL DATA).
 """
 
 from typing import Dict, Any
@@ -15,68 +15,61 @@ def select_current_page(state: Dict[str, Any]) -> str:
 
 
 def select_all_devices(state: Dict[str, Any]) -> Dict[str, Any]:
+    # Trả về nguyên gốc danh sách thiết bị thật từ Database
     return state.get("devices", {})
 
 
 def select_factory_summary(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Tính toán thống kê TỔNG thực tế của cả nhà máy."""
     devices = state.get("devices", {})
-    # Quét dữ liệu thật từ DB
-    total_out = sum(getattr(d, "output_count", getattr(d, "total_output", 0)) for d in devices.values())
-    total_lost = sum(getattr(d, "error_count", getattr(d, "total_lost", 0)) for d in devices.values())
-    return {
-        "output": total_out if total_out > 0 else 15600,  # Fallback test UI
-        "yield_rate": 98.5 if devices else 0,
-        "lost": total_lost if total_lost > 0 else 150,
-    }
+
+    # 1. Tính tổng thực tế từ tất cả các máy (Nếu chưa có dữ liệu thì = 0)
+    total_in = sum(getattr(d, "input_count", 0) for d in devices.values())
+    total_out = sum(getattr(d, "output_count", 0) for d in devices.values())
+    total_lost = sum(getattr(d, "error_count", 0) for d in devices.values())
+
+    # 2. Tính hiệu suất thật (Yield Rate) theo công thức: (Output / Input) * 100
+    yield_rate = 0.0
+    if total_in > 0:
+        yield_rate = (total_out / total_in) * 100
+
+    return {"output": total_out, "yield_rate": round(yield_rate, 2), "lost": total_lost}  # Làm tròn 2 chữ số thập phân
 
 
 def select_gantt_timeline(state: Dict[str, Any]) -> Dict[str, list]:
-    """Tạo dữ liệu Gantt thật. Tự động chia 24h thành các khung giờ hoạt động."""
+    """Lấy dữ liệu Lịch sử (Timeline) THẬT của từng máy."""
     devices = state.get("devices", {})
     timeline = {}
 
-    # Bảng màu chuẩn từ file legends.json
-    colors = {"RUN": "#3bb806", "IDLE": "#c3c51b", "BM": "#bd1e15"}
-
-    # NẾU DB CÓ DỮ LIỆU THÌ LẤY DỮ LIỆU THẬT, NẾU KHÔNG CÓ THÌ TẠO DỮ LIỆU MẪU ĐỂ UI KHÔNG TRỐNG
     for code, dev in devices.items():
-        curr_color = getattr(dev, "status_color", colors["RUN"])
-        timeline[code] = [
-            {"color": colors["IDLE"], "percent": 0.15},  # Sáng sớm
-            {"color": curr_color, "percent": 0.65},  # Chạy ban ngày
-            {"color": colors["BM"], "percent": 0.05},  # Gặp lỗi
-            {"color": curr_color, "percent": 0.15},  # Tối
-        ]
+        # Lấy thuộc tính timeline thật từ DeviceViewModel (do BackgroundWorker đổ về)
+        # Nếu máy chưa có lịch sử, trả về list rỗng [] để biểu đồ trống.
+        timeline[code] = getattr(dev, "timeline", [])
 
-    # FIX LỖI "KHÔNG THẤY GANTT": Nếu DB chưa load, tự tạo 3 máy mẫu để test UI
-    if not timeline:
-        return {
-            "AMX01": [{"color": colors["RUN"], "percent": 0.8}, {"color": colors["BM"], "percent": 0.2}],
-            "CCT01": [{"color": colors["IDLE"], "percent": 0.3}, {"color": colors["RUN"], "percent": 0.7}],
-            "CWD01": [{"color": colors["RUN"], "percent": 1.0}],
-        }
     return timeline
 
 
 def select_selected_device_data(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Lấy dữ liệu THẬT của máy đang được người dùng Click."""
     selected_id = state.get("selected_device_id")
     if not selected_id:
         return None
 
     device = state.get("devices", {}).get(selected_id)
 
-    # Lấy đa dạng các tên thuộc tính phòng trường hợp DB đặt tên khác nhau
-    if device:
-        inputs = getattr(device, "input_count", getattr(device, "total_input", 1250))
-        outputs = getattr(device, "output_count", getattr(device, "total_output", 1230))
-        err = getattr(device, "last_error", getattr(device, "error_msg", "Temperature High"))
-        status = getattr(device, "status_label", "RUN")
-        color = getattr(device, "status_color", "#3bb806")
-    else:
-        # Máy chưa load từ DB -> Hiện thông số giả lập để test Right Panel
-        inputs, outputs, err, status, color = 1500, 1490, "None", "RUN", "#3bb806"
+    # TRƯỜNG HỢP: Database chưa load xong dữ liệu máy này
+    if not device:
+        return {"id": selected_id, "status": "Loading DB...", "color": "#888888", "inputs": 0, "outputs": 0, "error": "..."}
 
-    return {"id": selected_id, "status": status, "color": color, "inputs": inputs, "outputs": outputs, "error": err}
+    # TRƯỜNG HỢP: Đã có dữ liệu từ Database -> Lấy giá trị thật
+    return {
+        "id": selected_id,
+        "status": getattr(device, "status_label", "Unknown"),
+        "color": getattr(device, "status_color", "#888888"),
+        "inputs": getattr(device, "input_count", 0),
+        "outputs": getattr(device, "output_count", 0),
+        "error": getattr(device, "last_error", "None"),
+    }
 
 
 __all__ = [
