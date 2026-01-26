@@ -10,6 +10,7 @@ import logging
 from typing import List, Optional
 from .sync_service import SyncService
 from iFactory.infrastructure.database import DatabaseOrchestrator
+from iFactory.infrastructure.persistence.types.sync_metadata import SyncMetadata
 
 __all__ = ["SyncOrchestrator"]
 logger = logging.getLogger(__name__)
@@ -34,10 +35,11 @@ class SyncOrchestrator:
     def __init__(
         self,
         db: DatabaseOrchestrator,
-        sync_service: Optional[SyncService] = None,
+        sync_service: SyncService,
         status_interval: float = 3.0,
         input_interval: float = 3.0,
         history_interval: float = 5.0,
+        interval_seconds: int = 60,
     ):
         """
         Initialize orchestrator.
@@ -64,91 +66,30 @@ class SyncOrchestrator:
         self._tasks: List[asyncio.Task] = []
         self._device_codes: List[str] = []
 
-    async def start(self) -> None:
-        """Start all sync tasks."""
+    async def start(self):
         if self._running:
-            logger.warning("[SyncOrchestrator] Already running")
             return
         self._running = True
-        try:
-            await self._sync_service.initialize()
-            self._device_codes = await self._sync_service.get_device_codes()
-            self._tasks = [
-                asyncio.create_task(
-                    self._sync_loop("status", self._sync_status, self._status_interval),
-                    name="sync_status",
-                ),
-                asyncio.create_task(
-                    self._sync_loop("input", self._sync_input, self._input_interval),
-                    name="sync_input",
-                ),
-                asyncio.create_task(
-                    self._sync_loop(
-                        "status_history",
-                        self._sync_status_history,
-                        self._history_interval,
-                        initial_delay=60,
-                    ),
-                    name="sync_status_history",
-                ),
-                asyncio.create_task(
-                    self._sync_loop(
-                        "input_history",
-                        self._sync_input_history,
-                        self._history_interval,
-                        initial_delay=90,
-                    ),
-                    name="sync_input_history",
-                ),
-            ]
-            logger.info(
-                f"[SyncOrchestrator] Started: status={self._status_interval}s, input={self._input_interval}s, history={self._history_interval}s (status + input)"
-            )
-        except Exception as e:
-            logger.error(f"[SyncOrchestrator] Failed to start: {e}", exc_info=True)
-            self._running = False
-            raise
+        self._task = asyncio.create_task(self._run_loop())
+        logger.info(f"SyncOrchestrator started with {self._interval_seconds}s interval.")
 
-    async def stop(self) -> None:
-        """Stop all sync tasks gracefully."""
-        logger.info("[SyncOrchestrator] Stopping...")
-        if not self._running:
-            logger.debug("[SyncOrchestrator] Not running")
-            return
+    async def stop(self):
         self._running = False
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
-        self._device_codes.clear()
-        logger.info("[SyncOrchestrator] Stopped")
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        logger.info("SyncOrchestrator stopped.")
 
-    async def _sync_loop(self, name: str, sync_func, interval: float, initial_delay: float = 0) -> None:
-        """
-        Generic sync loop with error handling.
-
-        Args:
-            name: Task name for logging
-            sync_func: Async function to call
-            interval: Interval in seconds
-            initial_delay: Initial delay before starting (optional)
-        """
-        try:
-            if initial_delay > 0:
-                await asyncio.sleep(initial_delay)
-            while self._running:
-                try:
-                    await sync_func()
-                except asyncio.CancelledError:
-                    logger.debug(f"[SyncOrchestrator] {name} task cancelled")
-                    break
-                except Exception as e:
-                    logger.error(f"[SyncOrchestrator] {name} error: {e}", exc_info=False)
-                await asyncio.sleep(interval)
-        except Exception as e:
-            logger.error(f"[SyncOrchestrator] {name} loop failed: {e}", exc_info=True)
+    async def _run_loop(self):
+        while self._running:
+            try:
+                await self._sync_service.sync_all_devices()
+            except Exception as e:
+                logger.error(f"SyncOrchestrator encountered error: {e}")
+            await asyncio.sleep(self._interval_seconds)
 
     async def _sync_status(self) -> None:
         """Sync latest status: MSSQL → Hot store."""

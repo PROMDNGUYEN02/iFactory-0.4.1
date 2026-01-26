@@ -1,18 +1,15 @@
 """
 Data providers for Right Menu UI components.
-
-Refactored to use Domain Repositories (Interfaces) and Shared Utils.
 """
 
 import logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple  # Import Tuple for type hint
+from typing import Any, Dict, List, Tuple
 
-from iFactory.domain import TimeRange
+from iFactory.domain.value_objects.time_range import TimeRange
 from iFactory.domain.repositories import StatusRepository, InputRepository
-
-# IMPORT FIX: Use Shared Kernel utils instead of Infrastructure utils
+from iFactory.domain.value_objects.equipment_code import EquipmentCode
 from ...shared.utils.formatters import format_datetime, format_duration, safe_str
 
 __all__ = ["RightMenuDataProvider", "StatusSummaryRow"]

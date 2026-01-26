@@ -3,13 +3,18 @@ Infrastructure Sync Service.
 """
 
 from __future__ import annotations
+import asyncio
 import logging
-from dataclasses import dataclass, field
+from datetime import datetime
 from typing import List, Optional
 
-from iFactory.application.interfaces.unit_of_work import IUnitOfWork
-from iFactory.application.interfaces.remote_data_source import IRemoteDataSource
+from iFactory.application.interfaces.remote_data_source import RemoteDataSource
+from iFactory.application.interfaces.unit_of_work import UnitOfWork
 from iFactory.application.mappers.remote_record_mapper import to_device_entity
+from iFactory.domain.entities.device import Device
+from iFactory.domain.value_objects.equipment_code import EquipmentCode
+from iFactory.infrastructure.persistence.types.sync_metadata import SyncMetadata
+from iFactory.infrastructure.persistence.repositories.sync_metadata_repository_impl import SqliteSyncMetadataRepository
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +37,52 @@ class SyncAllResult:
 
 
 class SyncService:
-    def __init__(self, db: IUnitOfWork, data_source: IRemoteDataSource, history_interval: int = 300):
-        self._uow = db
+    def __init__(self, remote_data_source: RemoteDataSource,, uow: UnitOfWork, metadata_repo: SqliteSyncMetadataRepository, data_source: RemoteDataSource, history_interval: int = 300):
         self._remote_source = data_source
+        self._uow = uow
+        self._metadata_repo = metadata_repo
         self._history_interval = history_interval
         self._initialized = False
+
+    async def sync_all_devices(self) -> None:
+        """Synchronizes device status from the remote data source to the local database."""
+        logger.info("Starting device synchronization...")
+        try:
+            records = await self._remote_ds.fetch_all_devices()
+            if not records:
+                logger.warning("No device records fetched from remote.")
+                return
+
+            synced_count = 0
+            async with self._uow as uow:
+                for record in records:
+                    device = to_device_entity(record)
+                    if device:
+                        await uow.devices.save(device)
+                        synced_count += 1
+                await uow.commit()
+
+            # Update Sync Metadata
+            await self._metadata_repo.save(
+                SyncMetadata(
+                    table_name="devices",
+                    last_sync=datetime.now(),
+                    record_count=synced_count,
+                    status="success"
+                )
+            )
+            logger.info(f"Successfully synced {synced_count} devices.")
+
+        except Exception as e:
+            logger.error(f"Error during device synchronization: {e}")
+            await self._metadata_repo.save(
+                SyncMetadata(
+                    table_name="devices",
+                    last_sync=datetime.now(),
+                    status="failed",
+                    error_message=str(e)
+                )
+            )
 
     async def initialize(self) -> None:
         if self._initialized:
