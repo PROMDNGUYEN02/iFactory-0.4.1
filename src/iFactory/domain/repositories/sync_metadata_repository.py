@@ -1,7 +1,7 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional
-from ..entities.sync_metadata import SyncMetadata
+from ..value_objects.sync_metadata import SyncMetadata
 
 
 class SyncMetadataRepository(ABC):

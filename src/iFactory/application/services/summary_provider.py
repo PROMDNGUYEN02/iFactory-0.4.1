@@ -5,7 +5,7 @@ Provides aggregated summary data.
 import logging
 from typing import List, Dict
 
-from iFactory.domain import TimeRange
+from iFactory.domain.value_objects.time_range import TimeRange
 from iFactory.domain.repositories import StatusRepository
 
 from .right_menu_provider import StatusSummaryRow
