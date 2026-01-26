@@ -16,14 +16,14 @@ from iFactory.infrastructure.persistence.sqlalchemy.uow import SqlAlchemyUnitOfW
 from iFactory.infrastructure.data_sources.mssql_data_source import MssqlDataSource
 from iFactory.infrastructure.scheduling.background_scheduler import BackgroundScheduler
 
-# --- FIX: Application Layer Imports (CQRS Structure) ---
+# --- Application Layer Imports (CQRS Structure) ---
 from iFactory.application.queries.get_latest_status import GetLatestDeviceStatusQuery
 from iFactory.application.queries.get_all_devices_status import GetAllDevicesStatusQuery
 from iFactory.application.queries.generate_production_timeline import GenerateProductionTimelineQuery
 from iFactory.application.commands.sync_all_devices import SyncAllDevicesCommand
 
 if TYPE_CHECKING:
-    from iFactory.presentation.qt.di import UIContainer
+    from iFactory.presentation.di.ui_container import UIContainer
     from iFactory.presentation.adapters import QtSignalAdapter
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 class DeviceServiceAdapter:
     """
-    Adapter to present Commands and Queries to the UIContainer using the old service interface.
+    Adapter to present Commands and Queries to the UIContainer using a unified facade.
     """
 
     def __init__(
@@ -204,18 +204,23 @@ class AppContainer:
         self._device_service_adapter = DeviceServiceAdapter(sync_cmd, get_latest_qry, get_all_qry, gantt_qry)
 
     def _init_presentation(self) -> None:
-        """Initialize Presentation layer."""
+        """Initialize Presentation layer using Redux Architecture."""
         from iFactory.presentation.adapters import QtSignalAdapter
-        from iFactory.presentation.qt.di import UIContainer
+        from iFactory.presentation.di.ui_container import UIContainer
 
+        # 1. Initialize Signal Adapter for cross-thread events
         self._signal_adapter = QtSignalAdapter()
-        self._ui_container = UIContainer(
-            device_service=self._device_service_adapter,
-            signal_adapter=self._signal_adapter,
-            settings=self._settings,
-        )
+
+        # 2. Inject this app container into the UI Container
+        self._ui_container = UIContainer(app_container=self)
+        self._ui_container.initialize()
 
     # --- Getters ---
+
+    @property
+    def device_facade(self) -> Optional[DeviceServiceAdapter]:
+        """Provides easy access to Application Use Cases for UI Controllers."""
+        return self._device_service_adapter
 
     def get_ui_container(self) -> Optional[UIContainer]:
         return self._ui_container
@@ -244,8 +249,8 @@ class AppContainer:
         if self._scheduler:
             await self._scheduler.stop()
 
-        if self._ui_container and hasattr(self._ui_container, "cleanup"):
-            self._ui_container.cleanup()
+        if self._ui_container and hasattr(self._ui_container, "shutdown"):
+            self._ui_container.shutdown()
 
         if self._cache_provider and hasattr(self._cache_provider, "clear"):
             await self._cache_provider.clear()
@@ -262,4 +267,4 @@ class AppContainer:
     cleanup = dispose
 
 
-__all__ = ["AppContainer"]
+__all__ = ["AppContainer", "DeviceServiceAdapter"]

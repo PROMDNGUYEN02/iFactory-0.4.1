@@ -1,6 +1,9 @@
-"""Presentation adapters - Bridge async services with Qt."""
+"""
+Presentation Adapters.
+Bridges infrastructure/application events (like async tasks) to UI-safe mechanisms (Qt Signals).
+"""
 
+from .qt_signal_adapter import QtSignalAdapter
 from .async_executor import AsyncExecutor
-from .qt_signal_adapter import QtSignalAdapter, DeviceSignals
 
-__all__ = ["AsyncExecutor", "QtSignalAdapter", "DeviceSignals"]
+__all__ = ["QtSignalAdapter", "AsyncExecutor"]

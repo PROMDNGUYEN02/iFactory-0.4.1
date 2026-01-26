@@ -1,9 +1,8 @@
-# File: src/iFactory/shared/di/application_runner.py
 """
 Application Runner - Optimized with Deferred Data Loading.
-
-Window shows immediately, data loads in background.
+Clean Architecture Compliant.
 """
+
 from __future__ import annotations
 import asyncio
 import logging
@@ -14,7 +13,8 @@ import qasync
 from .app_container import AppContainer
 
 if TYPE_CHECKING:
-    from iFactory.presentation.qt.di.ui_container import UIContainer
+    # UPDATED: Import path reflects the new clean architecture folder structure
+    from iFactory.presentation.di.ui_container import UIContainer
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,6 @@ except ImportError:
     _PROFILER_AVAILABLE = False
 
 _CLEANUP_TIMEOUT = 5.0
-_ORCHESTRATOR_STOP_TIMEOUT = 3.0
 
 
 class ApplicationRunner:
@@ -81,8 +80,11 @@ class ApplicationRunner:
                     logger.error("No main window created!")
                     return 1
                 self._show_window()
-                if self._ui_container:
+
+                # Deferred load handled by Redux Controller triggers
+                if self._ui_container and hasattr(self._ui_container, "schedule_deferred_data_load"):
                     self._ui_container.schedule_deferred_data_load()
+
                 self._log_startup_performance()
                 return self._loop.run_forever()
         except Exception as e:
@@ -94,13 +96,21 @@ class ApplicationRunner:
     async def _initialize(self) -> None:
         """Initialize application - fast path only."""
         try:
+            # 1. Init App Container (Infra + App + Presentation DI)
             self.container = AppContainer()
             await self.container.initialize()
             logger.info("AppContainer initialized")
+
+            # 2. Extract UI Container
             self._ui_container = self.container.get_ui_container()
-            self.main_window = self._ui_container.create_main_window()
-            self._inject_sync_service()
-            await self._ui_container.initialize_async()
+
+            # 3. Retrieve the already-created main window
+            self.main_window = self._ui_container.get_main_window()
+
+            # 4. Final Async Hooks (if any)
+            if hasattr(self._ui_container, "initialize_async"):
+                await self._ui_container.initialize_async()
+
             logger.info("Application initialized successfully")
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
@@ -113,20 +123,6 @@ class ApplicationRunner:
         self.main_window.repaint()
         self.qt_app.processEvents()
         logger.info("Main window shown")
-
-    def _inject_sync_service(self) -> None:
-        """Inject sync service into device controller."""
-        if not self.container or not self._ui_container:
-            return
-        try:
-            sync_service = self.container.get_sync_service()
-            device_controller = self._ui_container.get_device_controller()
-            if sync_service and device_controller:
-                if hasattr(device_controller, "set_sync_service"):
-                    device_controller.set_sync_service(sync_service)
-                    logger.debug("Sync service injected")
-        except Exception as e:
-            logger.warning(f"Failed to inject sync service: {e}")
 
     def _log_startup_performance(self) -> None:
         """Log startup performance metrics."""
@@ -151,12 +147,7 @@ class ApplicationRunner:
 
     async def _async_cleanup(self) -> None:
         """Async cleanup operations."""
-        if orchestrator := getattr(self.container, "_sync_orchestrator", None):
-            if hasattr(orchestrator, "stop"):
-                try:
-                    await asyncio.wait_for(orchestrator.stop(), timeout=_ORCHESTRATOR_STOP_TIMEOUT)
-                except asyncio.TimeoutError:
-                    logger.warning("Sync orchestrator stop timed out")
+        # Clean Architecture note: AppContainer now owns the Orchestrator/Scheduler lifecycle.
         if hasattr(self.container, "dispose"):
             await self.container.dispose()
 
