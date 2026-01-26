@@ -2,8 +2,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 from sqlalchemy import select
-from iFactory.domain.repositories.sync_metadata_repository import SyncMetadataRepository
-from iFactory.domain.entities.sync_metadata import SyncMetadata
+
+from .sync_metadata_repository import SyncMetadataRepository
+from ..types.sync_metadata import SyncMetadata
 from iFactory.infrastructure.database.engines.sqlite_engine import AsyncSQLiteEngine
 from iFactory.infrastructure.database.models import SyncMetadataModel
 

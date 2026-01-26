@@ -1,10 +1,10 @@
 import logging
 from datetime import datetime
 from typing import Optional
+
 from iFactory.domain.entities.device import Device
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
 from iFactory.domain.value_objects.status import Status
-from iFactory.domain.enums.device_status import DeviceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +18,10 @@ def to_device_entity(record: dict) -> Optional[Device]:
         if not equip_code:
             return None
 
-        normalized_status = DeviceStatus.from_code_or_name(raw_status)
+        # Domain layer now handles normalization via from_raw()
         return Device(
             equipment_code=EquipmentCode(equip_code),
-            current_status=Status(normalized_status),
+            current_status=Status.from_raw(raw_status),
             last_update=last_update,
         )
     except Exception as e:
