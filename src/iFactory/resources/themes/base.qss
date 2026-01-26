@@ -1,4 +1,4 @@
-/*  src\iFactory\resources\themes\base.qss */
+/* src\iFactory\resources\themes\base.qss */
 /* ===== BASE ===== */
 QMainWindow, QWidget#centralwidget {
     background: ${app.bg};
@@ -31,7 +31,6 @@ QFrame#orders_bottom_frame {
 /* ===== SLIDE MENUS ===== */
 QFrame#title_frame,
 QFrame#left_slide_menu_frame,
-QFrame#right_slide_menu_frame,
 QStatusBar#statusbar {
     background: ${slide.bg};
     border: none;
@@ -72,11 +71,14 @@ QListView#listView::item {
     height: ${menu.itemH};
     border: none;
     padding-left: ${item.padLeft};
+    border-radius: 6px;
+    margin: 2px 8px; /* Bo góc mượt cho các item menu */
 }
 
 QListWidget::item:hover,
 QListView#listView::item:hover {
     background: ${hover};
+    color: #3498db;
 }
 
 QListWidget::item:selected,
@@ -115,78 +117,31 @@ QPushButton#panelBtn:hover {
     border-radius: ${radius};
 }
 
-/* ===== PANELS ===== */
-QFrame#settingsRootPanel,
-QFrame#themeSubPanel {
-    background: ${frame.bg};
-    border: 1px solid ${border};
-    border-radius: ${radius};
-}
-
-QWidget#expandableMenuButton,
-QWidget#menuButtonWithShortcut {
-    background: transparent;
-    border-radius: ${radius};
-}
-
-QWidget#expandableMenuButton:hover,
-QWidget#menuButtonWithShortcut:hover {
-    background: ${hover};
-}
-
-QLabel#expandableMenuLabel,
-QLabel#menuButtonLabel {
-    color: ${app.fg};
-    font-family: ${font.family};
-    background: transparent;
-}
-
-QLabel#shortcutHint {
-    color: ${hint};
-    font: 10px ${font.family};
-}
-
-QLabel#shortcutHintsPanel {
-    color: ${hint};
-    font: 12px ${font.family};
-    padding: 20px;
-    background: ${frame.bg};
-    border: 1px solid ${border};
-    border-radius: ${radius};
-}
-
-/* ===== RIGHT PANEL ===== */
-QPushButton#floatingOpenBtn {
+/* ===== RIGHT PANEL & DASHBOARD (NÂNG CẤP MAX LEVEL) ===== */
+QFrame#right_slide_menu_frame {
     background: ${slide.bg};
+    border-left: 1px solid ${border};
+    border-radius: 12px 0 0 12px; /* Bo góc viền trái mượt mà */
+}
+
+/* Khung chi tiết bên trong Right Panel */
+QFrame#frame_details {
+    background: ${stack.bg};
     border: 1px solid ${border};
-    border-right: none;
-    border-radius: 4px 0 0 4px;
+    border-radius: 8px;
+    padding: 10px;
 }
 
-QPushButton#rightMenuToggleBtn {
-    background: ${slide.bg};
-    border: 1px solid ${border};
-    border-left: none;
-    border-radius: 0 4px 4px 0;
-}
-
-QPushButton#floatingOpenBtn:hover,
-QPushButton#rightMenuToggleBtn:hover {
-    background: ${hover};
-}
-
-QFrame#resizableRightPanel { background: ${slide.bg}; border: none; }
-QFrame#rightPanelContent { background: transparent; }
-
-QListWidget#rightListWidget {
-    background: transparent;
+/* Tối ưu Progress Bar chuẩn Glassmorphism/Modern Flat */
+QProgressBar {
+    background-color: ${stack.bg};
     border: none;
-    color: ${app.fg};
-    font: ${menu.fontSize} ${font.family};
+    border-radius: 4px;
+    height: 12px;
 }
-
-QListWidget#rightListWidget::item { padding: 8px; }
-QListWidget#rightListWidget::item:hover { background: ${hover}; }
+QProgressBar::chunk {
+    border-radius: 4px;
+}
 
 /* ===== TABLE VIEW ===== */
 QTableView#tableView {

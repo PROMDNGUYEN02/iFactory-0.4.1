@@ -1,12 +1,13 @@
 """
-Device Canvas Widget - Khắc phục lỗi Scale Tab Ẩn và Font chuẩn.
+Device Canvas Widget - Live Factory Map.
+Nâng cấp: Hiệu ứng Glow/Shadow theo trạng thái máy, gắn Badge số liệu sản phẩm Realtime.
 """
 
 import json
 import logging
 from pathlib import Path
-from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsTextItem, QWidget, QVBoxLayout
-from PySide6.QtGui import QPixmap, QColor, QFont, QPainter
+from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsTextItem, QWidget, QVBoxLayout, QGraphicsDropShadowEffect
+from PySide6.QtGui import QPixmap, QColor, QFont, QPainter, QBrush
 from PySide6.QtCore import Qt, Signal
 
 logger = logging.getLogger(__name__)
@@ -28,11 +29,11 @@ class DeviceIconItem(QGraphicsPixmapItem):
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.PointingHandCursor)
 
+        # 1. Label Tên Máy
         lbl_text = device_data.get("label_text", self.equip_code)
         lbl_pos = device_data.get("label_position", "left")
 
         self.label = QGraphicsTextItem(lbl_text, self)
-        # --- FIX #4: GIẢM FONT XUỐNG 11px ĐỂ NHÌN GỌN GÀNG HƠN ---
         self.label.setFont(QFont("Arial", 11, QFont.Bold))
 
         lbl_rect = self.label.boundingRect()
@@ -44,7 +45,30 @@ class DeviceIconItem(QGraphicsPixmapItem):
         elif lbl_pos == "bottom":
             self.label.setPos((self.w - lbl_rect.width()) / 2, self.h + spacing)
 
+        # 2. Badge Sản lượng (Hiện số liệu)
+        self.output_badge = QGraphicsTextItem("0", self)
+        self.output_badge.setFont(QFont("Arial", 8, QFont.Bold))
+        self.output_badge.setPos(self.w - 15, -10)
+        self.output_badge.setDefaultTextColor(QColor("white"))
+
+        # 3. Hiệu ứng Glow/Shadow
+        self.glow_effect = QGraphicsDropShadowEffect()
+        self.glow_effect.setBlurRadius(15)
+        self.glow_effect.setOffset(0, 0)
+        self.setGraphicsEffect(self.glow_effect)
+
         self.update_theme(False)
+
+    def update_live_data(self, real_device_data: dict):
+        """Cập nhật dữ liệu từ Redux Store"""
+        status_color = real_device_data.get("color", "#888888")
+        outputs = real_device_data.get("outputs", 0)
+
+        # Đổi màu Glow theo trạng thái máy
+        self.glow_effect.setColor(QColor(status_color))
+
+        # Cập nhật số liệu sản phẩm
+        self.output_badge.setPlainText(str(outputs))
 
     def update_theme(self, is_dark: bool):
         icon_path = self.device_data["image_dark"] if is_dark else self.device_data["image"]
@@ -55,6 +79,10 @@ class DeviceIconItem(QGraphicsPixmapItem):
 
         text_color = QColor("white") if is_dark else QColor("black")
         self.label.setDefaultTextColor(text_color)
+
+        # Cập nhật màu badge cho phù hợp theme
+        badge_color = QColor("#ecf0f1") if is_dark else QColor("#2c3e50")
+        self.output_badge.setDefaultTextColor(badge_color)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -115,7 +143,7 @@ class DeviceCanvasWidget(QWidget):
         except Exception as e:
             logger.error(f"Failed to load canvas positions: {e}")
 
-    def render_state(self, view_models: dict, is_dark: bool):
+    def render_state(self, devices_state: dict, is_dark: bool):
         if is_dark != self._is_dark:
             self._is_dark = is_dark
             bg_img = (
@@ -125,11 +153,15 @@ class DeviceCanvasWidget(QWidget):
             )
             if self._bg_item:
                 self._bg_item.setPixmap(QPixmap(bg_img).scaled(self._ref_width, self._ref_height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
+
             for item in self._device_items.values():
                 item.update_theme(is_dark)
 
-    # --- FIX #3: LỖI KHÔNG SCALE CỦA TRANG ORDER ---
-    # Sự kiện này chỉ chạy khi Tab thực sự được bấm vào và hiện lên màn hình
+        # Update Live Data (Sản lượng & Glow Status)
+        for dev_id, real_data in devices_state.items():
+            if dev_id in self._device_items:
+                self._device_items[dev_id].update_live_data(real_data)
+
     def showEvent(self, event):
         super().showEvent(event)
         self.view.fitInView(self.scene.sceneRect(), Qt.IgnoreAspectRatio)

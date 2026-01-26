@@ -1,13 +1,13 @@
 """
-Main View - Tối thượng UI/UX.
-FIX: Khắc phục lỗi Header bị trắng khi khởi động. Ép vẽ Icon ngay lập tức.
+Main View - Tối thượng UI/UX (Max Level).
+FIX: Khắc phục lỗi Header bị trắng. Tích hợp hiển thị dữ liệu phân tích thực tế (OEE, Yield).
 """
 
 from __future__ import annotations
 import sys
 import logging
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QListWidgetItem
-from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QPixmap
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QListWidgetItem, QProgressBar, QHBoxLayout, QFrame
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QPixmap, QColor
 from PySide6.QtCore import Qt, QSize, QEvent, QRect
 
 import iFactory.resources.resources_rc
@@ -54,7 +54,7 @@ class MainView(QMainWindow):
 
         self._setup_header()
         self._setup_left_menu()
-        self._setup_right_panel()
+        self._setup_right_panel_advanced()  # Nâng cấp UI ở đây
         self._setup_device_canvas()
         self._setup_gantt_chart()
         self._setup_legend()
@@ -63,16 +63,13 @@ class MainView(QMainWindow):
         # =====================================================================
         # FIX TỐI THƯỢNG: ÉP UI KHỞI ĐỘNG CHUẨN XÁC
         # =====================================================================
-        # 1. Ép giao diện thu nhỏ
         self.ui.left_slide_menu_frame.setFixedWidth(50)
         self.ui.title_frame.setFixedWidth(50)
         self.ui.title_label.setVisible(False)
         self.ui.title_icon.setVisible(False)
 
-        # 2. FIX LỖI "TRẮNG HEADER": Ép vẽ Icon Open và áp dụng Theme ngay lập tức
         self._apply_theme(self._current_theme)
 
-        # 3. Đồng bộ với Redux
         current_state = self._store.get_state()
         if current_state.get("left_menu_expanded", True):
             self._controller.handle_left_menu_toggle()
@@ -81,7 +78,7 @@ class MainView(QMainWindow):
         self._connect_ui_events()
         self._store.state_changed.connect(self._on_state_changed)
 
-        logger.debug("[MainView] Full UI Restored.")
+        logger.debug("[MainView] Full Advanced UI Restored.")
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.MouseButtonPress:
@@ -116,7 +113,7 @@ class MainView(QMainWindow):
             self.ui.title_icon.setContentsMargins(10, 0, 0, 0)
 
         if hasattr(self.ui, "title_label"):
-            self.ui.title_label.setText("Welcome to iFactory")
+            self.ui.title_label.setText("iFactory Advanced")
             self.ui.title_label.setStyleSheet("font-size: 14px; font-weight: bold;")
 
         if hasattr(self.ui, "pushButton"):
@@ -154,25 +151,65 @@ class MainView(QMainWindow):
         settings_item.setData(Qt.UserRole, "settings_page")
         self.ui.listWidget_settings.addItem(settings_item)
 
-    def _setup_right_panel(self) -> None:
+    def _setup_right_panel_advanced(self) -> None:
+        """Nâng cấp Right Panel thành Dashboard Phân tích Thu nhỏ"""
         if hasattr(self.ui, "right_slide_menu_frame"):
-            self.rp_title = QLabel("NO DEVICE SELECTED")
-            self.rp_title.setAlignment(Qt.AlignCenter)
-            self.rp_status = QLabel("Status: N/A")
-            self.rp_inputs = QLabel("Inputs: 0")
-            self.rp_outputs = QLabel("Outputs: 0")
-            self.rp_error = QLabel("Last Error: None")
-
             layout = self.ui.right_slide_menu_frame.layout()
             if not layout:
                 layout = QVBoxLayout(self.ui.right_slide_menu_frame)
-                layout.setContentsMargins(0, 0, 0, 0)
 
-            layout.addWidget(self.rp_title)
-            layout.addWidget(self.rp_status)
-            layout.addWidget(self.rp_inputs)
-            layout.addWidget(self.rp_outputs)
+            layout.setContentsMargins(15, 20, 15, 20)
+            layout.setSpacing(12)
+
+            # Tiêu đề & Status Badge
+            header_layout = QHBoxLayout()
+            self.rp_title = QLabel("SELECT DEVICE")
+            self.rp_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+            self.rp_status_badge = QLabel("N/A")
+            self.rp_status_badge.setAlignment(Qt.AlignCenter)
+            header_layout.addWidget(self.rp_title)
+            header_layout.addStretch()
+            header_layout.addWidget(self.rp_status_badge)
+            layout.addLayout(header_layout)
+
+            # Phân tích OEE
+            self.lbl_oee = QLabel("OEE (Hiệu suất): 0%")
+            self.lbl_oee.setStyleSheet("font-weight: bold; margin-top: 10px;")
+            self.bar_oee = QProgressBar()
+            self.bar_oee.setTextVisible(False)
+            self.bar_oee.setFixedHeight(12)
+            layout.addWidget(self.lbl_oee)
+            layout.addWidget(self.bar_oee)
+
+            # Phân tích Yield
+            self.lbl_yield = QLabel("Yield Rate (Tỷ lệ đạt): 0%")
+            self.lbl_yield.setStyleSheet("font-weight: bold; margin-top: 5px;")
+            self.bar_yield = QProgressBar()
+            self.bar_yield.setTextVisible(False)
+            self.bar_yield.setFixedHeight(12)
+            layout.addWidget(self.lbl_yield)
+            layout.addWidget(self.bar_yield)
+
+            # Thông tin chi tiết (Frame gom nhóm)
+            self.frame_details = QFrame()
+            self.frame_details.setObjectName("frame_details")
+            details_layout = QVBoxLayout(self.frame_details)
+            details_layout.setContentsMargins(10, 10, 10, 10)
+
+            self.rp_inputs = QLabel("Inputs: 0")
+            self.rp_outputs = QLabel("Outputs: 0")
+            self.rp_cycletime = QLabel("Cycle Time: 0.0s")
+
+            details_layout.addWidget(self.rp_inputs)
+            details_layout.addWidget(self.rp_outputs)
+            details_layout.addWidget(self.rp_cycletime)
+            layout.addWidget(self.frame_details)
+
+            # Lỗi gần nhất
+            self.rp_error = QLabel("Last Error: None")
+            self.rp_error.setWordWrap(True)
             layout.addWidget(self.rp_error)
+
             layout.addStretch()
 
     def _setup_device_canvas(self) -> None:
@@ -268,7 +305,7 @@ class MainView(QMainWindow):
         self.ui.title_label.setVisible(menu_expanded)
         self.ui.title_icon.setVisible(menu_expanded)
 
-        self.ui.right_slide_menu_frame.setFixedWidth(300 if self._is_right_panel_open else 0)
+        self.ui.right_slide_menu_frame.setFixedWidth(320 if self._is_right_panel_open else 0)
 
         # Canvas & Gantt
         is_dark = theme == "dark"
@@ -281,31 +318,51 @@ class MainView(QMainWindow):
         if hasattr(self, "gantt_orders"):
             self.gantt_orders.render_timeline(gantt_data)
 
-        # Right Panel
+        # Right Panel - Render Dữ Liệu Thực
         selected_data = select_selected_device_data(state)
         if selected_data and hasattr(self, "rp_title"):
             dev_id = selected_data.get("id", "Unknown")
-            status = selected_data.get("status", "Loading...")
+            status = selected_data.get("status", "Offline")
             color = selected_data.get("color", "#888888")
+
+            # Real metrics từ Redux Store
             inputs = selected_data.get("inputs", 0)
             outputs = selected_data.get("outputs", 0)
-            error = selected_data.get("error", "None")
+            error = selected_data.get("error", "No recent errors")
+            oee = selected_data.get("oee", 0)
+            yield_rate = selected_data.get("yield_rate", 0)
+            cycle_time = selected_data.get("cycle_time", 0.0)
 
-            self.rp_title.setText(f"MACHINE: {dev_id}")
-            text_color = "#ffffff" if is_dark else "#000000"
-            sec_text_color = "#cccccc" if is_dark else "#444444"
+            # Update Header
+            self.rp_title.setText(f"MÁY: {dev_id}")
+            self.rp_status_badge.setText(status.upper())
+            self.rp_status_badge.setStyleSheet(
+                f"""
+                background-color: {color}; color: white; font-weight: bold; 
+                padding: 4px 10px; border-radius: 12px; font-size: 11px;
+            """
+            )
 
-            self.rp_title.setStyleSheet(f"font-size: 16px; font-weight: bold; padding: 10px; color: {text_color}; border-bottom: 2px solid #555;")
-            self.rp_status.setText(f"Status: {status}")
-            self.rp_status.setStyleSheet(f"font-size: 14px; padding: 8px 15px; color: {color}; font-weight: bold;")
+            # Update Progress Bars
+            self.lbl_oee.setText(f"OEE (Hiệu suất): {oee}%")
+            self.bar_oee.setValue(int(oee))
+            bar_color = "#2ecc71" if oee > 85 else ("#f1c40f" if oee > 60 else "#e74c3c")
+            self.bar_oee.setStyleSheet(f"QProgressBar::chunk {{ background-color: {bar_color}; border-radius: 4px; }}")
 
-            info_qss = f"font-size: 14px; padding: 8px 15px; color: {sec_text_color};"
-            self.rp_inputs.setText(f"Inputs: {inputs:,} units")
-            self.rp_outputs.setText(f"Outputs: {outputs:,} units")
-            self.rp_error.setText(f"Last Error: {error}")
-            self.rp_inputs.setStyleSheet(info_qss)
-            self.rp_outputs.setStyleSheet(info_qss)
-            self.rp_error.setStyleSheet("font-size: 14px; padding: 8px 15px; color: #ff6b6b;")
+            self.lbl_yield.setText(f"Yield Rate: {yield_rate}%")
+            self.bar_yield.setValue(int(yield_rate))
+            self.bar_yield.setStyleSheet("QProgressBar::chunk { background-color: #3498db; border-radius: 4px; }")
+
+            # Update Details
+            self.rp_inputs.setText(f"📥 Đầu vào: <b>{inputs:,}</b> sp")
+            self.rp_outputs.setText(f"📦 Đầu ra: <b>{outputs:,}</b> sp")
+            self.rp_cycletime.setText(f"⏱️ Cycle Time: <b>{cycle_time}s</b>")
+
+            # Cảnh báo
+            self.rp_error.setText(f"⚠️ Cảnh báo: {error}")
+            self.rp_error.setStyleSheet(
+                "color: #e74c3c; font-weight: bold;" if error != "None" and error != "No recent errors" else "color: #7f8c8d;"
+            )
 
         self._update_lcd_numbers(summary)
 
