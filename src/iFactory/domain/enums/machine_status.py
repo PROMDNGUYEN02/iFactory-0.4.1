@@ -6,7 +6,7 @@ from enum import Enum, unique
 class MachineStatus(Enum):
     """
     Canonical core states of a manufacturing device.
-    Strictly business definitions. UI colors and translations are explicitly forbidden here.
+    Strictly business definitions.
     """
 
     UNKNOWN = "unknown"
@@ -18,21 +18,22 @@ class MachineStatus(Enum):
 
     @property
     def implies_downtime(self) -> bool:
-        """Business rule: Determine if status constitutes machine downtime."""
+        """Business rule: Determine if status constitutes unvalued machine downtime."""
         return self in (MachineStatus.SHUTDOWN, MachineStatus.MAINTENANCE, MachineStatus.STOPPED, MachineStatus.ALARM)
 
     @property
     def requires_attention(self) -> bool:
-        """Business rule: Determine if operations should be alerted."""
+        """Business rule: Determine if operations management requires alerting."""
         return self in (MachineStatus.ALARM, MachineStatus.STOPPED)
 
     @property
     def is_running(self) -> bool:
+        """Business rule: Determine if value is being generated."""
         return self == MachineStatus.RUNNING
 
     @classmethod
     def from_business_term(cls, value: str | None) -> MachineStatus:
-        """Maps shop-floor vernacular to canonical system states."""
+        """Maps shop-floor PLC/Sensor vernacular to canonical domain states."""
         if not value:
             return cls.UNKNOWN
 

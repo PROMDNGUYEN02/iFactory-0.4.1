@@ -30,6 +30,7 @@ class StatusPeriod:
         return self.time_range.overlaps(other.time_range) or self.time_range.is_adjacent_to(other.time_range)
 
     def merge_with(self, other: StatusPeriod) -> StatusPeriod:
+        """Combines two periods if business rules allow."""
         if self.equipment_code != other.equipment_code:
             raise StatusMergeError.different_devices(self.equipment_code.value, other.equipment_code.value)
         if self.status != other.status:

@@ -13,8 +13,8 @@ from ..policies.status_transition_policy import StatusTransitionPolicy
 @dataclass(slots=True)
 class Device(AggregateRoot):
     """
-    Aggregate Root representing a manufacturing device.
-    Responsible for maintaining business invariants regarding device lifecycle and status state.
+    Aggregate Root representing a distinct manufacturing device on the shop floor.
+    Ensures business invariants regarding equipment state transitions.
     """
 
     equipment_code: EquipmentCode
@@ -24,42 +24,51 @@ class Device(AggregateRoot):
     description: Optional[str] = None
 
     @classmethod
-    def create(cls, code: str, raw_status: Optional[str] = None, name: Optional[str] = None) -> Device:
-        """Factory method to reconstitute a Device aggregate from primitive inputs."""
-        return cls(
-            equipment_code=EquipmentCode(code), current_status=MachineStatus.from_business_term(raw_status), name=name, last_update=datetime.now()
-        )
-
-    @property
-    def code(self) -> str:
-        return self.equipment_code.value
+    def register_new(cls, code: str, name: Optional[str] = None) -> Device:
+        """Factory method to register a new device in the domain."""
+        return cls(equipment_code=EquipmentCode(code), name=name, current_status=MachineStatus.UNKNOWN, last_update=datetime.now())
 
     @property
     def is_operational(self) -> bool:
+        """Domain query: checks if the device is currently producing."""
         return self.current_status.is_running
 
-    def update_status(self, raw_status: str, update_time: Optional[datetime] = None) -> bool:
-        """
-        Business behavior: Updates the device status.
-        Ignores idempotent updates. Validates transitions. Generates Domain Events.
-        """
+    def start_production(self, timestamp: datetime) -> None:
+        """Domain behavior: Operator or system initiates production."""
+        self._transition_to(MachineStatus.RUNNING, timestamp)
+
+    def trigger_alarm(self, timestamp: datetime) -> None:
+        """Domain behavior: Machine faults or safety systems triggered."""
+        self._transition_to(MachineStatus.ALARM, timestamp)
+
+    def begin_maintenance(self, timestamp: datetime) -> None:
+        """Domain behavior: Machine enters scheduled or reactive maintenance."""
+        self._transition_to(MachineStatus.MAINTENANCE, timestamp)
+
+    def shutdown(self, timestamp: datetime) -> None:
+        """Domain behavior: Machine powered down completely."""
+        self._transition_to(MachineStatus.SHUTDOWN, timestamp)
+
+    def stop_operation(self, timestamp: datetime) -> None:
+        """Domain behavior: Machine halted but powered on (idle)."""
+        self._transition_to(MachineStatus.STOPPED, timestamp)
+
+    def report_sensor_status(self, raw_status: str, timestamp: datetime) -> None:
+        """Domain behavior: Inbound telemetry update from physical hardware."""
         new_status = MachineStatus.from_business_term(raw_status)
+        self._transition_to(new_status, timestamp)
 
+    def _transition_to(self, new_status: MachineStatus, timestamp: datetime) -> None:
+        """Internal state mutation enforcing business policies."""
         if self.current_status == new_status:
-            return False
+            return
 
-        # Validate transition against business rules
         StatusTransitionPolicy.validate(self.current_status, new_status)
 
-        ts = update_time or datetime.now()
-
-        # Generate the event
         event = StatusChangedEvent(
-            occurred_at=ts, equipment_code=self.equipment_code.value, previous_status=self.current_status, new_status=new_status
+            occurred_at=timestamp, equipment_code=self.equipment_code.value, previous_status=self.current_status, new_status=new_status
         )
-        self._add_event(event)
+        self._record_event(event)
 
-        # Mutate the internal state
         self.current_status = new_status
-        self.last_update = ts
-        return True
+        self.last_update = timestamp

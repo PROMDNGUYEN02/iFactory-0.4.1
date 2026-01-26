@@ -9,7 +9,7 @@ from ..value_objects.equipment_code import EquipmentCode
 class DeviceRepository(ABC):
     """
     Abstract interface for managing Device Aggregates.
-    Must NOT leak infrastructure dependencies (SQL, JSON, HTTP).
+    Pure domain interface; independent of storage mechanisms (SQL/NoSQL/In-Memory).
     """
 
     @abstractmethod

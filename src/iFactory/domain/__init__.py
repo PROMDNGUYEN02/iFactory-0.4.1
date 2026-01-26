@@ -1,6 +1,8 @@
 """
 iFactory Domain Core.
-This module contains the pure business logic of the application.
-It has zero dependencies on external frameworks, databases, or UI components.
-Built for long-term stability and expressiveness in ubiquitous language.
+This module encapsulates the pure business logic and invariants of the application.
+It has zero dependencies on external frameworks, databases, UI components, or IO operations.
+All logic is expressed in ubiquitous business language.
 """
+
+__version__ = "1.0.0"

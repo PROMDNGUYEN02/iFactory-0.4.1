@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+
 from .base import DomainEvent
 from ..enums.machine_status import MachineStatus
 
