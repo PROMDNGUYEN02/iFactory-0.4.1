@@ -1,6 +1,8 @@
 from typing import List
 from iFactory.application.dto.device_dto import DeviceHistoryDTO
-from iFactory.application.ports.unit_of_work import IUnitOfWork
+
+# [FIXED] Đổi IUnitOfWork thành AbstractUnitOfWork
+from iFactory.application.ports.unit_of_work import AbstractUnitOfWork
 from iFactory.application.exceptions.application_exceptions import ResourceNotFoundException
 
 
@@ -9,12 +11,14 @@ class GetDeviceHistoryQuery:
     QUERY: Fetches historical states of a single device.
     """
 
-    def __init__(self, uow: IUnitOfWork):
+    # [FIXED] Cập nhật type hint
+    def __init__(self, uow: AbstractUnitOfWork):
         self._uow = uow
 
     async def execute(self, equip_code: str) -> List[DeviceHistoryDTO]:
         async with self._uow as uow:
-            device = await uow.devices.get_by_equipment_code(equip_code)
+            # [FIXED] Sửa get_by_equipment_code thành get_by_code
+            device = await uow.devices.get_by_code(equip_code)
             if not device:
                 raise ResourceNotFoundException(f"Device not found: {equip_code}")
 

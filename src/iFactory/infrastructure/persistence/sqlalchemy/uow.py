@@ -1,50 +1,34 @@
 """
-SQLAlchemy Unit of Work.
-Coordinates transactional boundaries. Database Agnostic.
+Infrastructure: Async Unit of Work.
+Quản lý Transaction bất đồng bộ.
 """
 
-from __future__ import annotations
-from typing import Optional
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
+from iFactory.application.ports.unit_of_work import AbstractUnitOfWork
 
-# --- FIX: Import from 'ports' instead of 'interfaces' ---
-from iFactory.application.ports.unit_of_work import IUnitOfWork
-from iFactory.domain.repositories.device_repository import DeviceRepository
+# [FIXED] Import class implementation cụ thể, KHÔNG import Abstract Class
 from iFactory.infrastructure.persistence.sqlalchemy.repository import SqlAlchemyDeviceRepository
 
 
-class SqlAlchemyUnitOfWork(IUnitOfWork):
-    """
-    Implementation of the IUnitOfWork pattern using SQLAlchemy.
-    Binds Application interface contracts to Infrastructure implementations.
-    """
-
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
+    def __init__(self, session_factory):
         self._session_factory = session_factory
-        self._session: Optional[AsyncSession] = None
-        self.devices: Optional[DeviceRepository] = None
+        self._session: AsyncSession = None
 
     async def __aenter__(self):
         self._session = self._session_factory()
+        # [FIXED] Khởi tạo SqlAlchemyDeviceRepository (Concrete Class)
         self.devices = SqlAlchemyDeviceRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
+        if exc_type is not None:
             await self.rollback()
         if self._session:
             await self._session.close()
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
-
     async def commit(self):
-        if self._session:
-            await self._session.commit()
+        await self._session.commit()
 
     async def rollback(self):
-        if self._session:
-            await self._session.rollback()
+        await self._session.rollback()

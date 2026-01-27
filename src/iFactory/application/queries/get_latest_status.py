@@ -5,7 +5,9 @@ Get Latest Device Status Query.
 from typing import Optional
 
 from iFactory.application.dto.device_dto import DeviceStatusDTO
-from iFactory.application.ports.unit_of_work import IUnitOfWork
+
+# [FIXED] Sửa IUnitOfWork thành AbstractUnitOfWork
+from iFactory.application.ports.unit_of_work import AbstractUnitOfWork
 from iFactory.application.ports.cache import ICacheProvider
 from iFactory.application.exceptions.application_exceptions import ResourceNotFoundException
 
@@ -16,7 +18,8 @@ class GetLatestDeviceStatusQuery:
     Uses caching for read optimization.
     """
 
-    def __init__(self, uow: IUnitOfWork, cache: ICacheProvider):
+    # [FIXED] Cập nhật type hint
+    def __init__(self, uow: AbstractUnitOfWork, cache: ICacheProvider):
         self._uow = uow
         self._cache = cache
 
@@ -35,7 +38,8 @@ class GetLatestDeviceStatusQuery:
 
         # 2. Fetch from Database via Unit of Work
         async with self._uow as uow:
-            device = await uow.devices.get_by_equipment_code(equip_code)
+            # [FIXED] Sửa phương thức cho đúng với tên đã định nghĩa ở Repository (get_by_code thay vì get_by_equipment_code)
+            device = await uow.devices.get_by_code(equip_code)
 
         if not device:
             raise ResourceNotFoundException(f"Device not found: {equip_code}")

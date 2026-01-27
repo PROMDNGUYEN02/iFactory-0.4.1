@@ -1,7 +1,9 @@
 from typing import List, Optional
 
 from iFactory.application.dto.device_dto import DeviceStatusDTO
-from iFactory.application.ports.unit_of_work import IUnitOfWork
+
+# [FIXED] Đổi IUnitOfWork thành AbstractUnitOfWork
+from iFactory.application.ports.unit_of_work import AbstractUnitOfWork
 from iFactory.application.ports.cache import ICacheProvider
 
 
@@ -10,7 +12,8 @@ class GetAllDevicesStatusQuery:
     QUERY: Fetches current status of all devices (with 60s cache).
     """
 
-    def __init__(self, uow: IUnitOfWork, cache: ICacheProvider):
+    # [FIXED] Cập nhật type hint
+    def __init__(self, uow: AbstractUnitOfWork, cache: ICacheProvider):
         self._uow = uow
         self._cache = cache
 

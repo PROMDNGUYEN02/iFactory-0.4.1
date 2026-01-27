@@ -1,4 +1,5 @@
-from iFactory.application.ports.unit_of_work import IUnitOfWork
+# [FIXED] Import đúng AbstractUnitOfWork
+from iFactory.application.ports.unit_of_work import AbstractUnitOfWork
 from iFactory.application.ports.remote_data_source import IRemoteDataSource
 from iFactory.domain.entities.device import Device
 
@@ -9,7 +10,8 @@ class SyncDeviceStatusCommand:
     Returns: bool (success)
     """
 
-    def __init__(self, uow: IUnitOfWork, remote_api: IRemoteDataSource):
+    # [FIXED] Type hint AbstractUnitOfWork
+    def __init__(self, uow: AbstractUnitOfWork, remote_api: IRemoteDataSource):
         self._uow = uow
         self._remote_api = remote_api
 
@@ -22,8 +24,14 @@ class SyncDeviceStatusCommand:
             code=raw_data.get("equip_code"), raw_status=raw_data.get("equip_status", "0"), last_update=raw_data.get("last_update")
         )
 
+        # [FIXED] Logic Upsert thay vì save()
         async with self._uow as uow:
-            await uow.devices.save(device_entity)
+            existing = await uow.devices.get_by_code(device_entity.code)
+            if existing:
+                await uow.devices.update(device_entity)
+            else:
+                await uow.devices.add(device_entity)
+
             await uow.commit()
 
         return True

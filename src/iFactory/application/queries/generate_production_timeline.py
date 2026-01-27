@@ -5,7 +5,7 @@ Generate Production Timeline Query.
 from datetime import datetime
 from typing import List, Callable, Any
 
-from iFactory.application.ports.unit_of_work import IUnitOfWork
+from iFactory.application.ports.unit_of_work import AbstractUnitOfWork
 from iFactory.application.ports.cache import ICacheProvider
 
 
@@ -15,7 +15,7 @@ class GenerateProductionTimelineQuery:
     Read-only, no domain mutation.
     """
 
-    def __init__(self, unit_of_work_factory: Callable[[], IUnitOfWork], cache_provider: ICacheProvider):
+    def __init__(self, unit_of_work_factory: Callable[[], AbstractUnitOfWork], cache_provider: ICacheProvider):
         self._uow_factory = unit_of_work_factory
         self._cache = cache_provider
 
@@ -24,22 +24,28 @@ class GenerateProductionTimelineQuery:
         Executes the timeline generation query.
         """
         async with self._uow_factory() as uow:
-            # Assumes the repository has a method to fetch history within a time range
-            history = await uow.devices.get_history(equip_code)
+            # Lấy lịch sử thực tế từ DB (bảng status_periods)
+            history = await uow.devices.get_history(equip_code, start_time, end_time)
 
         segments = []
         for h in history:
-            # Application layer maps the domain entities into simple dictionary segments for the Gantt Chart
-            # Any complex gap-filling logic should ideally reside in a Domain Service,
-            # but mapping to UI structures happens here.
-            segments.append(
-                {
-                    "equip_code": h.code,
-                    "status_code": h.status,
-                    "status_name": h.status_name,
-                    "start_time": h.last_update,
-                    "end_time": end_time,  # Placeholder for sequence logic
-                }
-            )
+            # Xử lý kỳ đang mở (chưa kết thúc) -> end_time = thời gian kết thúc của biểu đồ (hoặc now)
+            segment_end = h.end_time if h.end_time else end_time
+
+            # Cắt bớt nếu segment vượt quá phạm vi chart để hiển thị đúng khung nhìn
+            valid_start = max(h.start_time, start_time)
+            valid_end = min(segment_end, end_time)
+
+            if valid_start < valid_end:
+                segments.append(
+                    {
+                        "equip_code": h.device_code,
+                        "status_code": h.status_code,
+                        # Nếu có mapping status name, có thể map ở đây hoặc ở Presenter
+                        "status_name": h.status_code,
+                        "start_time": valid_start,
+                        "end_time": valid_end,
+                    }
+                )
 
         return segments

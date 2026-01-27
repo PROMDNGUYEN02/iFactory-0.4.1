@@ -6,10 +6,10 @@ from ..exceptions.device_exceptions import InvalidEquipmentCodeError
 
 @dataclass(frozen=True, slots=True)
 class EquipmentCode:
-    """Identity Value Object for Factory Equipment. Enforces naming conventions and immutability."""
+    """Identity Value Object for Factory Equipment. Enforces naming conventions."""
 
     value: str
-    _PATTERN = re.compile(r"^[A-Z]{2,4}[0-9]*$")
+    _PATTERN = re.compile(r"^[A-Z0-9\-_]+$")
 
     def __post_init__(self):
         raw_val = str(self.value).strip().upper()

@@ -1,27 +1,49 @@
 """
-SQLAlchemy Async Engine Configuration.
+Infrastructure: Async SQLAlchemy Engine Configuration.
+
+Sử dụng driver `aiosqlite` để không làm treo giao diện PyQt/PySide6.
 """
 
-import logging
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from iFactory.infrastructure.persistence.sqlalchemy.models import Base
+from functools import lru_cache
+from typing import Optional
 
-logger = logging.getLogger(__name__)
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
+from iFactory.infrastructure.config.db_config import DatabaseConfig
 
 
-class AsyncDatabaseEngine:
-    """Manages Async SQLAlchemy connection pool and session factory."""
+@lru_cache(maxsize=1)
+def get_hot_engine() -> AsyncEngine:
+    """Khởi tạo Async Engine cho Hot Storage."""
+    config = DatabaseConfig()
+    # Chuyển sqlite:/// thành sqlite+aiosqlite:///
+    url = config.hot_db_url.replace("sqlite:///", "sqlite+aiosqlite:///")
+    return create_async_engine(url, echo=config.echo)
 
-    def __init__(self, db_url: str):
-        self._engine = create_async_engine(db_url, echo=False)
-        self._session_factory = async_sessionmaker(bind=self._engine, class_=AsyncSession, expire_on_commit=False, autoflush=False)
 
-    async def init_db(self) -> None:
-        async with self._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+@lru_cache(maxsize=1)
+def get_cold_engine() -> AsyncEngine:
+    """Khởi tạo Async Engine cho Cold Storage."""
+    config = DatabaseConfig()
+    url = config.cold_db_url.replace("sqlite:///", "sqlite+aiosqlite:///")
+    return create_async_engine(url, echo=config.echo)
 
-    def get_session_factory(self) -> async_sessionmaker[AsyncSession]:
-        return self._session_factory
 
-    async def dispose(self) -> None:
-        await self._engine.dispose()
+@lru_cache(maxsize=1)
+def get_mssql_engine() -> Optional[AsyncEngine]:
+    """Khởi tạo Async Engine cho MSSQL (sử dụng aioodbc)."""
+    config = DatabaseConfig()
+    url = config.mssql_url
+
+    if not url:
+        return None
+
+    # Chuyển pyodbc sang aioodbc cho async
+    async_url = url.replace("pyodbc", "aioodbc")
+    return create_async_engine(
+        async_url,
+        echo=config.echo,
+        pool_size=config.pool_size,
+        max_overflow=config.max_overflow,
+        pool_timeout=30,
+        pool_recycle=180,
+    )

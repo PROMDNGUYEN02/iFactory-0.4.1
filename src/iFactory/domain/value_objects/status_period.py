@@ -1,41 +1,44 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 from .equipment_code import EquipmentCode
 from .time_range import TimeRange
 from ..enums.machine_status import MachineStatus
-from ..exceptions.time_exceptions import StatusMergeError
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class StatusPeriod:
-    """
-    A continuous period where a specific device was in a specific state.
-    Used for machine history and production reporting.
-    """
-
     equipment_code: EquipmentCode
     status: MachineStatus
     time_range: TimeRange
+    id: Optional[str] = None
 
     @classmethod
-    def create(cls, code: str, raw_status: str, start: datetime, end: datetime) -> StatusPeriod:
-        return cls(equipment_code=EquipmentCode(code), status=MachineStatus.from_business_term(raw_status), time_range=TimeRange(start, end))
+    def create(cls, code: str, raw_status: str, start: datetime, end: Optional[datetime] = None, id: Optional[str] = None) -> StatusPeriod:
+        # [FIXED] Đồng bộ tham số để Command gọi không bị lỗi NoneType
+        return cls(id=id, equipment_code=EquipmentCode(code), status=MachineStatus.from_business_term(raw_status), time_range=TimeRange(start, end))
 
-    def is_mergeable_with(self, other: StatusPeriod) -> bool:
-        """Business rule: Two periods can merge if they are the same device, same state, and touch in time."""
-        if self.equipment_code != other.equipment_code or self.status != other.status:
-            return False
-        return self.time_range.overlaps(other.time_range) or self.time_range.is_adjacent_to(other.time_range)
+    @property
+    def device_code(self) -> str:
+        return self.equipment_code.value
 
-    def merge_with(self, other: StatusPeriod) -> StatusPeriod:
-        """Combines two periods if business rules allow."""
-        if self.equipment_code != other.equipment_code:
-            raise StatusMergeError.different_devices(self.equipment_code.value, other.equipment_code.value)
-        if self.status != other.status:
-            raise StatusMergeError.different_statuses(self.status.value, other.status.value)
-        if not self.is_mergeable_with(other):
-            raise StatusMergeError.non_adjacent()
+    @property
+    def status_code(self) -> str:
+        return str(self.status.value)
 
-        return StatusPeriod(equipment_code=self.equipment_code, status=self.status, time_range=self.time_range.union(other.time_range))
+    @property
+    def start_time(self) -> datetime:
+        return self.time_range.start
+
+    @property
+    def end_time(self) -> Optional[datetime]:
+        return self.time_range.end
+
+    @end_time.setter
+    def end_time(self, value: datetime):
+        # [FIXED] Cập nhật end_time bằng cách tạo mới TimeRange một cách an toàn
+        # Đảm bảo end_time mới không nhỏ hơn start_time
+        safe_end = max(value, self.start_time)
+        self.time_range = TimeRange(self.start_time, safe_end)

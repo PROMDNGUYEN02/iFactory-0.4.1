@@ -1,82 +1,96 @@
-"""
-MSSQL Data Source Adapter.
-Fetches raw primitive data. Does not interpret business meaning.
-"""
-
-from __future__ import annotations
 import logging
-from typing import Sequence, Dict, Any
-from sqlalchemy import text, bindparam
+from typing import List, Optional, Dict, Any
+from datetime import datetime
 from sqlalchemy.ext.asyncio import create_async_engine
-
-# --- FIX: Import from 'ports' instead of 'interfaces' ---
+from sqlalchemy import text
 from iFactory.application.ports.remote_data_source import IRemoteDataSource
 
 logger = logging.getLogger(__name__)
 
 
 class MssqlDataSource(IRemoteDataSource):
-    """
-    MSSQL implementation of IRemoteDataSource.
-    Returns primitive RAW dictionaries. Translation to Domain logic happens in the Application Layer.
-    """
-
-    SQL_LATEST_STATUS = """
-        WITH latest AS (
-            SELECT 
-                EQUIP_CODE, 
-                EQUIP_STATUS, 
-                START_TIME, 
-                END_TIME,
-                ROW_NUMBER() OVER (
-                    PARTITION BY EQUIP_CODE
-                    ORDER BY CASE WHEN END_TIME IS NULL THEN 0 ELSE 1 END, 
-                             START_TIME DESC
-                ) AS rn
-            FROM TT_EQ_STATUS 
-            WHERE EQUIP_CODE IN :codes
-        )
-        SELECT EQUIP_CODE, EQUIP_STATUS, START_TIME, END_TIME 
-        FROM latest 
-        WHERE rn = 1
-    """
-
     def __init__(self, connection_string: str):
-        self._engine = create_async_engine(connection_string, echo=False)
+        if "TrustServerCertificate" not in connection_string:
+            connection_string += "&TrustServerCertificate=yes"
+        self._engine = create_async_engine(connection_string, pool_pre_ping=True, echo=False)
 
-    async def fetch_latest_status(self, codes: Sequence[str]) -> Sequence[Dict[str, Any]]:
-        if not codes:
+    def _parse_datetime(self, val: Any) -> datetime:
+        """Helper để convert dữ liệu thời gian từ SQL sang Python datetime."""
+        if isinstance(val, datetime):
+            return val
+        if isinstance(val, str):
+            try:
+                # Cắt bớt phần nano giây dư thừa nếu có (MSSQL thường có 7 chữ số sau dấu chấm)
+                clean_val = val[:23] if len(val) > 23 else val
+                return datetime.strptime(clean_val, "%Y-%m-%d %H:%M:%S.%f")
+            except Exception:
+                try:
+                    return datetime.strptime(val.split(".")[0], "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    return datetime.now()
+        return datetime.now()
+
+    async def fetch_latest_status(self, equipment_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        query = """
+        WITH RankedStatus AS (
+            SELECT 
+                EQUIP_CODE, EQUIP_STATUS, START_TIME,
+                ROW_NUMBER() OVER (PARTITION BY EQUIP_CODE ORDER BY START_TIME DESC) as rn
+            FROM TT_EQ_STATUS
+            WHERE DEL_FLAG = '0' OR DEL_FLAG IS NULL
+        )
+        SELECT EQUIP_CODE, EQUIP_STATUS, START_TIME
+        FROM RankedStatus
+        WHERE rn = 1
+        """
+
+        try:
+            async with self._engine.connect() as conn:
+                result = await conn.execute(text(query))
+                rows = result.fetchall()
+
+                data = []
+                for row in rows:
+                    # Mapping chính xác dựa trên kết quả debug
+                    data.append(
+                        {
+                            "equip_code": str(row[0]).strip(),
+                            "equip_status": str(row[1]),
+                            "raw_status": str(row[1]),
+                            "last_update": self._parse_datetime(row[2]),  # Ép kiểu datetime chuẩn
+                        }
+                    )
+
+                if data:
+                    logger.info(f"[MssqlDataSource] Fetched {len(data)} records from MSSQL.")
+                return data
+
+        except Exception as e:
+            logger.error(f"[MssqlDataSource] Error: {e}")
             return []
 
-        stmt = text(self.SQL_LATEST_STATUS).bindparams(bindparam("codes", expanding=True))
+    async def fetch_device_status(self, equip_code: str) -> Optional[Dict[str, Any]]:
+        query = """
+        SELECT TOP 1 EQUIP_CODE, EQUIP_STATUS, START_TIME
+        FROM TT_EQ_STATUS
+        WHERE EQUIP_CODE = :code
+        ORDER BY START_TIME DESC
+        """
+        try:
+            async with self._engine.connect() as conn:
+                result = await conn.execute(text(query), {"code": equip_code})
+                row = result.fetchone()
+                if row:
+                    return {
+                        "equip_code": str(row[0]).strip(),
+                        "equip_status": str(row[1]),
+                        "raw_status": str(row[1]),
+                        "last_update": self._parse_datetime(row[2]),
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"[MssqlDataSource] Error device {equip_code}: {e}")
+            return None
 
-        async with self._engine.connect() as conn:
-            result = await conn.execute(stmt, {"codes": list(codes)})
-            rows = result.fetchall()
-
-        return [
-            {
-                "equip_code": str(row[0]) if row[0] else "",
-                "raw_status": str(row[1]) if row[1] is not None else "",
-                "start_time": row[2],
-                "end_time": row[3],
-            }
-            for row in rows
-        ]
-
-    async def fetch_all_devices(self) -> Sequence[Dict[str, Any]]:
-        async with self._engine.connect() as conn:
-            result = await conn.execute(text("SELECT DISTINCT EQUIP_CODE FROM TT_EQ_STATUS WHERE EQUIP_CODE IS NOT NULL"))
-            actual_codes = [str(row[0]) for row in result.fetchall()]
-
-            if not actual_codes:
-                return []
-
-        return await self.fetch_latest_status(actual_codes)
-
-    async def fetch_device_status(self, equip_code: str) -> Dict[str, Any]:
-        results = await self.fetch_latest_status([equip_code])
-        return results[0] if results else {"equip_code": equip_code, "raw_status": "unknown"}
-
-    async def dispose(self) -> None:
+    async def dispose(self):
         await self._engine.dispose()
