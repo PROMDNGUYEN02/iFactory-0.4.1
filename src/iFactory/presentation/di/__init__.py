@@ -1,5 +1,3 @@
-"""Dependency Injection for Presentation Layer."""
+from .presentation_container import PresentationContainer
 
-from .ui_container import UIContainer
-
-__all__ = ["UIContainer"]
+__all__ = ["PresentationContainer"]

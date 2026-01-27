@@ -40,7 +40,7 @@ from iFactory.application.commands.sync_device_status import SyncDeviceStatusCom
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
-    from iFactory.presentation.di.ui_container import UIContainer
+    from iFactory.presentation.di.presentation_container import UIContainer
     from iFactory.presentation.adapters import QtSignalAdapter
 
 logger = logging.getLogger(__name__)
@@ -283,7 +283,7 @@ class AppContainer:
 
     def _init_presentation(self) -> None:
         from iFactory.presentation.adapters import QtSignalAdapter
-        from iFactory.presentation.di.ui_container import UIContainer
+        from iFactory.presentation.di.presentation_container import UIContainer
 
         self._signal_adapter = QtSignalAdapter()
         self._ui_container = UIContainer(app_container=self)

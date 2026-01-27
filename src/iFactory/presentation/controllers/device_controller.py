@@ -1,67 +1,63 @@
-"""
-Device Controller - Handles device data fetching use case.
-Single Responsibility: Load and refresh device list.
-"""
-
-from __future__ import annotations
-
 import logging
-from typing import TYPE_CHECKING
+from typing import List
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Slot, Signal, QTimer
 
-from ..ui_state.actions import load_devices
-
-if TYPE_CHECKING:
-    from ..presenters.device_presenter import DevicePresenter
-    from ..ui_state.store import Store
+from iFactory.application.use_cases.queries.device_queries import DeviceQueries
+from iFactory.application.use_cases.commands.sync_commands import SyncDevicesCommand
+from iFactory.application.dto.device_dto import DeviceSummaryDTO
+from iFactory.presentation.adapters.async_executor import AsyncExecutor
+from iFactory.presentation.viewmodels.device_viewmodel import DeviceViewModel
 
 logger = logging.getLogger(__name__)
 
 
 class DeviceController(QObject):
     """
-    Coordinates device data fetching between Application layer and UI State.
+    Controller for Device Management use cases.
+    Handles 'Refresh', 'Sync', and 'Select Device' actions.
     """
 
-    def __init__(
-        self,
-        device_service,
-        presenter: "DevicePresenter",
-        store: "Store",
-        parent=None,
-    ):
+    devices_loaded = Signal(list)  # List[DeviceViewModel]
+    sync_finished = Signal(bool)  # Success/Fail
+
+    def __init__(self, executor: AsyncExecutor, queries: DeviceQueries, sync_command: SyncDevicesCommand, parent=None):
         super().__init__(parent)
-        self._device_service = device_service
-        self._presenter = presenter
-        self._store = store
+        self._executor = executor
+        self._queries = queries
+        self._sync_command = sync_command
 
-    async def refresh_all_devices(self) -> int:
-        """
-        Fetch devices from Application layer, transform to ViewModels, dispatch to Store.
-        Returns count of devices loaded.
-        """
-        try:
-            dtos = await self._device_service.get_all_latest_status()
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.timeout.connect(self.trigger_sync)
 
-            if not dtos:
-                logger.debug("[DeviceController] No devices returned.")
-                return 0
+    def start_auto_refresh(self, interval_ms: int = 5000):
+        self._auto_refresh_timer.start(interval_ms)
 
-            dto_map = {d.equip_code: d for d in dtos}
-            view_models = self._presenter.present_device_list(dto_map)
+    def stop_auto_refresh(self):
+        self._auto_refresh_timer.stop()
 
-            self._store.dispatch(load_devices(view_models))
-            logger.debug(f"[DeviceController] Loaded {len(view_models)} devices.")
-            return len(view_models)
+    @Slot()
+    def load_devices(self):
+        """Fetches latest device states for display."""
+        self._executor.run(
+            self._queries.get_all_summaries(), on_success=self._on_devices_loaded, on_error=lambda err: logger.error(f"Load devices failed: {err}")
+        )
 
-        except Exception as e:
-            logger.error(f"[DeviceController] Failed to refresh devices: {e}", exc_info=True)
-            return 0
+    @Slot()
+    def trigger_sync(self):
+        """Executes the sync command to update system state from external source."""
+        self._executor.run(self._sync_command.execute(), on_success=self._on_sync_success, on_error=self._on_sync_error)
 
-    async def load_from_cache(self) -> int:
-        """Load initial state on startup."""
-        return await self.refresh_all_devices()
+    def _on_sync_success(self, _):
+        # After sync, reload the view
+        self.sync_finished.emit(True)
+        self.load_devices()
 
+    def _on_sync_error(self, error: str):
+        logger.warning(f"Sync failed: {error}")
+        self.sync_finished.emit(False)
 
-__all__ = ["DeviceController"]
+    def _on_devices_loaded(self, dtos: List[DeviceSummaryDTO]):
+        # Map DTOs to ViewModels
+        viewmodels = [DeviceViewModel.from_dto(dto) for dto in dtos]
+        self.devices_loaded.emit(viewmodels)

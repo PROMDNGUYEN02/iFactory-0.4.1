@@ -1,7 +1,5 @@
-"""Presentation Controllers - One controller per use case."""
-
+from .main_controller import MainController
 from .device_controller import DeviceController
 from .gantt_controller import GanttController
-from .main_controller import MainController
 
-__all__ = ["DeviceController", "GanttController", "MainController"]
+__all__ = ["MainController", "DeviceController", "GanttController"]
