@@ -20,8 +20,8 @@ from .models import (
     MaterialInputHistoryModel,
     MaterialInputModel,
 )
-from .mapper import OrmDeviceMapper
-from .repository import HotStorageRepository, ColdStorageRepository
+from .mappers import OrmDeviceMapper
+from .database import HotStorageRepository, ColdStorageRepository
 from .uow import (
     HotStorageUnitOfWork,
     ColdStorageUnitOfWork,

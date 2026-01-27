@@ -1,39 +1,31 @@
-"""
-Infrastructure: Application Paths Management.
-Đảm bảo các thư mục hệ thống (data, logs, db) luôn tồn tại.
-"""
-
-from functools import lru_cache
+import sys
 from pathlib import Path
 
 
-@lru_cache(maxsize=1)
-def get_project_root() -> Path:
-    """Trả về thư mục gốc của project."""
-    return Path(__file__).resolve().parents[4]
-
-
 class AppPaths:
-    def __init__(self):
-        self.project_root = get_project_root()
-        self.data_dir = self.project_root / "data"
-        self.storage_dir = self.data_dir / "storage_data"
-        self.logs_dir = self.project_root / "logs"
+    """
+    Centralized path management for the application.
+    Resolves paths relative to the executable or source root.
+    """
 
-        # Database paths
-        self.hot_db_path = self.data_dir / "hot_store.db"
-        self.cold_db_path = self.data_dir / "cold_store.db"
+    @staticmethod
+    def get_base_path() -> Path:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).parent
+        return Path(__file__).parent.parent.parent.parent.parent
 
-        # Config paths
-        self.settings_path = self.data_dir / "settings.json"
-        self.device_positions_path = self.data_dir / "device_positions.json"
+    @staticmethod
+    def get_config_path() -> Path:
+        return AppPaths.get_base_path() / "config"
 
-    def ensure_directories(self) -> None:
-        """
-        [FIX BUGS] Đảm bảo thư mục tồn tại trước khi SQLAlchemy ghi file.
-        """
-        for directory in [self.data_dir, self.storage_dir, self.logs_dir]:
-            directory.mkdir(parents=True, exist_ok=True)
+    @staticmethod
+    def get_logs_path() -> Path:
+        logs = AppPaths.get_base_path() / "logs"
+        logs.mkdir(exist_ok=True)
+        return logs
 
-
-PATHS = AppPaths()
+    @staticmethod
+    def get_data_path() -> Path:
+        data = AppPaths.get_base_path() / "data"
+        data.mkdir(exist_ok=True)
+        return data

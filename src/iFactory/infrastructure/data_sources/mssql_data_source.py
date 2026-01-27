@@ -3,34 +3,52 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
+
 from iFactory.application.ports.remote_data_source import IRemoteDataSource
 
 logger = logging.getLogger(__name__)
 
 
 class MssqlDataSource(IRemoteDataSource):
+    """
+    Implementation of IRemoteDataSource for Microsoft SQL Server.
+    Strictly adapts infrastructure data to generic dictionary structures.
+    """
+
     def __init__(self, connection_string: str):
+        # Force async driver if not specified, though usually injected via config
         if "TrustServerCertificate" not in connection_string:
             connection_string += "&TrustServerCertificate=yes"
-        self._engine = create_async_engine(connection_string, pool_pre_ping=True, echo=False)
+        self._engine = create_async_engine(
+            connection_string,
+            pool_pre_ping=True,
+            echo=False,
+        )
 
     def _parse_datetime(self, val: Any) -> datetime:
-        """Helper để convert dữ liệu thời gian từ SQL sang Python datetime."""
         if isinstance(val, datetime):
             return val
         if isinstance(val, str):
             try:
-                # Cắt bớt phần nano giây dư thừa nếu có (MSSQL thường có 7 chữ số sau dấu chấm)
+                # Truncate fractional seconds to microseconds (6 digits)
                 clean_val = val[:23] if len(val) > 23 else val
                 return datetime.strptime(clean_val, "%Y-%m-%d %H:%M:%S.%f")
             except Exception:
                 try:
                     return datetime.strptime(val.split(".")[0], "%Y-%m-%d %H:%M:%S")
                 except Exception:
-                    return datetime.now()
+                    pass
         return datetime.now()
 
-    async def fetch_latest_status(self, equipment_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    async def fetch_latest_status(
+        self,
+        equipment_codes: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetches the latest status for all or specific equipment.
+        Returns a list of dictionaries with keys: equip_code, raw_status, timestamp.
+        """
+        # Optimized query using Window Function to get the latest record per group
         query = """
         WITH RankedStatus AS (
             SELECT 
@@ -51,25 +69,23 @@ class MssqlDataSource(IRemoteDataSource):
 
                 data = []
                 for row in rows:
-                    # Mapping chính xác dựa trên kết quả debug
                     data.append(
                         {
                             "equip_code": str(row[0]).strip(),
-                            "equip_status": str(row[1]),
                             "raw_status": str(row[1]),
-                            "last_update": self._parse_datetime(row[2]),  # Ép kiểu datetime chuẩn
+                            "timestamp": self._parse_datetime(row[2]),
                         }
                     )
-
-                if data:
-                    logger.info(f"[MssqlDataSource] Fetched {len(data)} records from MSSQL.")
                 return data
 
         except Exception as e:
-            logger.error(f"[MssqlDataSource] Error: {e}")
+            logger.error(f"[MssqlDataSource] Batch fetch error: {e}")
             return []
 
     async def fetch_device_status(self, equip_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetches status for a single device.
+        """
         query = """
         SELECT TOP 1 EQUIP_CODE, EQUIP_STATUS, START_TIME
         FROM TT_EQ_STATUS
@@ -83,14 +99,13 @@ class MssqlDataSource(IRemoteDataSource):
                 if row:
                     return {
                         "equip_code": str(row[0]).strip(),
-                        "equip_status": str(row[1]),
                         "raw_status": str(row[1]),
-                        "last_update": self._parse_datetime(row[2]),
+                        "timestamp": self._parse_datetime(row[2]),
                     }
                 return None
         except Exception as e:
-            logger.error(f"[MssqlDataSource] Error device {equip_code}: {e}")
+            logger.error(f"[MssqlDataSource] Single fetch error {equip_code}: {e}")
             return None
 
-    async def dispose(self):
+    async def dispose(self) -> None:
         await self._engine.dispose()
