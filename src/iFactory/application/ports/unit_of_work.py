@@ -1,41 +1,33 @@
-"""
-Application Port: Unit of Work Interface.
-Defines async transaction management interface for Infrastructure layer.
-"""
+from abc import ABC, abstractmethod
+from typing import Optional
 
-from __future__ import annotations
-
-import abc
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from iFactory.domain.repositories.device_repository import DeviceRepository
+from iFactory.domain.repositories.device_repository import DeviceRepository
+from iFactory.domain.repositories.production_repository import ProductionRepository
 
 
-class AbstractUnitOfWork(abc.ABC):
+class AbstractUnitOfWork(ABC):
     """
-    Port for managing transaction boundaries (Async Context Manager).
-    Ensures data integrity (ACID) for database operations.
+    Abstract Unit of Work.
+    Manages transaction boundaries and provides access to Repositories.
     """
 
-    devices: "DeviceRepository"
+    devices: DeviceRepository
+    production: ProductionRepository
 
-    @abc.abstractmethod
+    @abstractmethod
     async def __aenter__(self) -> "AbstractUnitOfWork":
-        """Enter async context manager."""
         pass
 
-    @abc.abstractmethod
+    @abstractmethod
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Exit async context manager, handle rollback on error."""
         pass
 
-    @abc.abstractmethod
+    @abstractmethod
     async def commit(self) -> None:
-        """Commit all changes to the database."""
+        """Commits the current transaction."""
         pass
 
-    @abc.abstractmethod
+    @abstractmethod
     async def rollback(self) -> None:
-        """Rollback all changes on error."""
+        """Rolls back the current transaction."""
         pass
