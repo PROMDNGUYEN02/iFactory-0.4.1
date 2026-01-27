@@ -23,44 +23,48 @@ def configure_logging() -> None:
     root_logger = logging.getLogger()
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    )
     for noisy in ("aiosqlite", "qasync", "sqlalchemy.engine"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 async def init_database() -> None:
     """
-    [FIXED] Khởi tạo Database Bất đồng bộ (Async).
-    Sử dụng conn.run_sync() để tạo bảng với AsyncEngine.
+    Initialize both Hot and Cold Storage databases.
+    Uses conn.run_sync() to create tables with AsyncEngine.
     """
-    try:
-        logger.info("Initializing database...")
-        # 1. Đảm bảo thư mục vật lý tồn tại
-        from iFactory.infrastructure.config.app_paths import PATHS
+    # 1. Ensure physical directories exist
+    from iFactory.infrastructure.config.app_paths import PATHS
 
-        PATHS.ensure_directories()
+    PATHS.ensure_directories()
 
-        # 2. Lấy Async Engine
-        from iFactory.infrastructure.persistence.sqlalchemy.engine import get_hot_engine, get_cold_engine
+    # 2. Get Async Engines
+    from iFactory.infrastructure.persistence.sqlalchemy.engine import (
+        get_hot_engine,
+        get_cold_engine,
+    )
 
-        hot_engine = get_hot_engine()
-        cold_engine = get_cold_engine()
+    hot_engine = get_hot_engine()
+    cold_engine = get_cold_engine()
 
-        # 3. Tạo bảng thông qua run_sync()
-        from iFactory.infrastructure.persistence.sqlalchemy.models import Base
+    # 3. Import Base classes
+    from iFactory.infrastructure.persistence.sqlalchemy.models import (
+        HotBase,
+        ColdBase,
+    )
 
-        # Khởi tạo Hot Store
-        async with hot_engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+    # 4. Initialize Hot Store (latest status, latest inputs)
+    async with hot_engine.begin() as conn:
+        await conn.run_sync(HotBase.metadata.create_all)
+    logger.debug("Hot Storage tables initialized.")
 
-        # Khởi tạo Cold Store
-        async with cold_engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-        logger.info("Database initialized and tables verified successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
-        raise
+    # 5. Initialize Cold Store (status history, material history)
+    async with cold_engine.begin() as conn:
+        await conn.run_sync(ColdBase.metadata.create_all)
+    logger.debug("Cold Storage tables initialized.")
 
 
 def create_qt_application():
@@ -89,16 +93,22 @@ def run_application() -> int:
     logger.info("=" * 60)
     logger.info("iFactory starting...")
     logger.info("=" * 60)
-    try:
-        # [FIXED] Chạy hàm khởi tạo database async bằng asyncio.run()
-        # Việc này đảm bảo DB được tạo xong hoàn toàn TRƯỚC khi Qt App khởi chạy.
-        asyncio.run(init_database())
 
+    try:
+        # Initialize databases (Hot + Cold) before Qt App starts
+        logger.info("Initializing database...")
+        asyncio.run(init_database())
+        logger.info("Database initialized and tables verified successfully.")
+
+        # Create Qt Application
         qt_app = create_qt_application()
+
+        # Run via ApplicationRunner
         from iFactory.shared.di import ApplicationRunner
 
         runner = ApplicationRunner(qt_app)
         return runner.run()
+
     except Exception as e:
         logger.exception(f"Fatal error: {e}")
         _show_error(f"Application failed:\n\n{e}")

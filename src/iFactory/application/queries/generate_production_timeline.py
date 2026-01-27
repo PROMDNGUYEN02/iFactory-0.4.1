@@ -1,38 +1,54 @@
 """
 Generate Production Timeline Query.
+Uses Cold Storage for history data.
 """
 
 from datetime import datetime
-from typing import List, Callable, Any
+from typing import List, Callable
 
-from iFactory.application.ports.unit_of_work import AbstractUnitOfWork
 from iFactory.application.ports.cache import ICacheProvider
 
 
 class GenerateProductionTimelineQuery:
     """
-    QUERY: Fetches production history for a device and formats it as a timeline.
+    QUERY: Fetches production history from Cold Storage and formats it as a timeline.
     Read-only, no domain mutation.
     """
 
-    def __init__(self, unit_of_work_factory: Callable[[], AbstractUnitOfWork], cache_provider: ICacheProvider):
-        self._uow_factory = unit_of_work_factory
-        self._cache = cache_provider
+    def __init__(
+        self,
+        uow_factory: Callable,  # Returns ColdStorageUnitOfWork
+        cache: ICacheProvider,
+    ):
+        self._uow_factory = uow_factory
+        self._cache = cache
 
-    async def execute(self, equip_code: str, start_time: datetime, end_time: datetime, fill_gaps: bool = True) -> List[dict]:
+    async def execute(
+        self,
+        equip_code: str,
+        start_time: datetime,
+        end_time: datetime,
+        fill_gaps: bool = True,
+    ) -> List[dict]:
         """
-        Executes the timeline generation query.
+        Executes the timeline generation query using Cold Storage.
         """
+        # Try cache first
+        cache_key = f"timeline_{equip_code}_{start_time.isoformat()}_{end_time.isoformat()}"
+        cached = await self._cache.get(cache_key)
+        if cached:
+            return cached
+
         async with self._uow_factory() as uow:
-            # Lấy lịch sử thực tế từ DB (bảng status_periods)
-            history = await uow.devices.get_history(equip_code, start_time, end_time)
+            # Get history from Cold Storage (via history repository)
+            history = await uow.history.get_history(equip_code, start_time, end_time)
 
         segments = []
         for h in history:
-            # Xử lý kỳ đang mở (chưa kết thúc) -> end_time = thời gian kết thúc của biểu đồ (hoặc now)
+            # Handle open period (not yet ended) -> end_time = chart end or now
             segment_end = h.end_time if h.end_time else end_time
 
-            # Cắt bớt nếu segment vượt quá phạm vi chart để hiển thị đúng khung nhìn
+            # Clip to chart boundaries
             valid_start = max(h.start_time, start_time)
             valid_end = min(segment_end, end_time)
 
@@ -40,12 +56,14 @@ class GenerateProductionTimelineQuery:
                 segments.append(
                     {
                         "equip_code": h.device_code,
-                        "status_code": h.status_code,
-                        # Nếu có mapping status name, có thể map ở đây hoặc ở Presenter
-                        "status_name": h.status_code,
+                        "status_code": str(h.status_code),  # Convert to string
+                        "status_name": h.status_name,
                         "start_time": valid_start,
                         "end_time": valid_end,
                     }
                 )
+
+        # Cache for 30 seconds
+        await self._cache.set(cache_key, segments, ttl=30)
 
         return segments

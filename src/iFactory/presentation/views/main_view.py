@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import TYPE_CHECKING, Dict, Any
+from typing import TYPE_CHECKING, Dict, Any, Optional
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt
 from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
@@ -70,6 +70,7 @@ class MainView(QMainWindow):
         self._current_theme = "light"
         self._is_menu_open = False
         self._is_right_panel_open = False
+        self._selected_menu_index: Optional[int] = None
 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
@@ -86,6 +87,7 @@ class MainView(QMainWindow):
 
         self._apply_theme(self._current_theme)
 
+        # Collapse menu initially
         current_state = self._store.get_state()
         if current_state.get("left_menu_expanded", True):
             self._controller.handle_left_menu_toggle()
@@ -184,6 +186,11 @@ class MainView(QMainWindow):
         settings_item = QListWidgetItem(QIcon(":/icon/settings.svg"), "Settings")
         settings_item.setData(Qt.UserRole, "settings_page")
         self.ui.listWidget_settings.addItem(settings_item)
+
+        # Select first item (Dashboard) by default
+        if self.ui.listWidget.count() > 0:
+            self.ui.listWidget.setCurrentRow(0)
+            self._selected_menu_index = 0
 
     def _setup_right_panel(self) -> None:
         """Configure right detail panel."""
@@ -305,8 +312,48 @@ class MainView(QMainWindow):
     def _connect_ui_events(self) -> None:
         """Connect UI widget signals to controller."""
         self.ui.pushButton.clicked.connect(self._controller.handle_left_menu_toggle)
-        self.ui.listWidget.itemClicked.connect(lambda item: self._controller.handle_navigation(item.data(Qt.UserRole)))
-        self.ui.listWidget_settings.itemClicked.connect(lambda item: self._controller.handle_navigation(item.data(Qt.UserRole)))
+        self.ui.listWidget.itemClicked.connect(self._on_menu_item_clicked)
+        self.ui.listWidget_settings.itemClicked.connect(self._on_settings_clicked)
+
+    def _on_menu_item_clicked(self, item: QListWidgetItem) -> None:
+        """Handle menu item click with selection update."""
+        page_id = item.data(Qt.UserRole)
+        row = self.ui.listWidget.row(item)
+
+        # Clear settings selection
+        self.ui.listWidget_settings.clearSelection()
+
+        # Update selection state
+        self._selected_menu_index = row
+
+        # Navigate to page
+        self._controller.handle_navigation(page_id)
+
+    def _on_settings_clicked(self, item: QListWidgetItem) -> None:
+        """Handle settings menu click."""
+        page_id = item.data(Qt.UserRole)
+
+        # Clear main menu selection
+        self.ui.listWidget.clearSelection()
+
+        # Update selection state
+        self._selected_menu_index = -1  # Settings is special
+
+        # Navigate to page
+        self._controller.handle_navigation(page_id)
+
+    def select_menu_item(self, index: int) -> None:
+        """Public method to select menu item by index."""
+        if 0 <= index < self.ui.listWidget.count():
+            self.ui.listWidget.setCurrentRow(index)
+            self.ui.listWidget_settings.clearSelection()
+            self._selected_menu_index = index
+
+            # Also navigate to the page
+            item = self.ui.listWidget.item(index)
+            if item:
+                page_id = item.data(Qt.UserRole)
+                self._controller.handle_navigation(page_id)
 
     def _on_device_clicked(self, device_id: str) -> None:
         """Handle device selection from canvas."""
@@ -330,27 +377,33 @@ class MainView(QMainWindow):
 
         self._is_right_panel_open = panel_expanded
 
+        # Navigate to page
         target = self.ui.stackedWidget.findChild(QWidget, page)
         if target and self.ui.stackedWidget.currentWidget() != target:
             self.ui.stackedWidget.setCurrentWidget(target)
 
+        # Update menu width
         menu_w = UIConstants.MENU_EXPANDED_WIDTH if menu_expanded else UIConstants.MENU_COLLAPSED_WIDTH
         self.ui.left_slide_menu_frame.setFixedWidth(menu_w)
         self.ui.title_frame.setFixedWidth(menu_w)
         self.ui.title_label.setVisible(menu_expanded)
         self.ui.title_icon.setVisible(menu_expanded)
 
+        # Update right panel width
         panel_w = UIConstants.RIGHT_PANEL_WIDTH_EXPANDED if panel_expanded else 0
         self.ui.right_slide_menu_frame.setFixedWidth(panel_w)
 
+        # Update canvases
         is_dark = theme == "dark"
         if hasattr(self, "canvas_dashboard"):
             self.canvas_dashboard.render_state(devices, is_dark)
         if hasattr(self, "canvas_orders"):
             self.canvas_orders.render_state(devices, is_dark)
-        if hasattr(self, "gantt_dashboard"):
+
+        # Update Gantt charts
+        if hasattr(self, "gantt_dashboard") and gantt_data:
             self.gantt_dashboard.render_timeline(gantt_data)
-        if hasattr(self, "gantt_orders"):
+        if hasattr(self, "gantt_orders") and gantt_data:
             self.gantt_orders.render_timeline(gantt_data)
 
         self._update_right_panel(state)

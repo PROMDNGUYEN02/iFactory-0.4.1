@@ -1,6 +1,5 @@
 """
 UI Dependency Injection Container.
-Wires the Presentation Layer components.
 """
 
 from __future__ import annotations
@@ -9,10 +8,11 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, QTimer
 
 from ..ui_state.store import Store
 from ..ui_state.reducers import root_reducer
+from ..ui_state.actions import navigate_page
 from ..presenters.device_presenter import DevicePresenter
 from ..presenters.gantt_presenter import GanttPresenter
 from ..controllers.main_controller import MainController
@@ -34,6 +34,7 @@ class UIContainer(QObject):
         self._app_container = app_container
         self._store: Store | None = None
         self._main_view: MainView | None = None
+        self._main_controller: MainController | None = None
         self._device_controller: DeviceController | None = None
         self._gantt_controller: GanttController | None = None
 
@@ -49,6 +50,7 @@ class UIContainer(QObject):
             "left_menu_expanded": False,
             "right_panel_expanded": False,
             "selected_device_id": None,
+            "selected_menu_index": 0,
             "is_loading": False,
             "last_error": None,
         }
@@ -57,7 +59,7 @@ class UIContainer(QObject):
         device_presenter = DevicePresenter()
         gantt_presenter = GanttPresenter()
 
-        main_controller = MainController(store=self._store)
+        self._main_controller = MainController(store=self._store)
 
         self._device_controller = DeviceController(
             device_service=self._app_container.device_facade,
@@ -73,28 +75,62 @@ class UIContainer(QObject):
 
         self._main_view = MainView(
             store=self._store,
-            controller=main_controller,
+            controller=self._main_controller,
         )
 
+        QTimer.singleShot(100, self._setup_initial_view)
+
         logger.info("[UIContainer] Presentation Layer initialized.")
+
+    def _setup_initial_view(self) -> None:
+        """Set up initial view."""
+        if self._main_view is None:
+            return
+
+        try:
+            if hasattr(self._main_view, "ui"):
+                if hasattr(self._main_view.ui, "listWidget"):
+                    self._main_view.ui.listWidget.setCurrentRow(0)
+                if hasattr(self._main_view.ui, "stackedWidget"):
+                    self._main_view.ui.stackedWidget.setCurrentIndex(0)
+
+            # Load data after view is ready
+            QTimer.singleShot(500, self._trigger_data_load)
+
+        except Exception as e:
+            logger.warning(f"Could not set initial view: {e}")
+
+    def _trigger_data_load(self) -> None:
+        """Trigger async data loading."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(self._load_all_data())
+            else:
+                loop.run_until_complete(self._load_all_data())
+        except Exception as e:
+            logger.debug(f"Data load scheduling: {e}")
+
+    async def _load_all_data(self) -> None:
+        """Load devices and gantt data."""
+        try:
+            if self._device_controller:
+                await self._device_controller.refresh_all_devices()
+
+            if self._gantt_controller:
+                await self._gantt_controller.load_timeline(days=1)
+
+        except Exception as e:
+            logger.error(f"Failed to load data: {e}")
 
     def get_main_window(self) -> MainView | None:
         return self._main_view
 
     def schedule_deferred_data_load(self) -> None:
-        """Load initial data after UI is shown."""
-        if self._device_controller:
-            logger.debug("[UIContainer] Scheduling initial data load...")
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._device_controller.refresh_all_devices())
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._device_controller.refresh_all_devices())
+        """Schedule data load."""
+        QTimer.singleShot(1000, self._trigger_data_load)
 
     def shutdown(self) -> None:
-        """Clean up resources."""
         if self._main_view:
             self._main_view.close()
         logger.info("[UIContainer] Shutdown complete.")

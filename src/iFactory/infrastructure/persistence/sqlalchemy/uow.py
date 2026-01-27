@@ -1,6 +1,6 @@
 """
 Infrastructure: Async Unit of Work.
-Manages async database transactions with SQLAlchemy.
+Manages transactions for both Hot and Cold storage.
 """
 
 from __future__ import annotations
@@ -10,23 +10,20 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iFactory.application.ports.unit_of_work import AbstractUnitOfWork
-from .repository import SqlAlchemyDeviceRepository
+from .repository import HotStorageRepository, ColdStorageRepository
 
 
-class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
-    """
-    Concrete Unit of Work implementation using SQLAlchemy async sessions.
-    Manages transaction boundaries and repository instantiation.
-    """
+class HotStorageUnitOfWork(AbstractUnitOfWork):
+    """Unit of Work for Hot Storage (latest state)."""
 
     def __init__(self, session_factory) -> None:
         self._session_factory = session_factory
         self._session: Optional[AsyncSession] = None
-        self.devices: Optional[SqlAlchemyDeviceRepository] = None
+        self.devices: Optional[HotStorageRepository] = None
 
-    async def __aenter__(self) -> "SqlAlchemyUnitOfWork":
+    async def __aenter__(self) -> "HotStorageUnitOfWork":
         self._session = self._session_factory()
-        self.devices = SqlAlchemyDeviceRepository(self._session)
+        self.devices = HotStorageRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -44,3 +41,93 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
     async def rollback(self) -> None:
         if self._session:
             await self._session.rollback()
+
+
+class ColdStorageUnitOfWork:
+    """Unit of Work for Cold Storage (history)."""
+
+    def __init__(self, session_factory) -> None:
+        self._session_factory = session_factory
+        self._session: Optional[AsyncSession] = None
+        self.history: Optional[ColdStorageRepository] = None
+
+    async def __aenter__(self) -> "ColdStorageUnitOfWork":
+        self._session = self._session_factory()
+        self.history = ColdStorageRepository(self._session)
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        if exc_type is not None:
+            await self.rollback()
+        if self._session:
+            await self._session.close()
+        self._session = None
+        self.history = None
+
+    async def commit(self) -> None:
+        if self._session:
+            await self._session.commit()
+
+    async def rollback(self) -> None:
+        if self._session:
+            await self._session.rollback()
+
+
+class DualStorageUnitOfWork:
+    """
+    Combined Unit of Work for operations requiring both stores.
+    Example: Sync from remote updates hot store and creates history in cold store.
+    """
+
+    def __init__(self, hot_session_factory, cold_session_factory) -> None:
+        self._hot_session_factory = hot_session_factory
+        self._cold_session_factory = cold_session_factory
+        self._hot_session: Optional[AsyncSession] = None
+        self._cold_session: Optional[AsyncSession] = None
+        self.devices: Optional[HotStorageRepository] = None
+        self.history: Optional[ColdStorageRepository] = None
+
+    async def __aenter__(self) -> "DualStorageUnitOfWork":
+        self._hot_session = self._hot_session_factory()
+        self._cold_session = self._cold_session_factory()
+        self.devices = HotStorageRepository(self._hot_session)
+        self.history = ColdStorageRepository(self._cold_session)
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        if exc_type is not None:
+            await self.rollback()
+        if self._hot_session:
+            await self._hot_session.close()
+        if self._cold_session:
+            await self._cold_session.close()
+        self._hot_session = None
+        self._cold_session = None
+        self.devices = None
+        self.history = None
+
+    async def commit(self) -> None:
+        """Commit both stores."""
+        if self._hot_session:
+            await self._hot_session.commit()
+        if self._cold_session:
+            await self._cold_session.commit()
+
+    async def rollback(self) -> None:
+        """Rollback both stores."""
+        if self._hot_session:
+            await self._hot_session.rollback()
+        if self._cold_session:
+            await self._cold_session.rollback()
+
+
+# Backward compatibility alias
+SqlAlchemyUnitOfWork = HotStorageUnitOfWork
+
+
+__all__ = [
+    "HotStorageUnitOfWork",
+    "ColdStorageUnitOfWork",
+    "DualStorageUnitOfWork",
+    "SqlAlchemyUnitOfWork",
+]

@@ -124,3 +124,6 @@ class OrmDeviceMapper:
     def to_period_models(periods: Sequence[StatusPeriod]) -> List[StatusPeriodModel]:
         """Convert sequence of Domain StatusPeriod objects to ORM models."""
         return [OrmDeviceMapper.to_period_model(p) for p in periods]
+
+
+__all__ = ["OrmDeviceMapper"]

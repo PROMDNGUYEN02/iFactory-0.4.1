@@ -27,5 +27,14 @@ class DeviceViewModel:
     cycle_time: float = 0.0
     last_error: Optional[str] = None
 
+    # Aliases for compatibility
+    @property
+    def id(self) -> str:
+        return self.device_id
+
+    @property
+    def code(self) -> str:
+        return self.device_id
+
 
 __all__ = ["DeviceViewModel"]

@@ -1,6 +1,5 @@
 """
-Gantt Controller - Handles Gantt chart data fetching use case.
-Single Responsibility: Load and format timeline data.
+Gantt Controller - Handles Gantt chart data fetching.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from typing import TYPE_CHECKING, Dict, List, Any
 
 from PySide6.QtCore import QObject
 
-from ..ui_state.actions import UIActionType
+from ..ui_state.actions import UIActionType, load_gantt
 from ..ui_state.store import Action
 
 if TYPE_CHECKING:
@@ -22,9 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class GanttController(QObject):
-    """
-    Coordinates Gantt timeline data between Application layer and UI State.
-    """
+    """Coordinates Gantt timeline data between Application layer and UI State."""
 
     def __init__(
         self,
@@ -39,58 +36,74 @@ class GanttController(QObject):
         self._store = store
 
     async def load_timeline(self, days: int = 1) -> Dict[str, List[Any]]:
-        """
-        Load Gantt timeline for all devices.
-        Returns formatted timeline data.
-        """
+        """Load Gantt timeline for devices (24h)."""
         try:
+            if not self._device_service:
+                logger.warning("[GanttController] No device service available.")
+                return {}
+
             end = datetime.now()
             start = end - timedelta(days=days)
             total_seconds = (end - start).total_seconds()
 
-            devices = self._store.get_state().get("devices", {})
+            # Get devices from store
+            state = self._store.get_state()
+            devices = state.get("devices", {})
+
+            if not devices:
+                logger.debug("[GanttController] No devices in store.")
+                return {}
+
             timeline_data = {}
 
-            for code in devices.keys():
-                result = await self._device_service.generate_gantt_segments(code, days=days)
-                segments_dto = result.get("segments", [])
+            # Limit to first 20 devices for performance
+            device_codes = list(devices.keys())[:20]
 
-                formatted_segments = []
-                for seg in segments_dto:
-                    seg_start = seg.get("start_time", start)
-                    seg_end = seg.get("end_time", end)
-                    duration = (seg_end - seg_start).total_seconds()
-                    percent = duration / total_seconds if total_seconds > 0 else 0
+            for code in device_codes:
+                try:
+                    result = await self._device_service.generate_gantt_segments(code, days=days)
+                    segments_dto = result.get("segments", [])
 
-                    status_code = seg.get("status_code", 0)
-                    vm = self._presenter.format_segment(
-                        start=seg_start,
-                        end=seg_end,
-                        status=status_code,
-                        total_duration=total_seconds,
-                    )
+                    if not segments_dto:
+                        continue
 
-                    formatted_segments.append(
-                        {
-                            "start_time": vm.start_display,
-                            "end_time": vm.end_display,
-                            "status_name": vm.status_name,
-                            "status_code": str(vm.status_code),
-                            "color": vm.status_color,
-                            "percent": percent,
-                        }
-                    )
+                    formatted_segments = []
+                    for seg in segments_dto:
+                        seg_start = seg.get("start_time", start)
+                        seg_end = seg.get("end_time", end)
 
-                timeline_data[code] = formatted_segments
+                        # Ensure datetime objects
+                        if isinstance(seg_start, str):
+                            seg_start = datetime.fromisoformat(seg_start)
+                        if isinstance(seg_end, str):
+                            seg_end = datetime.fromisoformat(seg_end)
 
-            self._store.dispatch(
-                Action(
-                    type=UIActionType.GANTT_LOADED.value,
-                    payload=timeline_data,
-                )
-            )
+                        duration = (seg_end - seg_start).total_seconds()
+                        percent = duration / total_seconds if total_seconds > 0 else 0
 
-            logger.debug(f"[GanttController] Loaded timeline for {len(timeline_data)} devices.")
+                        status_code = seg.get("status_code", "0")
+
+                        formatted_segments.append(
+                            {
+                                "start_time": seg_start,
+                                "end_time": seg_end,
+                                "status_name": seg.get("status_name", "Unknown"),
+                                "status_code": str(status_code),
+                                "percent": percent,
+                            }
+                        )
+
+                    if formatted_segments:
+                        timeline_data[code] = formatted_segments
+
+                except Exception as e:
+                    logger.debug(f"No gantt data for {code}: {e}")
+
+            # Dispatch to store
+            if timeline_data:
+                self._store.dispatch(load_gantt(timeline_data))
+                logger.debug(f"[GanttController] Loaded timeline for {len(timeline_data)} devices.")
+
             return timeline_data
 
         except Exception as e:
