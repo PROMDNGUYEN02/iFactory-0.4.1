@@ -1,21 +1,36 @@
-from dataclasses import dataclass
+"""
+Infrastructure: Database Configuration using Pydantic V2.
+"""
 
-from .app_paths import AppPaths
+import os
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
+from .app_paths import PATHS
 
 
-@dataclass
-class DatabaseConfig:
-    """Configuration for database connections."""
+class DatabaseConfig(BaseSettings):
+    """Cấu hình Database. Ưu tiên load từ biến môi trường (.env)."""
 
-    connection_string: str
-    pool_size: int = 5
-    max_overflow: int = 10
+    model_config = SettingsConfigDict(env_prefix="DB_", case_sensitive=False, env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    # SQLite (Local)
+    hot_db_url: str = Field(default=f"sqlite:///{PATHS.hot_db_path}")
+    cold_db_url: str = Field(default=f"sqlite:///{PATHS.cold_db_path}")
+
+    # MSSQL (Remote)
+    mssql_host: str | None = None
+    mssql_db: str | None = None
+    mssql_user: str | None = None
+    mssql_password: str | None = None
+    mssql_driver: str = "ODBC Driver 17 for SQL Server"
+
+    pool_size: int = 20
+    max_overflow: int = 40
     echo: bool = False
 
-    @classmethod
-    def default_sqlite(cls) -> "DatabaseConfig":
-        db_path = AppPaths.get_data_path() / "ifactory.db"
-        return cls(
-            connection_string=f"sqlite+aiosqlite:///{db_path}",
-            echo=False,
-        )
+    @property
+    def mssql_url(self) -> str | None:
+        if not (self.mssql_host and self.mssql_db):
+            return None
+        driver = self.mssql_driver.replace(" ", "+")
+        return f"mssql+aioodbc://{self.mssql_user}:{self.mssql_password}@{self.mssql_host}/{self.mssql_db}?driver={driver}"

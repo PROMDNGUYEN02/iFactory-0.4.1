@@ -1,18 +1,11 @@
-class ApplicationError(Exception):
-    """Base class for all application-layer exceptions."""
+class ApplicationException(Exception):
+    """Base exception for all application layer errors."""
+
+    pass
+
+
+class ResourceNotFoundException(ApplicationException):
+    """Raised when a requested resource is not found."""
 
     def __init__(self, message: str):
         super().__init__(message)
-        self.message = message
-
-
-class DataSourceError(ApplicationError):
-    """Raised when an external data source (MSSQL, API) fails."""
-
-    pass
-
-
-class SyncError(ApplicationError):
-    """Raised when the synchronization workflow fails."""
-
-    pass

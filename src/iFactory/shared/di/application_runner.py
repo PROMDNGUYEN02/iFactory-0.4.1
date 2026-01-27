@@ -14,7 +14,7 @@ from .app_container import AppContainer
 
 if TYPE_CHECKING:
     # UPDATED: Import path reflects the new clean architecture folder structure
-    from iFactory.presentation.di.presentation_container import UIContainer
+    from iFactory.presentation.di.ui_container import UIContainer
 
 logger = logging.getLogger(__name__)
 

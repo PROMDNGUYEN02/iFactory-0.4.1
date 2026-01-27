@@ -1,22 +1,44 @@
-from typing import Dict, Any
+"""
+Infrastructure: Device Configuration Loader.
+Loads device positions and metadata from JSON.
+"""
+
+import json
+import logging
+from typing import Dict, List, Optional, Any
+from iFactory.infrastructure.config.app_paths import PATHS
+
+logger = logging.getLogger(__name__)
 
 
-class DeviceConfig:
+class DeviceConfigLoader:
     """
-    Configuration specific to device connection parameters.
+    Loads device configuration from device_positions.json.
     """
 
-    def __init__(self, config_data: Dict[str, Any]):
-        self._data = config_data
+    def __init__(self):
+        self._path = PATHS.device_positions_path
+        self._data = self._load()
 
-    @property
-    def connection_string(self) -> str:
-        return self._data.get("connection_string", "")
+    def _load(self) -> Dict[str, Any]:
+        if not self._path.exists():
+            logger.warning(f"Device config not found at {self._path}")
+            return {}
+        try:
+            return json.loads(self._path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.error(f"Failed to load device config: {e}")
+            return {}
 
-    @property
-    def table_name(self) -> str:
-        return self._data.get("table_name", "TT_EQ_STATUS")
+    def get_page_devices(self, page: str) -> List[str]:
+        """Get list of device IDs for a specific page."""
+        # Giả định cấu trúc JSON: { "pages": { "page_name": ["dev1", "dev2"] } }
+        return self._data.get("pages", {}).get(page, [])
 
-    @property
-    def poll_interval(self) -> int:
-        return self._data.get("poll_interval", 5000)
+    def get_all_page_devices(self) -> Dict[str, List[str]]:
+        """Get mapping of all pages to device IDs."""
+        return self._data.get("pages", {})
+
+    def get_device_info(self, device_id: str) -> Optional[Dict[str, Any]]:
+        """Get metadata for a specific device."""
+        return self._data.get("devices", {}).get(device_id)

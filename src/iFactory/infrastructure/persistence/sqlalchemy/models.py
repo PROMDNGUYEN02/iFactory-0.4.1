@@ -1,15 +1,20 @@
 """
 SQLAlchemy ORM Models.
-Separated into Hot Storage (latest state) and Cold Storage (history).
+Separated into Hot Storage (latest) and Cold Storage (history).
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
-from sqlalchemy import String, DateTime, Boolean, Integer, Index
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import String, DateTime, Boolean, Integer, ForeignKey, Index
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+# =============================================================================
+# BASE CLASSES
+# =============================================================================
 
 
 class HotBase(DeclarativeBase):
@@ -24,14 +29,19 @@ class ColdBase(DeclarativeBase):
     pass
 
 
+# Backward compatibility alias
+Base = HotBase
+
+
 # =============================================================================
-# HOT STORAGE - Latest State
+# HOT STORAGE MODELS - Latest State
 # =============================================================================
 
 
 class DeviceModel(HotBase):
     """
     Latest device status snapshot.
+    Hot Storage - frequently updated, fast reads.
     """
 
     __tablename__ = "devices"
@@ -44,10 +54,14 @@ class DeviceModel(HotBase):
     name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
+    def __repr__(self) -> str:
+        return f"DeviceModel(code={self.equip_code!r}, status={self.equip_status})"
+
 
 class LatestMaterialInputModel(HotBase):
     """
     Latest material input per device.
+    Hot Storage - current feeding state.
     """
 
     __tablename__ = "latest_material_inputs"
@@ -57,15 +71,20 @@ class LatestMaterialInputModel(HotBase):
     material_batch: Mapped[str] = mapped_column(String(100), nullable=False)
     feeding_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
+    def __repr__(self) -> str:
+        return f"LatestMaterialInput(code={self.equipment_code!r})"
+
 
 # =============================================================================
-# COLD STORAGE - History
+# COLD STORAGE MODELS - History
 # =============================================================================
 
 
 class StatusPeriodModel(ColdBase):
     """
-    Status period history for timeline analysis.
+    Status period history for Gantt chart.
+    Cold Storage - historical data, retention configurable.
+    Supports: 24h (default), 7d, 30d, 60d retention.
     """
 
     __tablename__ = "status_periods"
@@ -81,10 +100,14 @@ class StatusPeriodModel(ColdBase):
         Index("ix_status_periods_start_time", "start_time"),
     )
 
+    def __repr__(self) -> str:
+        return f"StatusPeriodModel(device={self.device_id!r}, status={self.status})"
+
 
 class MaterialInputHistoryModel(ColdBase):
     """
-    Historical log of material inputs.
+    Material input history.
+    Cold Storage - feeding history for traceability.
     """
 
     __tablename__ = "material_input_history"
@@ -99,3 +122,22 @@ class MaterialInputHistoryModel(ColdBase):
         Index("ix_material_history_code_time", "equipment_code", "feeding_time"),
         Index("ix_material_history_recorded", "recorded_at"),
     )
+
+    def __repr__(self) -> str:
+        return f"MaterialInputHistory(code={self.equipment_code!r}, batch={self.material_batch!r})"
+
+
+# Legacy alias for backward compatibility
+MaterialInputModel = MaterialInputHistoryModel
+
+
+__all__ = [
+    "Base",
+    "HotBase",
+    "ColdBase",
+    "DeviceModel",
+    "LatestMaterialInputModel",
+    "StatusPeriodModel",
+    "MaterialInputHistoryModel",
+    "MaterialInputModel",
+]

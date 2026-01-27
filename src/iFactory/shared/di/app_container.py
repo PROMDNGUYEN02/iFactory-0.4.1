@@ -24,7 +24,7 @@ from iFactory.infrastructure.persistence.sqlalchemy.uow import (
     DualStorageUnitOfWork,
 )
 from iFactory.infrastructure.data_sources.mssql_data_source import MssqlDataSource
-from iFactory.infrastructure.scheduling.async_scheduler import BackgroundScheduler
+from iFactory.infrastructure.scheduling.background_scheduler import BackgroundScheduler
 
 # --- Config & Path Management ---
 from iFactory.infrastructure.config.app_paths import PATHS
@@ -40,7 +40,7 @@ from iFactory.application.commands.sync_device_status import SyncDeviceStatusCom
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
-    from iFactory.presentation.di.presentation_container import UIContainer
+    from iFactory.presentation.di.ui_container import UIContainer
     from iFactory.presentation.adapters import QtSignalAdapter
 
 logger = logging.getLogger(__name__)
@@ -185,14 +185,14 @@ class AppContainer:
 
         # 4. Cache (AsyncLRUCache)
         try:
-            from iFactory.infrastructure.cache.memory_cache import AsyncLRUCache
+            from iFactory.infrastructure.cache.async_lru_cache import AsyncLRUCache
 
             self._cache_provider = AsyncLRUCache(max_size=500)
             logger.info("Cache initialized")
         except Exception as e:
             logger.warning(f"Cache init failed: {e}")
             # Create fallback cache
-            from iFactory.infrastructure.cache.memory_cache import AsyncLRUCache
+            from iFactory.infrastructure.cache.async_lru_cache import AsyncLRUCache
 
             self._cache_provider = AsyncLRUCache(max_size=100)
 
@@ -234,7 +234,7 @@ class AppContainer:
         # Ensure cache provider exists
         if self._cache_provider is None:
             logger.error("Cache provider is None! Creating fallback.")
-            from iFactory.infrastructure.cache.memory_cache import AsyncLRUCache
+            from iFactory.infrastructure.cache.async_lru_cache import AsyncLRUCache
 
             self._cache_provider = AsyncLRUCache(max_size=100)
 
@@ -283,7 +283,7 @@ class AppContainer:
 
     def _init_presentation(self) -> None:
         from iFactory.presentation.adapters import QtSignalAdapter
-        from iFactory.presentation.di.presentation_container import UIContainer
+        from iFactory.presentation.di.ui_container import UIContainer
 
         self._signal_adapter = QtSignalAdapter()
         self._ui_container = UIContainer(app_container=self)

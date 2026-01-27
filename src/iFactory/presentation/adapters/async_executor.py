@@ -1,89 +1,58 @@
+"""
+Async Executor - Runs coroutines in background threads for Qt.
+"""
+
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Awaitable, Callable, Optional, TypeVar
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Awaitable, Callable, Optional, TypeVar
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, Signal
 
-T = TypeVar("T")
 logger = logging.getLogger(__name__)
-
-
-class WorkerSignals(QObject):
-    """Signals for the background worker."""
-
-    finished = Signal()
-    error = Signal(str)
-    result = Signal(object)
-
-
-class AsyncWorker(QObject):
-    """
-    Runs an asyncio coroutine in a separate thread managing its own event loop.
-    """
-
-    def __init__(self, coro: Awaitable[T]):
-        super().__init__()
-        self._coro = coro
-        self.signals = WorkerSignals()
-
-    @Slot()
-    def run(self):
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(self._coro)
-            self.signals.result.emit(result)
-            loop.close()
-        except Exception as e:
-            logger.error(f"Async worker failed: {e}", exc_info=True)
-            self.signals.error.emit(str(e))
-        finally:
-            self.signals.finished.emit()
+T = TypeVar("T")
 
 
 class AsyncExecutor(QObject):
-    """
-    Adapter to bridge Qt (Sync) and Application Layer (Async).
-    Executes use cases in background threads to keep UI responsive.
-    """
+    """Executes async coroutines from Qt main thread."""
 
-    def __init__(self, parent: Optional[QObject] = None):
+    task_completed = Signal(object)
+    task_failed = Signal(str)
+
+    def __init__(self, max_workers: int = 4, parent: Optional[QObject] = None):
         super().__init__(parent)
-        self._active_threads = []
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._running = True
 
     def run(
         self,
         coro: Awaitable[T],
-        on_success: Optional[Callable[[T], None]] = None,
-        on_error: Optional[Callable[[str], None]] = None,
+        callback: Optional[Callable[[T], None]] = None,
+        error_callback: Optional[Callable[[Exception], None]] = None,
     ) -> None:
-        """
-        Fire-and-forget execution of a coroutine with callback hooks.
-        """
-        thread = QThread()
-        worker = AsyncWorker(coro)
-        worker.moveToThread(thread)
+        if not self._running:
+            return
 
-        # Connect signals
-        thread.started.connect(worker.run)
+        def _run_in_thread():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                result = loop.run_until_complete(coro)
+                if callback:
+                    QTimer.singleShot(0, lambda: callback(result))
+                self.task_completed.emit(result)
+            except Exception as e:
+                logger.error(f"[AsyncExecutor] Task failed: {e}")
+                if error_callback:
+                    QTimer.singleShot(0, lambda: error_callback(e))
+                self.task_failed.emit(str(e))
+            finally:
+                loop.close()
 
-        if on_success:
-            worker.signals.result.connect(on_success)
+        self._executor.submit(_run_in_thread)
 
-        if on_error:
-            worker.signals.error.connect(on_error)
-
-        # Cleanup
-        worker.signals.finished.connect(thread.quit)
-        worker.signals.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-
-        # Keep reference to prevent GC
-        self._active_threads.append(thread)
-        thread.finished.connect(lambda: self._cleanup_thread(thread))
-
-        thread.start()
-
-    def _cleanup_thread(self, thread):
-        if thread in self._active_threads:
-            self._active_threads.remove(thread)
+    def shutdown(self, wait: bool = True) -> None:
+        self._running = False
+        self._executor.shutdown(wait=wait)
