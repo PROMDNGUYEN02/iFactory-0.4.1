@@ -23,17 +23,6 @@ class InvalidTimeRangeError(DomainError):
     def non_contiguous(cls) -> InvalidTimeRangeError:
         return cls("Cannot union non-contiguous or non-overlapping time ranges.")
 
-    @classmethod
-    def exceeds_maximum(
-        cls,
-        requested_days: int,
-        max_days: int,
-    ) -> InvalidTimeRangeError:
-        return cls(
-            f"Requested range of {requested_days} days exceeds maximum of {max_days}.",
-            {"requested_days": requested_days, "max_days": max_days},
-        )
-
 
 class StatusMergeError(DomainError):
     """Raised when status periods cannot be merged."""

@@ -9,7 +9,6 @@ from .material_batch import MaterialBatch
 class MaterialInput:
     """
     Represents a feeding event of raw materials into a machine.
-
     Immutable record of material consumption.
     """
 
@@ -25,19 +24,6 @@ class MaterialInput:
         self._material_batch = material_batch
         self._feeding_time = feeding_time
 
-    @classmethod
-    def create(
-        cls,
-        code: str,
-        batch: str,
-        time: datetime,
-    ) -> MaterialInput:
-        return cls(
-            equipment_code=EquipmentCode(code),
-            material_batch=MaterialBatch(batch),
-            feeding_time=time,
-        )
-
     @property
     def equipment_code(self) -> EquipmentCode:
         return self._equipment_code
@@ -49,14 +35,6 @@ class MaterialInput:
     @property
     def feeding_time(self) -> datetime:
         return self._feeding_time
-
-    @property
-    def device_code(self) -> str:
-        return self._equipment_code.value
-
-    @property
-    def batch_id(self) -> str:
-        return self._material_batch.value
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MaterialInput):
@@ -77,4 +55,4 @@ class MaterialInput:
         )
 
     def __repr__(self) -> str:
-        return f"MaterialInput(code={self.device_code!r}, " f"batch={self.batch_id!r}, " f"time={self._feeding_time!r})"
+        return f"MaterialInput(code={self._equipment_code!r}, " f"batch={self._material_batch!r}, " f"time={self._feeding_time!r})"

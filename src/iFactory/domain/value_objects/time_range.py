@@ -9,8 +9,6 @@ from ..exceptions.time_exceptions import InvalidTimeRangeError
 class TimeRange:
     """
     Immutable value object representing a continuous time interval.
-
-    Supports open-ended ranges where end is None (ongoing).
     """
 
     __slots__ = ("_start", "_end")
@@ -33,12 +31,6 @@ class TimeRange:
     def starting_from(cls, start: datetime) -> TimeRange:
         return cls(start, None)
 
-    @classmethod
-    def for_day(cls, date: datetime) -> TimeRange:
-        start = date.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = date.replace(hour=23, minute=59, second=59, microsecond=999999)
-        return cls(start, end)
-
     @property
     def start(self) -> datetime:
         return self._start
@@ -55,14 +47,6 @@ class TimeRange:
     def duration_seconds(self) -> float:
         reference_end = self._end or datetime.now()
         return (reference_end - self._start).total_seconds()
-
-    @property
-    def duration_minutes(self) -> float:
-        return self.duration_seconds / 60.0
-
-    @property
-    def duration_hours(self) -> float:
-        return self.duration_seconds / 3600.0
 
     def contains(self, point: datetime) -> bool:
         if point < self._start:

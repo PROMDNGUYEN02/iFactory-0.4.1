@@ -9,7 +9,6 @@ from ..exceptions.device_exceptions import InvalidEquipmentCodeError
 class EquipmentCode:
     """
     Identity Value Object for Factory Equipment.
-
     Enforces naming conventions and provides immutable identity.
     """
 
@@ -18,8 +17,7 @@ class EquipmentCode:
     _PATTERN = re.compile(r"^[A-Za-z0-9\-_]+$")
 
     def __init__(self, value: str) -> None:
-        validated = self._validate(value)
-        self._value = validated
+        self._value = self._validate(value)
 
     @classmethod
     def _validate(cls, value: str) -> str:

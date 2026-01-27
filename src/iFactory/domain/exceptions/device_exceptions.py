@@ -39,19 +39,9 @@ class InvalidStatusTransitionError(DomainError):
             {"from_status": from_status, "to_status": to_status},
         )
 
-    @classmethod
-    def requires_acknowledgment(
-        cls,
-        current_status: str,
-    ) -> InvalidStatusTransitionError:
-        return cls(
-            f"Status '{current_status}' requires acknowledgment before transition.",
-            {"current_status": current_status},
-        )
-
 
 class DeviceNotFoundError(DomainError):
-    """Raised when a device cannot be found."""
+    """Raised when a device cannot be found via the repository."""
 
     @classmethod
     def by_code(cls, code: str) -> DeviceNotFoundError:

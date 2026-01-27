@@ -6,27 +6,31 @@ It has zero dependencies on external frameworks, databases, UI components, or IO
 All logic is expressed in ubiquitous business language.
 """
 
-from .entities import AggregateRoot, Device
-from .enums import MachineStatus
-from .events import DomainEvent, StatusChangedEvent
-from .exceptions import (
-    DomainError,
+from .entities.aggregate_root import AggregateRoot
+from .entities.device import Device
+from .enums.machine_status import MachineStatus
+from .events.base import DomainEvent
+from .events.device_events import StatusChangedEvent
+from .exceptions.base import DomainError
+from .exceptions.device_exceptions import (
+    DeviceNotFoundError,
     InvalidEquipmentCodeError,
     InvalidStatusTransitionError,
+)
+from .exceptions.time_exceptions import (
     InvalidTimeRangeError,
     StatusMergeError,
 )
-from .policies import StatusTransitionPolicy
-from .repositories import DeviceRepository, ProductionRepository
-from .value_objects import (
-    EquipmentCode,
-    MaterialBatch,
-    MaterialInput,
-    StatusPeriod,
-    TimeRange,
-)
+from .policies.status_transition_policy import StatusTransitionPolicy
+from .repositories.device_repository import DeviceRepository
+from .repositories.production_repository import ProductionRepository
+from .value_objects.equipment_code import EquipmentCode
+from .value_objects.material_batch import MaterialBatch
+from .value_objects.material_input import MaterialInput
+from .value_objects.status_period import StatusPeriod
+from .value_objects.time_range import TimeRange
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 __all__ = [
     "AggregateRoot",
@@ -35,6 +39,7 @@ __all__ = [
     "DomainEvent",
     "StatusChangedEvent",
     "DomainError",
+    "DeviceNotFoundError",
     "InvalidEquipmentCodeError",
     "InvalidStatusTransitionError",
     "InvalidTimeRangeError",

@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 from enum import IntEnum, unique
-from typing import Dict
 
 
 @unique
 class MachineStatus(IntEnum):
     """
     Canonical core states of a manufacturing device.
-
-    Uses IntEnum for efficient storage, comparison, and database compatibility.
-    All business rules about status semantics are encapsulated here.
     """
 
     UNKNOWN = 0
@@ -19,10 +15,6 @@ class MachineStatus(IntEnum):
     STOPPED = 3
     MAINTENANCE = 4
     ALARM = 5
-
-    @property
-    def display_name(self) -> str:
-        return _DISPLAY_NAMES.get(self, self.name.capitalize())
 
     @property
     def implies_downtime(self) -> bool:
@@ -48,44 +40,6 @@ class MachineStatus(IntEnum):
     def can_produce(self) -> bool:
         return self in _PRODUCTION_CAPABLE_STATUSES
 
-    @classmethod
-    def from_raw_value(cls, value: str | int | None) -> MachineStatus:
-        if value is None:
-            return cls.UNKNOWN
-
-        if isinstance(value, int):
-            try:
-                return cls(value)
-            except ValueError:
-                return cls.UNKNOWN
-
-        cleaned = str(value).strip().lower()
-
-        if cleaned.isdigit():
-            try:
-                return cls(int(cleaned))
-            except ValueError:
-                return cls.UNKNOWN
-
-        return _ALIASES.get(cleaned, cls.UNKNOWN)
-
-    @classmethod
-    def production_statuses(cls) -> tuple[MachineStatus, ...]:
-        return (cls.RUNNING,)
-
-    @classmethod
-    def non_production_statuses(cls) -> tuple[MachineStatus, ...]:
-        return (cls.SHUTDOWN, cls.STOPPED, cls.MAINTENANCE, cls.ALARM, cls.UNKNOWN)
-
-
-_DISPLAY_NAMES: Dict[MachineStatus, str] = {
-    MachineStatus.UNKNOWN: "Unknown",
-    MachineStatus.RUNNING: "Running",
-    MachineStatus.SHUTDOWN: "Shutdown",
-    MachineStatus.STOPPED: "Stopped",
-    MachineStatus.MAINTENANCE: "Maintenance",
-    MachineStatus.ALARM: "Alarm",
-}
 
 _DOWNTIME_STATUSES = frozenset(
     {
@@ -123,32 +77,3 @@ _PRODUCTION_CAPABLE_STATUSES = frozenset(
         MachineStatus.STOPPED,
     }
 )
-
-_ALIASES: Dict[str, MachineStatus] = {
-    "run": MachineStatus.RUNNING,
-    "running": MachineStatus.RUNNING,
-    "active": MachineStatus.RUNNING,
-    "on": MachineStatus.RUNNING,
-    "producing": MachineStatus.RUNNING,
-    "off": MachineStatus.SHUTDOWN,
-    "shutdown": MachineStatus.SHUTDOWN,
-    "down": MachineStatus.SHUTDOWN,
-    "idle": MachineStatus.STOPPED,
-    "stop": MachineStatus.STOPPED,
-    "stopped": MachineStatus.STOPPED,
-    "pause": MachineStatus.STOPPED,
-    "paused": MachineStatus.STOPPED,
-    "fault": MachineStatus.ALARM,
-    "error": MachineStatus.ALARM,
-    "alarm": MachineStatus.ALARM,
-    "alert": MachineStatus.ALARM,
-    "warning": MachineStatus.ALARM,
-    "pm": MachineStatus.MAINTENANCE,
-    "maintenance": MachineStatus.MAINTENANCE,
-    "maint": MachineStatus.MAINTENANCE,
-    "service": MachineStatus.MAINTENANCE,
-    "unknown": MachineStatus.UNKNOWN,
-    "none": MachineStatus.UNKNOWN,
-    "na": MachineStatus.UNKNOWN,
-    "n/a": MachineStatus.UNKNOWN,
-}

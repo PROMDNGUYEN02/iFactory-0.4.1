@@ -21,7 +21,7 @@ class Device(AggregateRoot):
     __slots__ = (
         "_equipment_code",
         "_current_status",
-        "_last_update",
+        "_last_updated_at",
         "_name",
         "_description",
     )
@@ -30,49 +30,31 @@ class Device(AggregateRoot):
         self,
         equipment_code: EquipmentCode,
         current_status: MachineStatus = MachineStatus.UNKNOWN,
-        last_update: Optional[datetime] = None,
+        last_updated_at: Optional[datetime] = None,
         name: Optional[str] = None,
         description: Optional[str] = None,
     ) -> None:
         super().__init__()
         self._equipment_code = equipment_code
         self._current_status = current_status
-        self._last_update = last_update
+        self._last_updated_at = last_updated_at or datetime.now()
         self._name = name
         self._description = description
 
     @classmethod
-    def create(
-        cls,
-        code: str,
-        raw_status: str | int,
-        last_update: Optional[datetime] = None,
-    ) -> Device:
-        """
-        Factory method to reconstruct entity from infrastructure data.
-        Used by repositories and sync commands.
-        """
-        status = MachineStatus.from_raw_value(raw_status)
-        return cls(
-            equipment_code=EquipmentCode(code),
-            current_status=status,
-            last_update=last_update or datetime.now(),
-        )
-
-    @classmethod
     def register_new(
         cls,
-        code: str,
+        code: EquipmentCode,
         name: Optional[str] = None,
         description: Optional[str] = None,
     ) -> Device:
         """Factory method to register a new device in the system."""
         return cls(
-            equipment_code=EquipmentCode(code),
+            equipment_code=code,
             name=name,
             description=description,
             current_status=MachineStatus.UNKNOWN,
-            last_update=datetime.now(),
+            last_updated_at=datetime.now(),
         )
 
     @property
@@ -84,8 +66,8 @@ class Device(AggregateRoot):
         return self._current_status
 
     @property
-    def last_update(self) -> Optional[datetime]:
-        return self._last_update
+    def last_updated_at(self) -> datetime:
+        return self._last_updated_at
 
     @property
     def name(self) -> Optional[str]:
@@ -96,18 +78,6 @@ class Device(AggregateRoot):
         return self._description
 
     @property
-    def code(self) -> str:
-        return self._equipment_code.value
-
-    @property
-    def status(self) -> int:
-        return self._current_status.value
-
-    @property
-    def status_name(self) -> str:
-        return self._current_status.display_name
-
-    @property
     def is_active(self) -> bool:
         return self._current_status.is_active
 
@@ -116,16 +86,8 @@ class Device(AggregateRoot):
         return self._current_status.is_running
 
     @property
-    def is_idle(self) -> bool:
-        return self._current_status.is_idle
-
-    @property
     def requires_attention(self) -> bool:
         return self._current_status.requires_attention
-
-    @property
-    def implies_downtime(self) -> bool:
-        return self._current_status.implies_downtime
 
     def start_production(self, timestamp: datetime) -> None:
         self._transition_to(MachineStatus.RUNNING, timestamp)
@@ -145,16 +107,18 @@ class Device(AggregateRoot):
     def clear_alarm(self, timestamp: datetime) -> None:
         self._transition_to(MachineStatus.STOPPED, timestamp)
 
-    def acknowledge(self, timestamp: datetime) -> None:
+    def acknowledge_alarm(self, timestamp: datetime) -> None:
         if self._current_status == MachineStatus.ALARM:
             self._transition_to(MachineStatus.STOPPED, timestamp)
 
-    def report_sensor_status(
+    def update_status(
         self,
-        raw_status: str | int,
+        new_status: MachineStatus,
         timestamp: datetime,
     ) -> None:
-        new_status = MachineStatus.from_raw_value(raw_status)
+        """
+        Updates the device status from an external source (e.g., sensor).
+        """
         self._transition_to(new_status, timestamp)
 
     def update_metadata(
@@ -179,14 +143,14 @@ class Device(AggregateRoot):
 
         event = StatusChangedEvent(
             occurred_at=timestamp,
-            equipment_code=self._equipment_code.value,
+            equipment_code=self._equipment_code,
             previous_status=self._current_status,
             new_status=new_status,
         )
         self._record_event(event)
 
         self._current_status = new_status
-        self._last_update = timestamp
+        self._last_updated_at = timestamp
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Device):
@@ -197,4 +161,4 @@ class Device(AggregateRoot):
         return hash(self._equipment_code)
 
     def __repr__(self) -> str:
-        return f"Device(code={self.code!r}, " f"status={self.status_name!r}, " f"last_update={self._last_update!r})"
+        return f"Device(code={self._equipment_code}, " f"status={self._current_status.name}, " f"last_updated={self._last_updated_at})"

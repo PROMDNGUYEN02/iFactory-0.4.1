@@ -12,8 +12,6 @@ from ..value_objects.time_range import TimeRange
 class ProductionRepository(ABC):
     """
     Abstract interface for querying and persisting production history.
-
-    Handles Value Objects for historical status and material data.
     """
 
     @abstractmethod
@@ -36,13 +34,6 @@ class ProductionRepository(ABC):
         pass
 
     @abstractmethod
-    async def save_status_periods(
-        self,
-        periods: Sequence[StatusPeriod],
-    ) -> None:
-        pass
-
-    @abstractmethod
     async def get_latest_input(
         self,
         code: EquipmentCode,
@@ -59,12 +50,4 @@ class ProductionRepository(ABC):
 
     @abstractmethod
     async def save_material_input(self, record: MaterialInput) -> None:
-        pass
-
-    @abstractmethod
-    async def count_status_periods(
-        self,
-        code: EquipmentCode,
-        window: TimeRange,
-    ) -> int:
         pass

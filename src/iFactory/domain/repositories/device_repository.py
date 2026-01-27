@@ -10,17 +10,10 @@ from ..value_objects.equipment_code import EquipmentCode
 class DeviceRepository(ABC):
     """
     Abstract interface for managing Device Aggregates.
-
-    Pure domain interface expressed in business language.
-    Independent of storage mechanisms.
     """
 
     @abstractmethod
     async def get_by_code(self, code: EquipmentCode) -> Optional[Device]:
-        pass
-
-    @abstractmethod
-    async def get_by_code_string(self, code: str) -> Optional[Device]:
         pass
 
     @abstractmethod
@@ -33,10 +26,6 @@ class DeviceRepository(ABC):
 
     @abstractmethod
     async def save(self, device: Device) -> None:
-        pass
-
-    @abstractmethod
-    async def save_many(self, devices: Sequence[Device]) -> None:
         pass
 
     @abstractmethod
