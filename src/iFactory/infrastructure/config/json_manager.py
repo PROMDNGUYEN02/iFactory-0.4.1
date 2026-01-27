@@ -1,25 +1,22 @@
 """
 Infrastructure: JSON Settings Manager.
 Implementation of Settings persistence using JSON files.
-Refactored from original SettingsManager to fit Clean Architecture.
 """
 
 from __future__ import annotations
+
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock, Lock
 from typing import Any, ClassVar, Final, Optional
+
 from PySide6.QtCore import QObject, Signal, QTimer
 
-# [DDD Imports]
 from iFactory.infrastructure.config.app_paths import PATHS
 from iFactory.presentation.constants.ui_constants import UIConstants
-from iFactory.domain.constants import ApplicationLimits as Limits
-
-# [FIXED] Import từ file device_config.py mới tạo ở cùng thư mục
-from .device_config import DeviceConfigLoader
+from iFactory.domain.constants import TimingConstraints
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +60,7 @@ class UISettings:
 class SettingsManager(QObject):
     """
     Thread-safe settings manager with debounced persistence.
+    Singleton pattern ensures single source of truth.
     """
 
     settings_changed = Signal(str, object)
@@ -90,7 +88,7 @@ class SettingsManager(QObject):
     def _internal_init(self) -> None:
         self._path = PATHS.settings_path
         self._backup_path = self._path.with_suffix(".json.bak")
-        self._lock = RLock()
+        self._rlock = RLock()
         self._data: dict[str, Any] = {}
         self._dirty = False
         self._loading = False
@@ -102,7 +100,7 @@ class SettingsManager(QObject):
         self._load()
 
     def _load(self) -> None:
-        with self._lock:
+        with self._rlock:
             if self._loading:
                 return
             self._loading = True
@@ -132,8 +130,8 @@ class SettingsManager(QObject):
             "right_panel_width": UIConstants.RIGHT_PANEL_WIDTH_EXPANDED,
             "app": {
                 "profile": "Equipment Realtime Visualization",
-                "refresh_fast_ms": Limits.POLL_FAST_MS if hasattr(Limits, "POLL_FAST_MS") else 3000,
-                "refresh_slow_ms": Limits.POLL_SLOW_MS if hasattr(Limits, "POLL_SLOW_MS") else 5000,
+                "refresh_fast_ms": 3000,
+                "refresh_slow_ms": 5000,
                 "max_history_days": 7,
             },
             "ui": {
@@ -144,12 +142,17 @@ class SettingsManager(QObject):
         }
 
     def _save_sync(self) -> None:
-        with self._lock:
+        with self._rlock:
             if not self._dirty:
                 return
             try:
                 temp_path = self._path.with_suffix(".tmp")
-                content = json.dumps(self._data, indent=2, ensure_ascii=False, sort_keys=True)
+                content = json.dumps(
+                    self._data,
+                    indent=2,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
                 temp_path.write_text(content, encoding="utf-8")
                 temp_path.replace(self._path)
                 self._dirty = False
@@ -162,7 +165,7 @@ class SettingsManager(QObject):
         self._save_timer.start(DEBOUNCE_DELAY_MS)
 
     def get(self, key: str, default: Any = None) -> Any:
-        with self._lock:
+        with self._rlock:
             keys = key.split(".")
             value = self._data
             for k in keys:
@@ -173,7 +176,7 @@ class SettingsManager(QObject):
             return value
 
     def set(self, key: str, value: Any) -> None:
-        with self._lock:
+        with self._rlock:
             keys = key.split(".")
             data = self._data
             for k in keys[:-1]:
@@ -191,27 +194,43 @@ class SettingsManager(QObject):
                         self.theme_changed.emit(str(value))
                 self._schedule_save()
 
-    # --- Properties ---
     @property
     def theme(self) -> str:
         return self.get("theme", "light")
 
     @property
     def ui_settings(self) -> UISettings:
-        data = {"theme": self.theme, "right_panel_width": self.get("right_panel_width", 800), **self.get("ui", {})}
+        data = {
+            "theme": self.theme,
+            "right_panel_width": self.get("right_panel_width", 800),
+            **self.get("ui", {}),
+        }
         return UISettings.from_dict(data)
 
     @property
     def app_settings(self) -> AppSettings:
         return AppSettings.from_dict(self.get("app", {}))
 
-    # --- Device Config Delegation ---
-    # Các hàm này giúp UI lấy cấu hình thiết bị mà không cần gọi trực tiếp Infrastructure
     def get_page_devices(self, page: str) -> list[str]:
-        return DeviceConfigLoader().get_page_devices(page)
+        try:
+            from .device_config import DeviceConfigLoader
+
+            return DeviceConfigLoader().get_page_devices(page)
+        except ImportError:
+            return []
 
     def get_all_page_devices(self) -> dict[str, list[str]]:
-        return DeviceConfigLoader().get_all_page_devices()
+        try:
+            from .device_config import DeviceConfigLoader
+
+            return DeviceConfigLoader().get_all_page_devices()
+        except ImportError:
+            return {}
 
     def get_device_info(self, device_id: str) -> Optional[dict]:
-        return DeviceConfigLoader().get_device_info(device_id)
+        try:
+            from .device_config import DeviceConfigLoader
+
+            return DeviceConfigLoader().get_device_info(device_id)
+        except ImportError:
+            return None

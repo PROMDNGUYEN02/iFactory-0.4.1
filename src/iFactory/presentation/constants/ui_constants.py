@@ -1,34 +1,80 @@
 """
 Presentation: UI Metrics and Theme configuration.
+Pure presentation layer - NO domain imports.
 """
 
-from typing import Final
-from src.iFactory.domain.enums.device_status import DeviceStatus
+from typing import Dict, Final
 
 
 class UIConstants:
-    MENU_EXPANDED_WIDTH: Final[int] = 250
-    MENU_COLLAPSED_WIDTH: Final[int] = 60
+    """UI dimension and layout constants."""
+
+    MENU_EXPANDED_WIDTH: Final[int] = 240
+    MENU_COLLAPSED_WIDTH: Final[int] = 50
+    RIGHT_PANEL_WIDTH_EXPANDED: Final[int] = 320
+    RIGHT_PANEL_WIDTH_COLLAPSED: Final[int] = 0
+
     DEFAULT_FONT_SIZE: Final[int] = 12
+    ANIMATION_DURATION_MS: Final[int] = 300
+
+    FAST_REFRESH_MS: Final[int] = 3000
+    SLOW_REFRESH_MS: Final[int] = 5000
 
 
 class StatusColors:
-    LIGHT_THEME: Final[dict[DeviceStatus, str]] = {
-        DeviceStatus.RUNNING: "#4CAF50",
-        DeviceStatus.SHUTDOWN: "#BDBDBD",
-        DeviceStatus.STOP: "#F44336",
-        DeviceStatus.MAINTENANCE: "#03A9F4",
-        DeviceStatus.ALARM: "#FFEB3B",
-        DeviceStatus.UNKNOWN: "#9E9E9E",
+    """
+    Status color mappings for UI display.
+    Uses integer status codes.
+    """
+
+    UNKNOWN: Final[int] = 0
+    RUNNING: Final[int] = 1
+    SHUTDOWN: Final[int] = 2
+    STOPPED: Final[int] = 3
+    MAINTENANCE: Final[int] = 4
+    ALARM: Final[int] = 5
+
+    LIGHT_THEME: Final[Dict[int, str]] = {
+        0: "#9E9E9E",
+        1: "#4CAF50",
+        2: "#BDBDBD",
+        3: "#F44336",
+        4: "#03A9F4",
+        5: "#FFEB3B",
     }
 
-    DARK_THEME: Final[dict[DeviceStatus, str]] = {
-        DeviceStatus.RUNNING: "#66BB6A",
-        DeviceStatus.STOP: "#EF5350",
-        # ... các màu dark theme
+    DARK_THEME: Final[Dict[int, str]] = {
+        0: "#757575",
+        1: "#66BB6A",
+        2: "#9E9E9E",
+        3: "#EF5350",
+        4: "#29B6F6",
+        5: "#FDD835",
     }
 
+    STATUS_NAMES: Final[Dict[int, str]] = {
+        0: "Unknown",
+        1: "Running",
+        2: "Shutdown",
+        3: "Stopped",
+        4: "Maintenance",
+        5: "Alarm",
+    }
 
-def get_ui_color(status: DeviceStatus, is_dark_mode: bool = False) -> str:
-    palette = StatusColors.DARK_THEME if is_dark_mode else StatusColors.LIGHT_THEME
-    return palette.get(status, "#9E9E9E")
+    @classmethod
+    def get_color(cls, status_code: int, theme: str = "light") -> str:
+        palette = cls.DARK_THEME if theme == "dark" else cls.LIGHT_THEME
+        return palette.get(status_code, "#9E9E9E")
+
+    @classmethod
+    def get_name(cls, status_code: int) -> str:
+        return cls.STATUS_NAMES.get(status_code, "Unknown")
+
+
+def get_ui_color(status_code: int, is_dark_mode: bool = False) -> str:
+    theme = "dark" if is_dark_mode else "light"
+    return StatusColors.get_color(status_code, theme)
+
+
+def get_status_display_name(status_code: int) -> str:
+    return StatusColors.get_name(status_code)

@@ -1,8 +1,14 @@
+"""
+Async Executor - Runs coroutines in background threads for Qt.
+"""
+
 from __future__ import annotations
+
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Optional, TypeVar
+
 from PySide6.QtCore import QObject, QTimer, Signal
 
 logger = logging.getLogger(__name__)
@@ -10,16 +16,22 @@ T = TypeVar("T")
 
 
 class AsyncExecutor(QObject):
+    """Executes async coroutines from Qt main thread."""
+
     task_completed = Signal(object)
     task_failed = Signal(str)
 
     def __init__(self, max_workers: int = 4, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
-        self._periodic_timers: dict[str, QTimer] = {}
         self._running = True
 
-    def run(self, coro: Awaitable[T], callback=None, error_callback=None) -> None:
+    def run(
+        self,
+        coro: Awaitable[T],
+        callback: Optional[Callable[[T], None]] = None,
+        error_callback: Optional[Callable[[Exception], None]] = None,
+    ) -> None:
         if not self._running:
             return
 
@@ -32,6 +44,7 @@ class AsyncExecutor(QObject):
                     QTimer.singleShot(0, lambda: callback(result))
                 self.task_completed.emit(result)
             except Exception as e:
+                logger.error(f"[AsyncExecutor] Task failed: {e}")
                 if error_callback:
                     QTimer.singleShot(0, lambda: error_callback(e))
                 self.task_failed.emit(str(e))
@@ -40,20 +53,6 @@ class AsyncExecutor(QObject):
 
         self._executor.submit(_run_in_thread)
 
-    def cancel_all_periodic(self) -> None:
-        """Cleanup timers to avoid AttributeError during shutdown."""
-        for tid in list(self._periodic_timers.keys()):
-            timer = self._periodic_timers.pop(tid)
-            timer.stop()
-            timer.deleteLater()
-
-    def run_in_background(self, coro, callback=None, error_callback=None):
-        self.run(coro, callback, error_callback)
-
-    def run_async(self, coro, callback=None):
-        self.run(coro, callback)
-
     def shutdown(self, wait: bool = True) -> None:
         self._running = False
-        self.cancel_all_periodic()
         self._executor.shutdown(wait=wait)

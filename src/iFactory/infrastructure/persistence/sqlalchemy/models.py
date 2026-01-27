@@ -3,44 +3,78 @@ SQLAlchemy ORM Models.
 Pure database representation. No business logic.
 """
 
-from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey
-from sqlalchemy.orm import declarative_base, relationship
+from __future__ import annotations
 
-Base = declarative_base()
+from datetime import datetime
+from typing import Optional, List
+
+from sqlalchemy import Column, String, DateTime, Boolean, Integer, ForeignKey
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    """Base class for all ORM models."""
+
+    pass
 
 
 class DeviceModel(Base):
     """
-    Model đại diện cho bảng 'devices'.
-    Đổi tên từ DeviceORM -> DeviceModel để khớp với Repository/Mapper.
+    ORM Model representing the 'devices' table.
+    Maps to Domain Device entity.
     """
 
     __tablename__ = "devices"
 
-    # Lưu ý: Các trường này phải khớp với Mapper
-    id = Column(String(50), primary_key=True)
-    equip_code = Column(String(50), nullable=False, unique=True)
-    equip_status = Column(String(50), nullable=False)  # Lưu giá trị Enum dưới dạng String hoặc Int
-    last_update = Column(DateTime, nullable=False)
-    is_active = Column(Boolean, default=True)
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    equip_code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    equip_status: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_update: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    # Quan hệ 1-n với StatusPeriodModel
-    status_periods = relationship("StatusPeriodModel", back_populates="device", cascade="all, delete-orphan")
+    status_periods: Mapped[List["StatusPeriodModel"]] = relationship(
+        "StatusPeriodModel",
+        back_populates="device",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"DeviceModel(id={self.id!r}, " f"code={self.equip_code!r}, " f"status={self.equip_status})"
 
 
 class StatusPeriodModel(Base):
     """
-    Model đại diện cho bảng 'status_periods'.
-    Đổi tên từ StatusPeriodORM -> StatusPeriodModel.
+    ORM Model representing the 'status_periods' table.
+    Maps to Domain StatusPeriod value object.
     """
 
     __tablename__ = "status_periods"
 
-    id = Column(String(50), primary_key=True)
-    device_id = Column(String(50), ForeignKey("devices.id"), nullable=False)
-    status = Column(String(20), nullable=False)
-    start_time = Column(DateTime, nullable=False)
-    end_time = Column(DateTime, nullable=True)
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(50), ForeignKey("devices.id"), nullable=False, index=True)
+    status: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
-    # Quan hệ n-1 với DeviceModel
-    device = relationship("DeviceModel", back_populates="status_periods")
+    device: Mapped["DeviceModel"] = relationship("DeviceModel", back_populates="status_periods")
+
+    def __repr__(self) -> str:
+        return f"StatusPeriodModel(id={self.id!r}, " f"device={self.device_id!r}, " f"status={self.status})"
+
+
+class MaterialInputModel(Base):
+    """
+    ORM Model representing the 'material_inputs' table.
+    """
+
+    __tablename__ = "material_inputs"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    equipment_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    material_batch: Mapped[str] = mapped_column(String(100), nullable=False)
+    feeding_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"MaterialInputModel(code={self.equipment_code!r}, " f"batch={self.material_batch!r})"

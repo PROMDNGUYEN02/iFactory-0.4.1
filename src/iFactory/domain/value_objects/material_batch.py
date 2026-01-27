@@ -1,19 +1,35 @@
 from __future__ import annotations
-from dataclasses import dataclass
+
 from ..exceptions.base import DomainError
 
 
-@dataclass(frozen=True, slots=True)
 class MaterialBatch:
-    """Value object representing a uniquely identifiable batch of raw materials."""
+    """
+    Value object representing a uniquely identifiable batch of raw materials.
+    """
 
-    value: str
+    __slots__ = ("_value",)
 
-    def __post_init__(self):
-        raw_val = str(self.value).strip()
-        if not raw_val:
+    def __init__(self, value: str) -> None:
+        cleaned = str(value).strip() if value else ""
+        if not cleaned:
             raise DomainError("Material batch identifier cannot be empty.")
-        object.__setattr__(self, "value", raw_val)
+        self._value = cleaned
+
+    @property
+    def value(self) -> str:
+        return self._value
 
     def __str__(self) -> str:
-        return self.value
+        return self._value
+
+    def __repr__(self) -> str:
+        return f"MaterialBatch({self._value!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, MaterialBatch):
+            return self._value == other._value
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._value)

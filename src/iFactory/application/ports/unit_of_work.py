@@ -1,42 +1,41 @@
 """
 Application Port: Unit of Work Interface.
-Định nghĩa Interface quản lý Transaction bất đồng bộ (Async) cho tầng Infrastructure.
+Defines async transaction management interface for Infrastructure layer.
 """
 
 from __future__ import annotations
+
 import abc
 from typing import TYPE_CHECKING
 
-# Tránh lỗi vòng lặp import (Circular Import) bằng TYPE_CHECKING
 if TYPE_CHECKING:
-    from iFactory.application.ports.repository import IDeviceRepository
+    from iFactory.domain.repositories.device_repository import DeviceRepository
 
 
 class AbstractUnitOfWork(abc.ABC):
     """
     Port for managing transaction boundaries (Async Context Manager).
-    Đảm bảo tính toàn vẹn của dữ liệu (ACID) cho các thao tác với Database.
+    Ensures data integrity (ACID) for database operations.
     """
 
-    # Repositories accessible within the transaction
-    devices: IDeviceRepository
+    devices: "DeviceRepository"
 
     @abc.abstractmethod
-    async def __aenter__(self) -> AbstractUnitOfWork:
-        """Kích hoạt Async Context Manager"""
+    async def __aenter__(self) -> "AbstractUnitOfWork":
+        """Enter async context manager."""
         pass
 
     @abc.abstractmethod
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Xử lý đóng/rollback khi thoát khỏi khối with"""
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit async context manager, handle rollback on error."""
         pass
 
     @abc.abstractmethod
     async def commit(self) -> None:
-        """Lưu các thay đổi vào Database."""
+        """Commit all changes to the database."""
         pass
 
     @abc.abstractmethod
     async def rollback(self) -> None:
-        """Hoàn tác các thay đổi nếu có lỗi."""
+        """Rollback all changes on error."""
         pass

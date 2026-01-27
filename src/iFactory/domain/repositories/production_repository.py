@@ -1,25 +1,34 @@
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Optional, Sequence
 
 from ..value_objects.equipment_code import EquipmentCode
-from ..value_objects.time_range import TimeRange
-from ..value_objects.status_period import StatusPeriod
 from ..value_objects.material_input import MaterialInput
+from ..value_objects.status_period import StatusPeriod
+from ..value_objects.time_range import TimeRange
 
 
 class ProductionRepository(ABC):
     """
-    Abstract interface for querying and persisting historical production logs.
-    Handles Value Objects exclusively.
+    Abstract interface for querying and persisting production history.
+
+    Handles Value Objects for historical status and material data.
     """
 
     @abstractmethod
-    async def get_latest_status(self, code: EquipmentCode) -> Optional[StatusPeriod]:
+    async def get_latest_status(
+        self,
+        code: EquipmentCode,
+    ) -> Optional[StatusPeriod]:
         pass
 
     @abstractmethod
-    async def get_status_history(self, code: EquipmentCode, window: TimeRange) -> Sequence[StatusPeriod]:
+    async def get_status_history(
+        self,
+        code: EquipmentCode,
+        window: TimeRange,
+    ) -> Sequence[StatusPeriod]:
         pass
 
     @abstractmethod
@@ -27,13 +36,35 @@ class ProductionRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_latest_input(self, code: EquipmentCode) -> Optional[MaterialInput]:
+    async def save_status_periods(
+        self,
+        periods: Sequence[StatusPeriod],
+    ) -> None:
         pass
 
     @abstractmethod
-    async def get_input_history(self, code: EquipmentCode, window: TimeRange) -> Sequence[MaterialInput]:
+    async def get_latest_input(
+        self,
+        code: EquipmentCode,
+    ) -> Optional[MaterialInput]:
+        pass
+
+    @abstractmethod
+    async def get_input_history(
+        self,
+        code: EquipmentCode,
+        window: TimeRange,
+    ) -> Sequence[MaterialInput]:
         pass
 
     @abstractmethod
     async def save_material_input(self, record: MaterialInput) -> None:
+        pass
+
+    @abstractmethod
+    async def count_status_periods(
+        self,
+        code: EquipmentCode,
+        window: TimeRange,
+    ) -> int:
         pass

@@ -1,40 +1,125 @@
 from __future__ import annotations
-from dataclasses import dataclass
+
 from datetime import datetime
 from typing import Optional
+
 from ..exceptions.time_exceptions import InvalidTimeRangeError
 
 
-@dataclass(frozen=True, slots=True)
 class TimeRange:
-    """Immutable value object đại diện cho một khoảng thời gian liên tục."""
+    """
+    Immutable value object representing a continuous time interval.
 
-    start: datetime
-    end: Optional[datetime] = None  # [FIXED] Cho phép None để đại diện cho trạng thái đang diễn ra
+    Supports open-ended ranges where end is None (ongoing).
+    """
 
-    def __post_init__(self) -> None:
-        # [FIXED] Chỉ kiểm tra logic nếu có thời gian kết thúc
-        if self.end is not None and self.start > self.end:
-            raise InvalidTimeRangeError.end_before_start(self.start, self.end)
+    __slots__ = ("_start", "_end")
+
+    def __init__(
+        self,
+        start: datetime,
+        end: Optional[datetime] = None,
+    ) -> None:
+        if end is not None and start > end:
+            raise InvalidTimeRangeError.end_before_start(start, end)
+        self._start = start
+        self._end = end
+
+    @classmethod
+    def between(cls, start: datetime, end: datetime) -> TimeRange:
+        return cls(start, end)
+
+    @classmethod
+    def starting_from(cls, start: datetime) -> TimeRange:
+        return cls(start, None)
+
+    @classmethod
+    def for_day(cls, date: datetime) -> TimeRange:
+        start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return cls(start, end)
+
+    @property
+    def start(self) -> datetime:
+        return self._start
+
+    @property
+    def end(self) -> Optional[datetime]:
+        return self._end
+
+    @property
+    def is_ongoing(self) -> bool:
+        return self._end is None
 
     @property
     def duration_seconds(self) -> float:
-        """Tính tổng số giây. Nếu đang diễn ra thì tính tới thời điểm hiện tại."""
-        reference_end = self.end or datetime.now()
-        return (reference_end - self.start).total_seconds()
+        reference_end = self._end or datetime.now()
+        return (reference_end - self._start).total_seconds()
+
+    @property
+    def duration_minutes(self) -> float:
+        return self.duration_seconds / 60.0
+
+    @property
+    def duration_hours(self) -> float:
+        return self.duration_seconds / 3600.0
+
+    def contains(self, point: datetime) -> bool:
+        if point < self._start:
+            return False
+        if self._end is None:
+            return True
+        return point <= self._end
 
     def overlaps(self, other: TimeRange) -> bool:
-        # Xử lý so sánh với vô hạn (None)
-        self_end = self.end or datetime.max
-        other_end = other.end or datetime.max
-        return self.start < other_end and other.start < self_end
+        self_end = self._end or datetime.max
+        other_end = other._end or datetime.max
+        return self._start < other_end and other._start < self_end
 
     def is_adjacent_to(self, other: TimeRange) -> bool:
-        return self.end == other.start or other.end == self.start
+        return self._end == other._start or other._end == self._start
 
     def union(self, other: TimeRange) -> TimeRange:
         if not self.overlaps(other) and not self.is_adjacent_to(other):
             raise InvalidTimeRangeError.non_contiguous()
-        # Union của một khoảng vô hạn vẫn là vô hạn
-        new_end = None if (self.end is None or other.end is None) else max(self.end, other.end)
-        return TimeRange(start=min(self.start, other.start), end=new_end)
+
+        new_start = min(self._start, other._start)
+
+        if self._end is None or other._end is None:
+            new_end = None
+        else:
+            new_end = max(self._end, other._end)
+
+        return TimeRange(new_start, new_end)
+
+    def intersection(self, other: TimeRange) -> Optional[TimeRange]:
+        if not self.overlaps(other):
+            return None
+
+        new_start = max(self._start, other._start)
+
+        self_end = self._end or datetime.max
+        other_end = other._end or datetime.max
+        new_end = min(self_end, other_end)
+
+        if new_end == datetime.max:
+            new_end = None
+
+        return TimeRange(new_start, new_end)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TimeRange):
+            return NotImplemented
+        return self._start == other._start and self._end == other._end
+
+    def __hash__(self) -> int:
+        return hash((self._start, self._end))
+
+    def __repr__(self) -> str:
+        end_str = self._end.isoformat() if self._end else "ongoing"
+        return f"TimeRange({self._start.isoformat()} -> {end_str})"
+
+    def __lt__(self, other: TimeRange) -> bool:
+        if not isinstance(other, TimeRange):
+            return NotImplemented
+        return self._start < other._start

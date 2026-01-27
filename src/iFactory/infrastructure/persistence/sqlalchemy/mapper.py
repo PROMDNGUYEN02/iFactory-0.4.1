@@ -5,84 +5,122 @@ No side effects, no database queries.
 """
 
 from __future__ import annotations
+
 from datetime import datetime
-from typing import Sequence, List, Optional
-import uuid
+from typing import List, Optional, Sequence
+from uuid import uuid4
 
 from iFactory.domain.entities.device import Device
-from iFactory.domain.enums.machine_status import MachineStatus
-from iFactory.domain.value_objects.equipment_code import EquipmentCode
 from iFactory.domain.value_objects.status_period import StatusPeriod
 
-from iFactory.infrastructure.persistence.sqlalchemy.models import DeviceModel, StatusPeriodModel
+from .models import DeviceModel, StatusPeriodModel
 
 
 class OrmDeviceMapper:
-    """Translates between Domain Aggregates and SQLAlchemy Models."""
+    """
+    Translates between Domain Aggregates/Value Objects and SQLAlchemy Models.
+    All methods are static and side-effect free.
+    """
+
+    # =========================================================================
+    # Device Entity Mapping
+    # =========================================================================
 
     @staticmethod
     def to_entity(model: Optional[DeviceModel]) -> Optional[Device]:
-        """Chuyển đổi từ ORM Model sang Domain Entity."""
-        if not model:
+        """Convert ORM DeviceModel to Domain Device entity."""
+        if model is None:
             return None
 
-        # Reconstruct Domain Entity
         try:
-            code = EquipmentCode(model.equip_code)
+            device = Device.create(
+                code=model.equip_code,
+                raw_status=model.equip_status,
+                last_update=model.last_update,
+            )
 
-            # Xử lý an toàn cho Status
-            status_val = model.equip_status
-            try:
-                status_enum = MachineStatus(int(status_val))
-            except (ValueError, TypeError):
-                status_enum = MachineStatus.UNKNOWN
+            if model.name or model.description:
+                device.update_metadata(
+                    name=model.name,
+                    description=model.description,
+                )
+
+            return device
+
         except Exception:
             return None
 
-        device = Device(equipment_code=code)
-        device.current_status = status_enum
-        device.last_update = model.last_update
-
-        if hasattr(device, "is_active"):
-            device.is_active = model.is_active
-
-        return device
+    @staticmethod
+    def to_entities(models: Sequence[DeviceModel]) -> List[Device]:
+        """Convert sequence of ORM models to Domain entities."""
+        result = []
+        for model in models:
+            entity = OrmDeviceMapper.to_entity(model)
+            if entity is not None:
+                result.append(entity)
+        return result
 
     @staticmethod
     def to_model(entity: Device) -> DeviceModel:
-        """Chuyển đổi từ Domain Entity sang ORM Model."""
+        """Convert Domain Device entity to ORM DeviceModel."""
         return DeviceModel(
-            id=entity.equipment_code.value,
-            equip_code=entity.equipment_code.value,
-            equip_status=str(entity.current_status.value),
+            id=entity.code,
+            equip_code=entity.code,
+            equip_status=entity.status,
             last_update=entity.last_update or datetime.now(),
-            is_active=getattr(entity, "is_active", True),
+            is_active=entity.is_active,
+            name=entity.name,
+            description=entity.description,
         )
 
     @staticmethod
-    def to_entities(models: Sequence[DeviceModel]) -> List[Device]:
-        return [OrmDeviceMapper.to_entity(m) for m in models if m is not None]
+    def to_models(entities: Sequence[Device]) -> List[DeviceModel]:
+        """Convert sequence of Domain entities to ORM models."""
+        return [OrmDeviceMapper.to_model(e) for e in entities]
 
-    # --- Status Period Mapping ---
+    # =========================================================================
+    # StatusPeriod Value Object Mapping
+    # =========================================================================
 
     @staticmethod
-    def to_period_entity(model: StatusPeriodModel) -> Optional[StatusPeriod]:
-        if not model:
+    def to_period_entity(model: Optional[StatusPeriodModel]) -> Optional[StatusPeriod]:
+        """Convert ORM StatusPeriodModel to Domain StatusPeriod."""
+        if model is None:
             return None
-        return StatusPeriod(
-            id=model.id,
-            device_code=model.device_id,  # Mapping device_id as code here for simplicity
-            status_code=model.status,
-            start_time=model.start_time,
-            end_time=model.end_time,
-        )
+
+        try:
+            return StatusPeriod.create(
+                code=model.device_id,
+                raw_status=model.status,
+                start=model.start_time,
+                end=model.end_time,
+                id=model.id,
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def to_period_entities(models: Sequence[StatusPeriodModel]) -> List[StatusPeriod]:
+        """Convert sequence of ORM models to Domain StatusPeriod objects."""
+        result = []
+        for model in models:
+            period = OrmDeviceMapper.to_period_entity(model)
+            if period is not None:
+                result.append(period)
+        return result
 
     @staticmethod
     def to_period_model(entity: StatusPeriod) -> StatusPeriodModel:
+        """Convert Domain StatusPeriod to ORM StatusPeriodModel."""
         return StatusPeriodModel(
-            id=entity.id or str(uuid.uuid4()),
+            id=entity.id or str(uuid4()),
             device_id=entity.device_code,
             status=entity.status_code,
             start_time=entity.start_time,
             end_time=entity.end_time,
         )
+
+    @staticmethod
+    def to_period_models(periods: Sequence[StatusPeriod]) -> List[StatusPeriodModel]:
+        """Convert sequence of Domain StatusPeriod objects to ORM models."""
+        return [OrmDeviceMapper.to_period_model(p) for p in periods]

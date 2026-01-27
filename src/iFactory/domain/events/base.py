@@ -1,14 +1,37 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+
 from datetime import datetime
 
 
-@dataclass(frozen=True, slots=True)
 class DomainEvent:
-    """Base class for all domain events indicating that something of business interest occurred."""
+    """
+    Base class for all domain events.
 
-    occurred_at: datetime
-    event_type: str = field(init=False)
+    Domain events represent something meaningful that happened in the domain.
+    They are immutable records of business facts.
+    """
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "event_type", self.__class__.__name__)
+    __slots__ = ("_occurred_at", "_event_type")
+
+    def __init__(self, occurred_at: datetime) -> None:
+        self._occurred_at = occurred_at
+        self._event_type = self.__class__.__name__
+
+    @property
+    def occurred_at(self) -> datetime:
+        return self._occurred_at
+
+    @property
+    def event_type(self) -> str:
+        return self._event_type
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DomainEvent):
+            return NotImplemented
+        return self._event_type == other._event_type and self._occurred_at == other._occurred_at
+
+    def __hash__(self) -> int:
+        return hash((self._event_type, self._occurred_at))
+
+    def __repr__(self) -> str:
+        return f"{self._event_type}(occurred_at={self._occurred_at!r})"

@@ -1,6 +1,6 @@
 """
 Presentation Adapters.
-Bridges infrastructure/application events (like async tasks) to UI-safe mechanisms (Qt Signals).
+Bridges async/background events to UI-safe mechanisms.
 """
 
 from .qt_signal_adapter import QtSignalAdapter

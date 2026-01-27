@@ -1,94 +1,200 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+
 from datetime import datetime
 from typing import Optional
 
-from .base import AggregateRoot
-from ..value_objects.equipment_code import EquipmentCode
+from .aggregate_root import AggregateRoot
 from ..enums.machine_status import MachineStatus
 from ..events.device_events import StatusChangedEvent
 from ..policies.status_transition_policy import StatusTransitionPolicy
+from ..value_objects.equipment_code import EquipmentCode
 
 
-@dataclass(slots=True)
 class Device(AggregateRoot):
     """
-    Aggregate Root đại diện cho một thiết bị sản xuất.
-    Đảm bảo các ràng buộc nghiệp vụ về chuyển đổi trạng thái (state transitions).
+    Aggregate Root representing a manufacturing device.
+
+    Enforces business invariants for state transitions and encapsulates
+    all device lifecycle operations.
     """
 
-    equipment_code: EquipmentCode
-    current_status: MachineStatus = field(default=MachineStatus.UNKNOWN)
-    last_update: Optional[datetime] = None
-    name: Optional[str] = None
-    description: Optional[str] = None
+    __slots__ = (
+        "_equipment_code",
+        "_current_status",
+        "_last_update",
+        "_name",
+        "_description",
+    )
+
+    def __init__(
+        self,
+        equipment_code: EquipmentCode,
+        current_status: MachineStatus = MachineStatus.UNKNOWN,
+        last_update: Optional[datetime] = None,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> None:
+        super().__init__()
+        self._equipment_code = equipment_code
+        self._current_status = current_status
+        self._last_update = last_update
+        self._name = name
+        self._description = description
 
     @classmethod
-    def create(cls, code: str, raw_status: str, last_update: Optional[datetime] = None) -> Device:
+    def create(
+        cls,
+        code: str,
+        raw_status: str | int,
+        last_update: Optional[datetime] = None,
+    ) -> Device:
         """
-        [FIXED] Factory method dùng để tái tạo (reconstruct) Entity từ dữ liệu hạ tầng (MSSQL/SQLite).
-        Giúp SyncCommand có thể khởi tạo đối tượng Device mà không cần biết logic map Enum.
+        Factory method to reconstruct entity from infrastructure data.
+        Used by repositories and sync commands.
         """
-        # Ánh xạ từ raw_status (chuỗi từ MSSQL) sang Enum MachineStatus
-        # Sử dụng from_business_term hoặc khởi tạo trực tiếp tùy theo Enum của bạn
-        try:
-            status = MachineStatus.from_business_term(raw_status)
-        except (ValueError, AttributeError):
-            # Fallback nếu không map được
-            try:
-                status = MachineStatus(int(raw_status))
-            except:
-                status = MachineStatus.UNKNOWN
-
-        return cls(equipment_code=EquipmentCode(code), current_status=status, last_update=last_update or datetime.now())
+        status = MachineStatus.from_raw_value(raw_status)
+        return cls(
+            equipment_code=EquipmentCode(code),
+            current_status=status,
+            last_update=last_update or datetime.now(),
+        )
 
     @classmethod
-    def register_new(cls, code: str, name: Optional[str] = None) -> Device:
-        """Factory method để đăng ký mới một thiết bị vào hệ thống."""
-        return cls(equipment_code=EquipmentCode(code), name=name, current_status=MachineStatus.UNKNOWN, last_update=datetime.now())
+    def register_new(
+        cls,
+        code: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Device:
+        """Factory method to register a new device in the system."""
+        return cls(
+            equipment_code=EquipmentCode(code),
+            name=name,
+            description=description,
+            current_status=MachineStatus.UNKNOWN,
+            last_update=datetime.now(),
+        )
+
+    @property
+    def equipment_code(self) -> EquipmentCode:
+        return self._equipment_code
+
+    @property
+    def current_status(self) -> MachineStatus:
+        return self._current_status
+
+    @property
+    def last_update(self) -> Optional[datetime]:
+        return self._last_update
+
+    @property
+    def name(self) -> Optional[str]:
+        return self._name
+
+    @property
+    def description(self) -> Optional[str]:
+        return self._description
+
+    @property
+    def code(self) -> str:
+        return self._equipment_code.value
+
+    @property
+    def status(self) -> int:
+        return self._current_status.value
+
+    @property
+    def status_name(self) -> str:
+        return self._current_status.display_name
+
+    @property
+    def is_active(self) -> bool:
+        return self._current_status.is_active
 
     @property
     def is_operational(self) -> bool:
-        """Kiểm tra máy có đang trong trạng thái sản xuất hay không."""
-        # Giả định is_running được định nghĩa trong MachineStatus enum
-        return getattr(self.current_status, "is_running", False)
+        return self._current_status.is_running
 
-    # --- Các phương thức nghiệp vụ (Domain Behaviors) ---
+    @property
+    def is_idle(self) -> bool:
+        return self._current_status.is_idle
+
+    @property
+    def requires_attention(self) -> bool:
+        return self._current_status.requires_attention
+
+    @property
+    def implies_downtime(self) -> bool:
+        return self._current_status.implies_downtime
 
     def start_production(self, timestamp: datetime) -> None:
         self._transition_to(MachineStatus.RUNNING, timestamp)
 
+    def stop_production(self, timestamp: datetime) -> None:
+        self._transition_to(MachineStatus.STOPPED, timestamp)
+
+    def shutdown(self, timestamp: datetime) -> None:
+        self._transition_to(MachineStatus.SHUTDOWN, timestamp)
+
+    def enter_maintenance(self, timestamp: datetime) -> None:
+        self._transition_to(MachineStatus.MAINTENANCE, timestamp)
+
     def trigger_alarm(self, timestamp: datetime) -> None:
         self._transition_to(MachineStatus.ALARM, timestamp)
 
-    def report_sensor_status(self, raw_status: str, timestamp: datetime) -> None:
-        """Telemetry update từ phần cứng vật lý."""
-        new_status = MachineStatus.from_business_term(raw_status)
+    def clear_alarm(self, timestamp: datetime) -> None:
+        self._transition_to(MachineStatus.STOPPED, timestamp)
+
+    def acknowledge(self, timestamp: datetime) -> None:
+        if self._current_status == MachineStatus.ALARM:
+            self._transition_to(MachineStatus.STOPPED, timestamp)
+
+    def report_sensor_status(
+        self,
+        raw_status: str | int,
+        timestamp: datetime,
+    ) -> None:
+        new_status = MachineStatus.from_raw_value(raw_status)
         self._transition_to(new_status, timestamp)
 
-    def _transition_to(self, new_status: MachineStatus, timestamp: datetime) -> None:
-        """Thực thi thay đổi trạng thái và áp dụng Policy kiểm tra."""
-        if self.current_status == new_status:
+    def update_metadata(
+        self,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> None:
+        if name is not None:
+            self._name = name
+        if description is not None:
+            self._description = description
+
+    def _transition_to(
+        self,
+        new_status: MachineStatus,
+        timestamp: datetime,
+    ) -> None:
+        if self._current_status == new_status:
             return
 
-        # Kiểm tra tính hợp lệ của việc chuyển đổi (Ví dụ: Đang Alarm không thể nhảy thẳng sang Running)
-        StatusTransitionPolicy.validate(self.current_status, new_status)
+        StatusTransitionPolicy.validate(self._current_status, new_status)
 
-        # Ghi nhận Domain Event
         event = StatusChangedEvent(
-            occurred_at=timestamp, equipment_code=self.equipment_code.value, previous_status=self.current_status, new_status=new_status
+            occurred_at=timestamp,
+            equipment_code=self._equipment_code.value,
+            previous_status=self._current_status,
+            new_status=new_status,
         )
         self._record_event(event)
 
-        # Cập nhật trạng thái
-        self.current_status = new_status
-        self.last_update = timestamp
+        self._current_status = new_status
+        self._last_update = timestamp
 
-    # Helper properties cho Repository/Mapper
-    @property
-    def code(self) -> str:
-        return self.equipment_code.value
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Device):
+            return NotImplemented
+        return self._equipment_code == other._equipment_code
 
-    @property
-    def status(self) -> int:
-        return self.current_status.value
+    def __hash__(self) -> int:
+        return hash(self._equipment_code)
+
+    def __repr__(self) -> str:
+        return f"Device(code={self.code!r}, " f"status={self.status_name!r}, " f"last_update={self._last_update!r})"
