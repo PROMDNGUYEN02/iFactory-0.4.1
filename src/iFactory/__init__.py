@@ -8,5 +8,5 @@ This package follows Clean Architecture with clear separation:
 - presentation: Qt UI components
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 __author__ = "Industrial Engineering Team"

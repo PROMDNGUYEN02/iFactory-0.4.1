@@ -14,7 +14,6 @@ import logging
 import sys
 from typing import Optional
 
-# Ensure infrastructure configuration is importable
 import iFactory.infrastructure.configuration  # noqa: F401
 
 logger = logging.getLogger(__name__)
