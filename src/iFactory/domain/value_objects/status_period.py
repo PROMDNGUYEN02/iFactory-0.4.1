@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from .equipment_code import EquipmentCode
 from .time_range import TimeRange
 from ..enums.machine_status import MachineStatus
-from ..exceptions.time_exceptions import StatusMergeError
+from ..exceptions.domain_exceptions import StatusMergeError
 
 
 class StatusPeriod:

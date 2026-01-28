@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from .aggregate_root import AggregateRoot
+from ..common.aggregate import AggregateRoot
 from ..enums.machine_status import MachineStatus
 from ..events.device_events import StatusChangedEvent
-from ..policies.status_transition_policy import StatusTransitionPolicy
+from ..exceptions.domain_exceptions import StaleDataError
+from ..policies.transition_policy import StatusTransitionPolicy
 from ..value_objects.equipment_code import EquipmentCode
 
 
@@ -57,6 +58,8 @@ class Device(AggregateRoot):
             last_updated_at=datetime.now(),
         )
 
+    # --- Properties ---
+
     @property
     def equipment_code(self) -> EquipmentCode:
         return self._equipment_code
@@ -85,9 +88,7 @@ class Device(AggregateRoot):
     def is_operational(self) -> bool:
         return self._current_status.is_running
 
-    @property
-    def requires_attention(self) -> bool:
-        return self._current_status.requires_attention
+    # --- Commands ---
 
     def start_production(self, timestamp: datetime) -> None:
         self._transition_to(MachineStatus.RUNNING, timestamp)
@@ -131,16 +132,26 @@ class Device(AggregateRoot):
         if description is not None:
             self._description = description
 
+    # --- Internal Behavior ---
+
     def _transition_to(
         self,
         new_status: MachineStatus,
         timestamp: datetime,
     ) -> None:
+        # Enforce Time Monotonicity to protect history integrity
+        if timestamp < self._last_updated_at:
+            raise StaleDataError.timestamp_regression(self._last_updated_at, timestamp)
+
         if self._current_status == new_status:
+            # Idempotent: just update the timestamp to confirm liveliness
+            self._last_updated_at = timestamp
             return
 
+        # Validate Transition Rules
         StatusTransitionPolicy.validate(self._current_status, new_status)
 
+        # Record Domain Event
         event = StatusChangedEvent(
             occurred_at=timestamp,
             equipment_code=self._equipment_code,
@@ -149,6 +160,7 @@ class Device(AggregateRoot):
         )
         self._record_event(event)
 
+        # Mutate State
         self._current_status = new_status
         self._last_updated_at = timestamp
 

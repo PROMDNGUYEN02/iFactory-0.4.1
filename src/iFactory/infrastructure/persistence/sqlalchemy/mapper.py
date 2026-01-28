@@ -1,9 +1,3 @@
-"""
-Infrastructure Mapper for Database ORM.
-Strictly bi-directional static mapping between Domain and Persistence.
-No side effects, no database queries.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime
@@ -11,7 +5,10 @@ from typing import List, Optional, Sequence
 from uuid import uuid4
 
 from iFactory.domain.entities.device import Device
+from iFactory.domain.enums.machine_status import MachineStatus
+from iFactory.domain.value_objects.equipment_code import EquipmentCode
 from iFactory.domain.value_objects.status_period import StatusPeriod
+from iFactory.domain.value_objects.time_range import TimeRange
 
 from .models import DeviceModel, StatusPeriodModel
 
@@ -19,7 +16,7 @@ from .models import DeviceModel, StatusPeriodModel
 class OrmDeviceMapper:
     """
     Translates between Domain Aggregates/Value Objects and SQLAlchemy Models.
-    All methods are static and side-effect free.
+    Handles conversion between Raw Types (DB) and Rich Types (Domain).
     """
 
     # =========================================================================
@@ -33,21 +30,24 @@ class OrmDeviceMapper:
             return None
 
         try:
-            device = Device.create(
-                code=model.equip_code,
-                raw_status=model.equip_status,
-                last_update=model.last_update,
+            # 1. Reconstitute Value Objects
+            code_vo = EquipmentCode(model.equip_code)
+            try:
+                status_vo = MachineStatus(model.equip_status)
+            except ValueError:
+                status_vo = MachineStatus.UNKNOWN
+
+            # 2. Reconstitute Aggregate
+            return Device(
+                equipment_code=code_vo,
+                current_status=status_vo,
+                last_updated_at=model.last_update,
+                name=model.name,
+                description=model.description,
             )
 
-            if model.name or model.description:
-                device.update_metadata(
-                    name=model.name,
-                    description=model.description,
-                )
-
-            return device
-
         except Exception:
+            # Log error in real app; here we fail safe
             return None
 
     @staticmethod
@@ -64,10 +64,10 @@ class OrmDeviceMapper:
     def to_model(entity: Device) -> DeviceModel:
         """Convert Domain Device entity to ORM DeviceModel."""
         return DeviceModel(
-            id=entity.code,
-            equip_code=entity.code,
-            equip_status=entity.status,
-            last_update=entity.last_update or datetime.now(),
+            id=entity.equipment_code.value,
+            equip_code=entity.equipment_code.value,
+            equip_status=entity.current_status.value,
+            last_update=entity.last_updated_at or datetime.now(),
             is_active=entity.is_active,
             name=entity.name,
             description=entity.description,
@@ -89,12 +89,21 @@ class OrmDeviceMapper:
             return None
 
         try:
-            return StatusPeriod.create(
-                code=model.device_id,
-                raw_status=model.status,
-                start=model.start_time,
-                end=model.end_time,
-                id=model.id,
+            # 1. Reconstitute Value Objects
+            code_vo = EquipmentCode(model.device_id)
+
+            try:
+                status_vo = MachineStatus(model.status)
+            except ValueError:
+                status_vo = MachineStatus.UNKNOWN
+
+            time_range_vo = TimeRange(model.start_time, model.end_time)
+
+            # 2. Reconstitute StatusPeriod
+            return StatusPeriod(
+                equipment_code=code_vo,
+                status=status_vo,
+                time_range=time_range_vo,
             )
         except Exception:
             return None
@@ -113,11 +122,11 @@ class OrmDeviceMapper:
     def to_period_model(entity: StatusPeriod) -> StatusPeriodModel:
         """Convert Domain StatusPeriod to ORM StatusPeriodModel."""
         return StatusPeriodModel(
-            id=entity.id or str(uuid4()),
-            device_id=entity.device_code,
-            status=entity.status_code,
-            start_time=entity.start_time,
-            end_time=entity.end_time,
+            id=str(uuid4()),
+            device_id=entity.equipment_code.value,
+            status=entity.status.value,
+            start_time=entity.time_range.start,
+            end_time=entity.time_range.end,
         )
 
     @staticmethod

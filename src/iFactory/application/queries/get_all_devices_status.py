@@ -16,7 +16,7 @@ class GetAllDevicesStatusQuery:
 
     def __init__(
         self,
-        uow_factory: Callable,  # Returns HotStorageUnitOfWork
+        uow_factory: Callable,
         cache: ICacheProvider,
     ):
         self._uow_factory = uow_factory
@@ -28,29 +28,26 @@ class GetAllDevicesStatusQuery:
     ) -> List[DeviceStatusDTO]:
         cache_key = "all_devices_status"
 
-        # Try cache first
         cached_status = await self._cache.get(cache_key)
         if cached_status:
             if equipment_codes:
                 return [s for s in cached_status if s.equip_code in equipment_codes]
             return cached_status
 
-        # Fetch from Hot Storage
         async with self._uow_factory() as uow:
             devices = await uow.devices.get_all()
 
         results = [
             DeviceStatusDTO(
-                equip_code=d.code,
-                status_code=str(d.status),  # Convert to string
-                status_name=d.status_name,
-                last_update=d.last_update,
+                equip_code=d.equipment_code.value,
+                status_code=str(d.current_status.value),
+                status_name=d.current_status.name,
+                last_update=d.last_updated_at,
                 is_active=d.is_active,
             )
             for d in devices
         ]
 
-        # Cache for 60 seconds
         await self._cache.set(cache_key, results, ttl=60)
 
         if equipment_codes:

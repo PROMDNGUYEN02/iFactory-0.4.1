@@ -5,7 +5,8 @@ from typing import Any, Dict, Optional
 
 class DomainError(Exception):
     """
-    Base exception for all domain-level business rule violations.
+    Root exception for all Domain Layer violations.
+    Infrastructure and UI should catch this to handle business failures.
     """
 
     __slots__ = ("_message", "_details")

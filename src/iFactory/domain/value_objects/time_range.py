@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from ..exceptions.time_exceptions import InvalidTimeRangeError
+from ..exceptions.domain_exceptions import InvalidTimeRangeError
 
 
 class TimeRange:
@@ -61,6 +61,10 @@ class TimeRange:
         return self._start < other_end and other._start < self_end
 
     def is_adjacent_to(self, other: TimeRange) -> bool:
+        self_end = self._end or datetime.max
+        other_end = other._end or datetime.max
+
+        # Exact touch
         return self._end == other._start or other._end == self._start
 
     def union(self, other: TimeRange) -> TimeRange:
@@ -84,10 +88,9 @@ class TimeRange:
 
         self_end = self._end or datetime.max
         other_end = other._end or datetime.max
-        new_end = min(self_end, other_end)
 
-        if new_end == datetime.max:
-            new_end = None
+        new_end_ts = min(self_end, other_end)
+        new_end = None if new_end_ts == datetime.max else new_end_ts
 
         return TimeRange(new_start, new_end)
 
@@ -102,8 +105,3 @@ class TimeRange:
     def __repr__(self) -> str:
         end_str = self._end.isoformat() if self._end else "ongoing"
         return f"TimeRange({self._start.isoformat()} -> {end_str})"
-
-    def __lt__(self, other: TimeRange) -> bool:
-        if not isinstance(other, TimeRange):
-            return NotImplemented
-        return self._start < other._start

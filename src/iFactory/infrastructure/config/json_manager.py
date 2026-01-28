@@ -16,7 +16,6 @@ from PySide6.QtCore import QObject, Signal, QTimer
 
 from iFactory.infrastructure.config.app_paths import PATHS
 from iFactory.presentation.constants.ui_constants import UIConstants
-from iFactory.domain.constants import TimingConstraints
 
 logger = logging.getLogger(__name__)
 

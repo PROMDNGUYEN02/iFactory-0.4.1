@@ -1,27 +1,15 @@
 """
-iFactory Domain Core.
-
-This module encapsulates the pure business logic and invariants of the application.
-It has zero dependencies on external frameworks, databases, UI components, or IO operations.
-All logic is expressed in ubiquitous business language.
+iFactory Domain Layer
+Pure business logic core. No infrastructure or UI dependencies allowed.
 """
 
-from .entities.aggregate_root import AggregateRoot
+from .common.aggregate import AggregateRoot
+from .common.event import DomainEvent
 from .entities.device import Device
 from .enums.machine_status import MachineStatus
-from .events.base import DomainEvent
 from .events.device_events import StatusChangedEvent
 from .exceptions.base import DomainError
-from .exceptions.device_exceptions import (
-    DeviceNotFoundError,
-    InvalidEquipmentCodeError,
-    InvalidStatusTransitionError,
-)
-from .exceptions.time_exceptions import (
-    InvalidTimeRangeError,
-    StatusMergeError,
-)
-from .policies.status_transition_policy import StatusTransitionPolicy
+from .policies.transition_policy import StatusTransitionPolicy
 from .repositories.device_repository import DeviceRepository
 from .repositories.production_repository import ProductionRepository
 from .value_objects.equipment_code import EquipmentCode
@@ -30,23 +18,24 @@ from .value_objects.material_input import MaterialInput
 from .value_objects.status_period import StatusPeriod
 from .value_objects.time_range import TimeRange
 
-__version__ = "0.5.0"
-
 __all__ = [
+    # Common
     "AggregateRoot",
-    "Device",
-    "MachineStatus",
     "DomainEvent",
+    # Entities
+    "Device",
+    # Enums
+    "MachineStatus",
+    # Events
     "StatusChangedEvent",
+    # Exceptions
     "DomainError",
-    "DeviceNotFoundError",
-    "InvalidEquipmentCodeError",
-    "InvalidStatusTransitionError",
-    "InvalidTimeRangeError",
-    "StatusMergeError",
+    # Policies
     "StatusTransitionPolicy",
+    # Repositories (Interfaces)
     "DeviceRepository",
     "ProductionRepository",
+    # Value Objects
     "EquipmentCode",
     "MaterialBatch",
     "MaterialInput",

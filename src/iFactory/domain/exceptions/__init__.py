@@ -1,10 +1,12 @@
 from .base import DomainError
-from .device_exceptions import (
+from .domain_exceptions import (
     DeviceNotFoundError,
     InvalidEquipmentCodeError,
     InvalidStatusTransitionError,
+    InvalidTimeRangeError,
+    StatusMergeError,
+    StaleDataError,
 )
-from .time_exceptions import InvalidTimeRangeError, StatusMergeError
 
 __all__ = [
     "DomainError",
@@ -13,4 +15,5 @@ __all__ = [
     "InvalidStatusTransitionError",
     "InvalidTimeRangeError",
     "StatusMergeError",
+    "StaleDataError",
 ]

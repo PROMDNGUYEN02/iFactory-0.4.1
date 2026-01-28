@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
+from typing import Final
 
-from ..constants import DeviceLimits
-from ..exceptions.device_exceptions import InvalidEquipmentCodeError
+from ..exceptions.domain_exceptions import InvalidEquipmentCodeError
 
 
 class EquipmentCode:
@@ -14,7 +14,10 @@ class EquipmentCode:
 
     __slots__ = ("_value",)
 
-    _PATTERN = re.compile(r"^[A-Za-z0-9\-_]+$")
+    # Domain Rules for Code format
+    MAX_LENGTH: Final[int] = 50
+    MIN_LENGTH: Final[int] = 1
+    _PATTERN: Final[re.Pattern] = re.compile(r"^[A-Za-z0-9\-_]+$")
 
     def __init__(self, value: str) -> None:
         self._value = self._validate(value)
@@ -29,11 +32,8 @@ class EquipmentCode:
         if not cleaned:
             raise InvalidEquipmentCodeError.empty()
 
-        if len(cleaned) > DeviceLimits.MAX_EQUIPMENT_CODE_LENGTH:
-            raise InvalidEquipmentCodeError.too_long(
-                cleaned,
-                DeviceLimits.MAX_EQUIPMENT_CODE_LENGTH,
-            )
+        if len(cleaned) > cls.MAX_LENGTH:
+            raise InvalidEquipmentCodeError.too_long(cleaned, cls.MAX_LENGTH)
 
         if not cls._PATTERN.match(cleaned):
             raise InvalidEquipmentCodeError.invalid_format(cleaned)

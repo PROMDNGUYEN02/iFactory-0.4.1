@@ -13,6 +13,7 @@ class MaterialBatch:
     def __init__(self, value: str) -> None:
         cleaned = str(value).strip() if value else ""
         if not cleaned:
+            # Using generic DomainError as this is a simple invariant
             raise DomainError("Material batch identifier cannot be empty.")
         self._value = cleaned
 

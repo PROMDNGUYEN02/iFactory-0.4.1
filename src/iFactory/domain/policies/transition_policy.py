@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import FrozenSet, Tuple
 
 from ..enums.machine_status import MachineStatus
-from ..exceptions.device_exceptions import InvalidStatusTransitionError
+from ..exceptions.domain_exceptions import InvalidStatusTransitionError
 
 
 class StatusTransitionPolicy:
@@ -25,6 +25,10 @@ class StatusTransitionPolicy:
         current_status: MachineStatus,
         next_status: MachineStatus,
     ) -> None:
+        """
+        Validates if a transition from current to next status is legal.
+        Raises InvalidStatusTransitionError if illegal.
+        """
         if current_status == next_status:
             return
 
@@ -42,6 +46,7 @@ class StatusTransitionPolicy:
         current_status: MachineStatus,
         next_status: MachineStatus,
     ) -> bool:
+        """Predicate to check transition validity without raising exceptions."""
         if current_status == next_status:
             return True
         return (current_status, next_status) not in cls._FORBIDDEN_TRANSITIONS

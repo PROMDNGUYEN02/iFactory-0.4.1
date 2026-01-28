@@ -5,8 +5,8 @@ from datetime import datetime
 
 class DomainEvent:
     """
-    Base class for all domain events.
-    Immutable records of business facts.
+    Immutable base class for all domain events.
+    Captures a factual occurrence in the domain at a specific point in time.
     """
 
     __slots__ = ("_occurred_at", "_event_type")
@@ -30,3 +30,6 @@ class DomainEvent:
 
     def __hash__(self) -> int:
         return hash((self._event_type, self._occurred_at))
+
+    def __repr__(self) -> str:
+        return f"{self._event_type}(at={self._occurred_at.isoformat()})"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .base import DomainEvent
+from ..common.event import DomainEvent
 from ..enums.machine_status import MachineStatus
 from ..value_objects.equipment_code import EquipmentCode
 
