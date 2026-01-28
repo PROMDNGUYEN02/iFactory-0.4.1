@@ -50,10 +50,8 @@ class MainController(QObject):
 
     def handle_device_selection(self, device_id: str) -> None:
         """User selected a device."""
+        # Local import to avoid circular dependency in tight coupling scenarios
         from ..ui_state.actions import select_device
 
         self._store.dispatch(select_device(device_id))
         logger.debug(f"[MainController] Device selected: {device_id}")
-
-
-__all__ = ["MainController"]

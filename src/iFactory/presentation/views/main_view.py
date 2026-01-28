@@ -23,9 +23,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import iFactory.resources.resources_rc
+# [CRITICAL FIX] Use 'as' to capture the module directly.
+# This avoids accessing 'iFactory.presentation' while it is still initializing.
+import iFactory.presentation.resources.resources_rc as resources_rc
 
-sys.modules["resources_rc"] = iFactory.resources.resources_rc
+# Map the aliased module to sys.modules so generated UI files can find "resources_rc"
+sys.modules["resources_rc"] = resources_rc
 
 from .ui.generated.main_ui import Ui_MainWindow
 from .widgets.gantt_canvas import GanttCanvasWidget

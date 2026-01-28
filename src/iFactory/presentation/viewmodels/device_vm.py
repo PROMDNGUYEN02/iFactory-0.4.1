@@ -1,4 +1,6 @@
-"""Device ViewModel - Pure read-only data structure for UI binding."""
+"""
+Device ViewModel - Pure read-only data structure for UI binding.
+"""
 
 from dataclasses import dataclass
 from typing import Optional
@@ -6,7 +8,10 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class DeviceViewModel:
-    """Immutable presentation data for a device."""
+    """
+    Immutable presentation model for a single device card.
+    Ready for direct binding to UI labels/colors.
+    """
 
     device_id: str
     display_name: str
@@ -27,14 +32,6 @@ class DeviceViewModel:
     cycle_time: float = 0.0
     last_error: Optional[str] = None
 
-    # Aliases for compatibility
     @property
     def id(self) -> str:
         return self.device_id
-
-    @property
-    def code(self) -> str:
-        return self.device_id
-
-
-__all__ = ["DeviceViewModel"]

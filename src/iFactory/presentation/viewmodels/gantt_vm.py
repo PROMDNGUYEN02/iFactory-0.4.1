@@ -1,29 +1,54 @@
-"""Gantt ViewModel - Pure read-only data structures for timeline UI."""
+"""
+Gantt ViewModel - Pure read-only data structures for timeline UI.
+"""
 
 from dataclasses import dataclass
-from typing import List, Optional
+from datetime import datetime
+from typing import List
 
 
 @dataclass(frozen=True)
-class GanttSegmentVM:
-    """Immutable segment for Gantt display."""
+class GanttSegmentViewModel:
+    """
+    Immutable model for a single block on the Gantt chart.
+    Contains pre-calculated display properties (width, color).
+    """
 
-    start_time: str
-    end_time: str
+    start_time: datetime
+    end_time: datetime
+    status_code: int
     status_name: str
-    status_code: str
-    color: str
-    percent: float
-    duration_display: str = ""
+    status_display: str
+    status_color: str
+    duration_seconds: float
+    duration_display: str
+    width_percent: float
+
+    @property
+    def start_display(self) -> str:
+        return self.start_time.strftime("%H:%M:%S")
+
+    @property
+    def end_display(self) -> str:
+        return self.end_time.strftime("%H:%M:%S")
 
 
 @dataclass(frozen=True)
-class GanttTimelineVM:
-    """Immutable timeline for a single device."""
+class GanttChartViewModel:
+    """
+    Immutable model for a complete Device Timeline row.
+    """
 
     device_code: str
-    segments: List[GanttSegmentVM]
-    total_duration_display: str = ""
+    segments: List[GanttSegmentViewModel]
+    start_time: datetime
+    end_time: datetime
+    total_duration_seconds: float
 
+    @property
+    def segment_count(self) -> int:
+        return len(self.segments)
 
-__all__ = ["GanttSegmentVM", "GanttTimelineVM"]
+    @property
+    def time_range_display(self) -> str:
+        return f"{self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"

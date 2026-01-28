@@ -1,6 +1,6 @@
 """
 Device Controller - Handles device data fetching use case.
-Single Responsibility: Load and refresh device list with Auto-Polling.
+Single Responsibility: Orchestrate data flow (Service -> Presenter -> Store).
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 class DeviceController(QObject):
     """
-    Coordinates device data fetching between Application layer and UI State.
-    Includes an internal Timer to poll for data changes.
+    Coordinates polling of device status.
+    Strictly transport layer: No business logic, no direct UI manipulation.
     """
 
     def __init__(
@@ -40,59 +40,51 @@ class DeviceController(QObject):
         self._store = store
         self._is_active = False
 
-        # --- Setup Auto-Refresh Timer ---
+        # Internal Polling Mechanism
         self._timer = QTimer(self)
         self._timer.setInterval(UIConstants.FAST_REFRESH_MS)
         self._timer.timeout.connect(self._on_timer_tick)
 
-        # Start polling immediately upon creation
         self.start_polling()
 
-    def start_polling(self):
-        """Enable auto-refresh."""
+    def start_polling(self) -> None:
         if not self._is_active:
             self._is_active = True
             self._timer.start()
-            logger.info(f"[DeviceController] Polling started (Interval: {UIConstants.FAST_REFRESH_MS}ms)")
-            # Trigger immediate fetch
+            logger.info(f"[DeviceController] Polling started ({UIConstants.FAST_REFRESH_MS}ms)")
             self._on_timer_tick()
 
-    def stop_polling(self):
-        """Disable auto-refresh."""
+    def stop_polling(self) -> None:
         self._timer.stop()
         self._is_active = False
         logger.info("[DeviceController] Polling stopped")
 
-    def _on_timer_tick(self):
-        """Handle timer tick: Schedule async refresh task."""
-        # Use asyncio.create_task to run async method from sync Qt slot
+    def _on_timer_tick(self) -> None:
+        """Bridge Qt Signal to Async Task."""
         asyncio.create_task(self.refresh_all_devices())
 
     async def refresh_all_devices(self) -> int:
         """
-        Fetch devices from Application layer, transform to ViewModels, dispatch to Store.
-        Returns count of devices loaded.
+        Execute Use Case: Get Latest Status.
+        Flow: Service (DTOs) -> Presenter (VMs) -> Store (Action).
         """
         try:
-            # 1. Fetch DTOs (Data)
+            # 1. Application Layer Call
             dtos = await self._device_service.get_all_latest_status()
-
             if not dtos:
-                pass
+                return 0
 
-            # 2. Transform (Presentation Logic)
+            # 2. Map DTO List to Dictionary for O(1) Access in Presenter
             dto_map = {d.equip_code: d for d in dtos}
+
+            # 3. Presentation Layer Transformation
             view_models = self._presenter.present_device_list(dto_map)
 
-            # 3. Update State (UI)
+            # 4. State Dispatch
             self._store.dispatch(load_devices(view_models))
 
             return len(view_models)
 
         except Exception as e:
-            logger.error(f"[DeviceController] Failed to refresh devices: {e}")
+            logger.error(f"[DeviceController] Refresh failed: {e}")
             return 0
-
-    async def load_from_cache(self) -> int:
-        """Load initial state on startup."""
-        return await self.refresh_all_devices()

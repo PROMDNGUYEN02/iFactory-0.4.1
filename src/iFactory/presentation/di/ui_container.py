@@ -1,5 +1,6 @@
 """
 UI Dependency Injection Container.
+Responsible for wiring the Presentation Layer graph.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ from PySide6.QtCore import QObject, QTimer
 
 from ..ui_state.store import Store
 from ..ui_state.reducers import root_reducer
-from ..ui_state.actions import navigate_page
 from ..presenters.device_presenter import DevicePresenter
 from ..presenters.gantt_presenter import GanttPresenter
 from ..controllers.main_controller import MainController
@@ -27,21 +27,28 @@ logger = logging.getLogger(__name__)
 
 
 class UIContainer(QObject):
-    """Initializes Presentation layer components."""
+    """
+    Composition Root for the Presentation Layer.
+    """
 
     def __init__(self, app_container: "AppContainer"):
         super().__init__()
         self._app_container = app_container
+
+        # State
         self._store: Store | None = None
+
+        # Views & Controllers
         self._main_view: MainView | None = None
         self._main_controller: MainController | None = None
         self._device_controller: DeviceController | None = None
         self._gantt_controller: GanttController | None = None
 
     def initialize(self) -> None:
-        """Wire up all presentation components."""
+        """Initialize and wire components."""
         logger.info("[UIContainer] Initializing Presentation Layer...")
 
+        # 1. Setup State Store
         initial_state = {
             "theme": "light",
             "current_page": "daboard_page",
@@ -56,9 +63,11 @@ class UIContainer(QObject):
         }
         self._store = Store(initial_state, {"root": root_reducer})
 
+        # 2. Setup Presenters (Pure Transformers)
         device_presenter = DevicePresenter()
         gantt_presenter = GanttPresenter()
 
+        # 3. Setup Controllers (Orchestrators)
         self._main_controller = MainController(store=self._store)
 
         self._device_controller = DeviceController(
@@ -73,35 +82,38 @@ class UIContainer(QObject):
             store=self._store,
         )
 
+        # 4. Setup Main View
         self._main_view = MainView(
             store=self._store,
             controller=self._main_controller,
         )
 
+        # 5. Kickoff Lifecycle
         QTimer.singleShot(100, self._setup_initial_view)
 
         logger.info("[UIContainer] Presentation Layer initialized.")
 
     def _setup_initial_view(self) -> None:
-        """Set up initial view."""
+        """Finalize view configuration after loop start."""
         if self._main_view is None:
             return
 
         try:
+            # Defensive coding against specific UI implementation details
             if hasattr(self._main_view, "ui"):
                 if hasattr(self._main_view.ui, "listWidget"):
                     self._main_view.ui.listWidget.setCurrentRow(0)
                 if hasattr(self._main_view.ui, "stackedWidget"):
                     self._main_view.ui.stackedWidget.setCurrentIndex(0)
 
-            # Load data after view is ready
+            # Schedule initial data fetch
             QTimer.singleShot(500, self._trigger_data_load)
 
         except Exception as e:
-            logger.warning(f"Could not set initial view: {e}")
+            logger.warning(f"Could not set initial view state: {e}")
 
     def _trigger_data_load(self) -> None:
-        """Trigger async data loading."""
+        """Bridge sync timer to async loader."""
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -109,10 +121,10 @@ class UIContainer(QObject):
             else:
                 loop.run_until_complete(self._load_all_data())
         except Exception as e:
-            logger.debug(f"Data load scheduling: {e}")
+            logger.debug(f"Data load scheduling failed: {e}")
 
     async def _load_all_data(self) -> None:
-        """Load devices and gantt data."""
+        """Execute initial data loading use cases."""
         try:
             if self._device_controller:
                 await self._device_controller.refresh_all_devices()
@@ -121,19 +133,16 @@ class UIContainer(QObject):
                 await self._gantt_controller.load_timeline(days=1)
 
         except Exception as e:
-            logger.error(f"Failed to load data: {e}")
+            logger.error(f"Failed to load initial data: {e}")
 
     def get_main_window(self) -> MainView | None:
         return self._main_view
 
-    def schedule_deferred_data_load(self) -> None:
-        """Schedule data load."""
-        QTimer.singleShot(1000, self._trigger_data_load)
-
     def shutdown(self) -> None:
+        """Clean shutdown of presentation layer."""
+        if self._device_controller:
+            self._device_controller.stop_polling()
+
         if self._main_view:
             self._main_view.close()
         logger.info("[UIContainer] Shutdown complete.")
-
-
-__all__ = ["UIContainer"]

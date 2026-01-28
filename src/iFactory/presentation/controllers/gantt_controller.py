@@ -1,5 +1,6 @@
 """
-Gantt Controller - Handles Gantt chart data fetching.
+Gantt Controller - Handles Gantt chart data loading.
+Single Responsibility: Orchestrate data flow (Service -> Presenter -> Store).
 """
 
 from __future__ import annotations
@@ -10,8 +11,7 @@ from typing import TYPE_CHECKING, Dict, List, Any
 
 from PySide6.QtCore import QObject
 
-from ..ui_state.actions import UIActionType, load_gantt
-from ..ui_state.store import Action
+from ..ui_state.actions import load_gantt
 
 if TYPE_CHECKING:
     from ..presenters.gantt_presenter import GanttPresenter
@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 class GanttController(QObject):
-    """Coordinates Gantt timeline data between Application layer and UI State."""
+    """
+    Coordinates loading of Gantt timeline data.
+    Delegates all formatting and calculation to GanttPresenter.
+    """
 
     def __init__(
         self,
@@ -35,80 +38,76 @@ class GanttController(QObject):
         self._presenter = presenter
         self._store = store
 
-    async def load_timeline(self, days: int = 1) -> Dict[str, List[Any]]:
-        """Load Gantt timeline for devices (24h)."""
+    async def load_timeline(self, days: int = 1) -> Dict[str, Any]:
+        """
+        Execute Use Case: Load Gantt Timeline.
+        Flow:
+        1. Determine Time Window
+        2. Identify Targets (Devices)
+        3. Fetch Data (Service)
+        4. Transform Data (Presenter)
+        5. Update UI (Store)
+        """
         try:
             if not self._device_service:
-                logger.warning("[GanttController] No device service available.")
                 return {}
 
+            # 1. Define Window
             end = datetime.now()
             start = end - timedelta(days=days)
-            total_seconds = (end - start).total_seconds()
 
-            # Get devices from store
+            # 2. Identify Targets (from State)
             state = self._store.get_state()
             devices = state.get("devices", {})
-
             if not devices:
-                logger.debug("[GanttController] No devices in store.")
                 return {}
 
-            timeline_data = {}
+            # Limit scope (Paginating/limiting logic belongs in App/Infra,
+            # but restricting UI requests is valid Controller logic)
+            target_codes = list(devices.keys())[:20]
 
-            # Limit to first 20 devices for performance
-            device_codes = list(devices.keys())[:20]
+            timeline_vms = {}
 
-            for code in device_codes:
+            # 3. Orchestrate Fetch & Transform
+            for code in target_codes:
                 try:
+                    # Service Call
                     result = await self._device_service.generate_gantt_segments(code, days=days)
                     segments_dto = result.get("segments", [])
 
                     if not segments_dto:
                         continue
 
-                    formatted_segments = []
-                    for seg in segments_dto:
-                        seg_start = seg.get("start_time", start)
-                        seg_end = seg.get("end_time", end)
+                    # Presenter Call (Pure Transformation)
+                    # Note: We pass raw DTOs + Context (start/end window)
+                    vm = self._presenter.format_chart(device_code=code, segments_dto=segments_dto, window_start=start, window_end=end)
 
-                        # Ensure datetime objects
-                        if isinstance(seg_start, str):
-                            seg_start = datetime.fromisoformat(seg_start)
-                        if isinstance(seg_end, str):
-                            seg_end = datetime.fromisoformat(seg_end)
-
-                        duration = (seg_end - seg_start).total_seconds()
-                        percent = duration / total_seconds if total_seconds > 0 else 0
-
-                        status_code = seg.get("status_code", "0")
-
-                        formatted_segments.append(
-                            {
-                                "start_time": seg_start,
-                                "end_time": seg_end,
-                                "status_name": seg.get("status_name", "Unknown"),
-                                "status_code": str(status_code),
-                                "percent": percent,
-                            }
-                        )
-
-                    if formatted_segments:
-                        timeline_data[code] = formatted_segments
+                    # Store as raw dict or VM depending on Store requirements.
+                    # Assuming Store expects serializer-friendly dicts for segments based on legacy code,
+                    # but ideally it should store the VM.
+                    # We will store the VM object list representation to match legacy dict-of-list structure.
+                    # Adapting VM to legacy store structure:
+                    timeline_vms[code] = [
+                        {
+                            "start_time": s.start_time,
+                            "end_time": s.end_time,
+                            "status_name": s.status_name,
+                            "status_code": str(s.status_code),
+                            "percent": s.width_percent,
+                        }
+                        for s in vm.segments
+                    ]
 
                 except Exception as e:
-                    logger.debug(f"No gantt data for {code}: {e}")
+                    logger.debug(f"Gantt fetch failed for {code}: {e}")
 
-            # Dispatch to store
-            if timeline_data:
-                self._store.dispatch(load_gantt(timeline_data))
-                logger.debug(f"[GanttController] Loaded timeline for {len(timeline_data)} devices.")
+            # 4. Dispatch
+            if timeline_vms:
+                self._store.dispatch(load_gantt(timeline_vms))
+                logger.debug(f"[GanttController] Updated {len(timeline_vms)} timelines")
 
-            return timeline_data
+            return timeline_vms
 
         except Exception as e:
-            logger.error(f"[GanttController] Failed to load timeline: {e}", exc_info=True)
+            logger.error(f"[GanttController] Fatal error: {e}", exc_info=True)
             return {}
-
-
-__all__ = ["GanttController"]
