@@ -10,6 +10,8 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+from iFactory.infrastructure.configuration.paths import PATHS
+
 from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import (
     QColor,
@@ -63,7 +65,7 @@ class DeviceIconItem(QGraphicsObject):
         self.setCursor(Qt.PointingHandCursor)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
 
-        self._status_color = QColor("#9E9E9E")  # Default gray
+        self._status_color = QColor(Qt.transparent)  # Default transparent
         self._is_hovered = False
 
         self._pixmap: Optional[QPixmap] = None
@@ -152,7 +154,6 @@ class DeviceIconItem(QGraphicsObject):
 
     def update_live_data(self, device_vm) -> None:
         """Update from ViewModel - handles DeviceViewModel, dict, or any object with status_color."""
-        # Extract status_color
         status_color = None
         output_count = 0
 
@@ -240,7 +241,7 @@ class DeviceCanvasWidget(QWidget):
 
     def _load_positions(self) -> None:
         try:
-            pos_file = Path("data/device_positions.json")
+            pos_file = PATHS.device_positions_path
             if not pos_file.exists():
                 logger.warning(f"Device positions file not found: {pos_file}")
                 return
