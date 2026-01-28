@@ -38,6 +38,13 @@ def root_reducer(state: Dict[str, Any], action: Action) -> Dict[str, Any]:
     elif action_type == UIActionType.RIGHT_PANEL_TOGGLED.value:
         new_state["right_panel_expanded"] = not state.get("right_panel_expanded", False)
 
+    elif action.type == UIActionType.SYSTEM_STATUS_UPDATED.value:
+        return {
+            **state,
+            "system_status": {"mssql": action.payload.get("mssql", False), "sqlite": action.payload.get("sqlite", False)},
+            "last_log_message": action.payload.get("message", state.get("last_log_message")),
+        }
+
     elif action_type == UIActionType.DEVICE_SELECTED.value:
         new_state["selected_device_id"] = payload.get("id")
 

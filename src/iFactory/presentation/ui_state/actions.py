@@ -15,6 +15,7 @@ class UIActionType(Enum):
     GANTT_LOADED = "GANTT_LOADED"
     LEFT_MENU_TOGGLED = "LEFT_MENU_TOGGLED"
     RIGHT_PANEL_TOGGLED = "RIGHT_PANEL_TOGGLED"
+    SYSTEM_STATUS_UPDATED = "SYSTEM_STATUS_UPDATED"
     DEVICE_SELECTED = "DEVICE_SELECTED"
     LOADING_STARTED = "LOADING_STARTED"
     LOADING_FINISHED = "LOADING_FINISHED"
@@ -46,7 +47,6 @@ def load_gantt(timeline_data: dict) -> Action:
 
 def navigate_page(page_name: str) -> Action:
     """Create navigation action with menu index."""
-    # Determine menu index based on page
     menu_index = 0  # Default to Dashboard
     if "orders" in page_name:
         menu_index = 1
@@ -59,6 +59,10 @@ def navigate_page(page_name: str) -> Action:
 def select_menu_item(index: int) -> Action:
     """Create menu selection action."""
     return Action(type=UIActionType.MENU_ITEM_SELECTED.value, payload={"menu_index": index})
+
+
+def update_system_status(mssql: bool, sqlite: bool, message: str = None) -> Action:
+    return Action(type=UIActionType.SYSTEM_STATUS_UPDATED.value, payload={"mssql": mssql, "sqlite": sqlite, "message": message})
 
 
 def select_device(device_id: str) -> Action:

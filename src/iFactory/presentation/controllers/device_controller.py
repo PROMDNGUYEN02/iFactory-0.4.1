@@ -5,14 +5,14 @@ Single Responsibility: Orchestrate data flow (Service -> Presenter -> Store).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QTimer
 
 from ..constants.ui_constants import UIConstants
-from ..ui_state.actions import load_devices
+from ..ui_state.actions import load_devices, update_system_status
+from ..adapters.async_executor import AsyncExecutor
 
 if TYPE_CHECKING:
     from ..presenters.device_presenter import DevicePresenter
@@ -40,6 +40,9 @@ class DeviceController(QObject):
         self._store = store
         self._is_active = False
 
+        # [FIX] Initialize AsyncExecutor to handle async tasks from Qt thread
+        self._executor = AsyncExecutor(parent=self)
+
         # Internal Polling Mechanism
         self._timer = QTimer(self)
         self._timer.setInterval(UIConstants.FAST_REFRESH_MS)
@@ -52,6 +55,7 @@ class DeviceController(QObject):
             self._is_active = True
             self._timer.start()
             logger.info(f"[DeviceController] Polling started ({UIConstants.FAST_REFRESH_MS}ms)")
+            # Trigger immediately
             self._on_timer_tick()
 
     def stop_polling(self) -> None:
@@ -60,8 +64,9 @@ class DeviceController(QObject):
         logger.info("[DeviceController] Polling stopped")
 
     def _on_timer_tick(self) -> None:
-        """Bridge Qt Signal to Async Task."""
-        asyncio.create_task(self.refresh_all_devices())
+        """Bridge Qt Signal to Async Task using AsyncExecutor."""
+        # [FIX] Use executor instead of asyncio.create_task to avoid 'no running event loop' error
+        self._executor.run(self.refresh_all_devices())
 
     async def refresh_all_devices(self) -> int:
         """
@@ -71,7 +76,8 @@ class DeviceController(QObject):
         try:
             # 1. Application Layer Call
             dtos = await self._device_service.get_all_latest_status()
-            if not dtos:
+            if dtos is None:
+                self._store.dispatch(update_system_status(mssql=False, sqlite=True, message="No Data"))
                 return 0
 
             # 2. Map DTO List to Dictionary for O(1) Access in Presenter
@@ -82,9 +88,10 @@ class DeviceController(QObject):
 
             # 4. State Dispatch
             self._store.dispatch(load_devices(view_models))
-
+            self._store.dispatch(update_system_status(mssql=True, sqlite=True, message="System Running: Sync OK"))
             return len(view_models)
 
         except Exception as e:
             logger.error(f"[DeviceController] Refresh failed: {e}")
+            self._store.dispatch(update_system_status(mssql=False, sqlite=True, message=f"Error: {str(e)}"))
             return 0

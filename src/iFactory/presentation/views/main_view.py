@@ -100,15 +100,84 @@ class MainView(QMainWindow):
 
         logger.debug("[MainView] Initialized.")
 
+        self.update_system_status(mssql_connected=False, sqlite_connected=True, message="Initializing system components...")
+
     def _setup_initial_state(self) -> None:
         """Configure initial UI state."""
-        self.ui.statusbar.hide()
+        self.ui.statusbar.show()
         self.statusBar().setSizeGripEnabled(False)
         self.ui.right_slide_menu_frame.setFixedWidth(0)
         self.ui.left_slide_menu_frame.setFixedWidth(UIConstants.MENU_COLLAPSED_WIDTH)
         self.ui.title_frame.setFixedWidth(UIConstants.MENU_COLLAPSED_WIDTH)
         self.ui.title_label.setVisible(False)
         self.ui.title_icon.setVisible(False)
+
+        self._setup_status_bar()
+
+    def _setup_status_bar(self) -> None:
+        """Modern Status Bar Setup."""
+        # CSS cho Status Bar hiện đại: Phẳng, tối giản
+        self.ui.statusbar.setStyleSheet(
+            """
+            QStatusBar {
+                background-color: #FAFAFA; /* Hoặc #1e1e1e nếu dark mode */
+                border-top: 1px solid #E5E5E5;
+                color: #333;
+            }
+        """
+        )
+
+        # 1. System Message (Log trôi) - Font thường, màu xám
+        self.lbl_system_message = QLabel("Ready")
+        self.lbl_system_message.setStyleSheet("color: #666666; padding-left: 10px; font-size: 12px;")
+        self.ui.statusbar.addWidget(self.lbl_system_message, 1)
+
+        # Container cho indicators
+        self.status_container = QWidget()
+        container_layout = QHBoxLayout(self.status_container)
+        container_layout.setContentsMargins(0, 0, 15, 0)
+        container_layout.setSpacing(15)
+
+        # Helper để tạo Badge Style (Bo tròn, có viền nhẹ hoặc dot)
+        def create_indicator(text):
+            lbl = QLabel(text)
+            lbl.setAlignment(Qt.AlignCenter)
+            # Style mặc định: Xám (Disabled/Unknown)
+            lbl.setStyleSheet(
+                """
+                QLabel {
+                    background-color: transparent;
+                    color: #999999;
+                    font-weight: 600;
+                    font-size: 11px;
+                    padding: 4px 8px;
+                    border: 1px solid #E0E0E0;
+                    border-radius: 10px; /* Pill shape */
+                }
+            """
+            )
+            return lbl
+
+        # 2. Indicators
+        self.lbl_sqlite_status = create_indicator("Local DB")
+        self.lbl_mssql_status = create_indicator("Remote DB")
+
+        # 3. Overall Mode (Thay thế cho READY)
+        self.lbl_app_mode = QLabel("ONLINE")
+        self.lbl_app_mode.setStyleSheet("font-weight: bold; font-size: 11px; color: #10B981;")
+
+        container_layout.addWidget(self.lbl_sqlite_status)
+        container_layout.addWidget(self.lbl_mssql_status)
+
+        # Thêm một thanh ngăn cách nhỏ
+        separator = QFrame()
+        separator.setFrameShape(QFrame.VLine)
+        separator.setStyleSheet("color: #CCCCCC;")
+        container_layout.addWidget(separator)
+
+        container_layout.addWidget(self.lbl_app_mode)
+
+        self.ui.statusbar.addPermanentWidget(self.status_container)
 
     def eventFilter(self, obj, event) -> bool:
         """Handle click-outside to close panels."""
@@ -416,6 +485,15 @@ class MainView(QMainWindow):
         self._update_right_panel(state)
         self._update_lcd_numbers(summary)
 
+        # Update system status
+        sys_status = state.get("system_status", {})
+        if hasattr(self, "update_system_status"):
+            self.update_system_status(
+                mssql_connected=sys_status.get("mssql", False),
+                sqlite_connected=sys_status.get("sqlite", False),
+                message=state.get("last_log_message", "System Running"),
+            )
+
     def _update_right_panel(self, state: Dict[str, Any]) -> None:
         """Update right panel with selected device data."""
         selected_data = select_selected_device_data(state)
@@ -470,6 +548,69 @@ class MainView(QMainWindow):
             self.ui.lcdNumber_20.display(summary.get("output", 0))
         if hasattr(self.ui, "lcdNumber_15"):
             self.ui.lcdNumber_15.display(summary.get("yield_rate", 0))
+
+    def update_system_status(self, mssql_connected: bool = False, sqlite_connected: bool = False, message: str = None) -> None:
+        """
+        Update visual status with Modern Logic.
+        """
+        # Palette màu hiện đại (Tailwind CSS colors)
+        COLOR_SUCCESS_BG = "#D1FAE5"
+        COLOR_SUCCESS_TEXT = "#065F46"
+        COLOR_SUCCESS_BORDER = "#10B981"
+        COLOR_ERROR_BG = "#FEE2E2"
+        COLOR_ERROR_TEXT = "#991B1B"
+        COLOR_ERROR_BORDER = "#EF4444"
+        COLOR_WARN_BG = "#FEF3C7"
+        COLOR_WARN_TEXT = "#92400E"
+        COLOR_WARN_BORDER = "#F59E0B"
+
+        def set_style(label, state, text_ok, text_err):
+            if state:
+                # Style: Nền nhạt, chữ đậm, viền mỏng (Rất hiện đại)
+                label.setText(f"● {text_ok}")
+                label.setStyleSheet(
+                    f"""
+                    background-color: {COLOR_SUCCESS_BG}; 
+                    color: {COLOR_SUCCESS_TEXT}; 
+                    border: 1px solid {COLOR_SUCCESS_BG}; 
+                    border-radius: 12px; padding: 2px 10px; font-weight: bold;
+                """
+                )
+            else:
+                label.setText(f"○ {text_err}")
+                label.setStyleSheet(
+                    f"""
+                    background-color: {COLOR_ERROR_BG}; 
+                    color: {COLOR_ERROR_TEXT}; 
+                    border: 1px solid {COLOR_ERROR_BG};
+                    border-radius: 12px; padding: 2px 10px; font-weight: bold;
+                """
+                )
+
+        # Cập nhật MSSQL
+        set_style(self.lbl_mssql_status, mssql_connected, "Remote: On", "Remote: Off")
+
+        # Cập nhật SQLite (Local)
+        set_style(self.lbl_sqlite_status, sqlite_connected, "Local: On", "Local: Err")
+
+        # Logic tổng hợp (Smart Mode)
+        if mssql_connected and sqlite_connected:
+            self.lbl_app_mode.setText("ONLINE SYSTEM")
+            self.lbl_app_mode.setStyleSheet(f"color: {COLOR_SUCCESS_BORDER}; font-weight: 900;")
+        elif not mssql_connected and sqlite_connected:
+            self.lbl_app_mode.setText("OFFLINE MODE")  # Nghe chuyên nghiệp hơn là "Error"
+            self.lbl_app_mode.setStyleSheet(f"color: {COLOR_WARN_BORDER}; font-weight: 900;")
+        else:
+            self.lbl_app_mode.setText("SYSTEM HALTED")
+            self.lbl_app_mode.setStyleSheet(f"color: {COLOR_ERROR_BORDER}; font-weight: 900;")
+
+        # Update message
+        if message:
+            # Thêm timestamp vào log message cho chuyên nghiệp
+            import datetime
+
+            time_str = datetime.datetime.now().strftime("%H:%M:%S")
+            self.lbl_system_message.setText(f"[{time_str}] {message}")
 
     def _update_menu_icons(self, mode: str) -> None:
         """Update menu icons based on theme."""
