@@ -214,6 +214,10 @@ class MainView(QMainWindow):
         header_layout.addWidget(self.rp_status_badge)
         layout.addLayout(header_layout)
 
+        self.rp_last_update = QLabel("Last Update: --")
+        self.rp_last_update.setStyleSheet("font-size: 11px; margin-bottom: 5px; color: #808080;")
+        layout.addWidget(self.rp_last_update)
+
         self.lbl_oee = QLabel("OEE: 0%")
         self.lbl_oee.setStyleSheet("font-weight: bold; margin-top: 10px;")
         self.bar_oee = QProgressBar()
@@ -428,8 +432,16 @@ class MainView(QMainWindow):
         oee = selected_data.get("oee", 0)
         yield_rate = selected_data.get("yield_rate", 0)
         cycle_time = selected_data.get("cycle_time", 0.0)
+        last_update = selected_data.get("last_update")
 
         self.rp_title.setText(f"DEVICE: {dev_id}")
+
+        if last_update:
+            clean_time = str(last_update).replace("T", " ").split(".")[0]
+            self.rp_last_update.setText(f"🕒 Last Status: <b>{clean_time}</b>")
+        else:
+            self.rp_last_update.setText("🕒 Last Status: --")
+
         self.rp_status_badge.setText(status.upper())
         self.rp_status_badge.setStyleSheet(
             f"background-color: {color}; color: white; font-weight: bold; " f"padding: 4px 10px; border-radius: 12px; font-size: 11px;"
@@ -500,6 +512,12 @@ class MainView(QMainWindow):
                 padding-left: 10px;
                 text-align: left;
             }
+            QToolTip {
+                padding: 4px;
+                border-radius: 4px;
+                font-family: "Segoe UI";
+                font-size: 12px;
+            }
         """
 
         if mode == "dark":
@@ -524,6 +542,12 @@ class MainView(QMainWindow):
                     color: white;
                     border-left: 3px solid #007acc;
                 }
+                /* [FIX] Tooltip Dark Mode */
+                QToolTip {
+                    background-color: #2d2d30;
+                    color: #ffffff;
+                    border: 1px solid #555555;
+                }
             """
         else:
             colors = """
@@ -546,6 +570,11 @@ class MainView(QMainWindow):
                     background-color: #e3f2fd;
                     color: #007acc;
                     border-left: 3px solid #007acc;
+                }
+                QToolTip {
+                    background-color: #ffffff;
+                    color: #000000;
+                    border: 1px solid #888888;
                 }
             """
 

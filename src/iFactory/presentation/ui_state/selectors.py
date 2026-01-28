@@ -71,6 +71,7 @@ def select_selected_device_data(state: Dict[str, Any]) -> Optional[Dict[str, Any
             "inputs": 0,
             "outputs": 0,
             "error": "...",
+            "last_update": None,
         }
 
     return {
@@ -83,6 +84,7 @@ def select_selected_device_data(state: Dict[str, Any]) -> Optional[Dict[str, Any
         "oee": getattr(device, "oee", 0),
         "yield_rate": getattr(device, "yield_rate", 0),
         "cycle_time": getattr(device, "cycle_time", 0.0),
+        "last_update": getattr(device, "last_update", None),
     }
 
 

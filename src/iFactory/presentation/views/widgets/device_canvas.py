@@ -156,14 +156,22 @@ class DeviceIconItem(QGraphicsObject):
         """Update from ViewModel - handles DeviceViewModel, dict, or any object with status_color."""
         status_color = None
         output_count = 0
+        last_update = None
+        status_display = "Unknown"
 
+        # 1. Extract Data (bao gồm cả last_update và status_display)
         if hasattr(device_vm, "status_color"):
             status_color = device_vm.status_color
             output_count = getattr(device_vm, "output_count", 0) or 0
+            last_update = getattr(device_vm, "last_update", None)
+            status_display = getattr(device_vm, "status_display", "Unknown")
         elif isinstance(device_vm, dict):
             status_color = device_vm.get("status_color", "#9E9E9E")
             output_count = device_vm.get("output_count", 0) or 0
+            last_update = device_vm.get("last_update")
+            status_display = device_vm.get("status_display", "Unknown")
 
+        # 2. Update Visuals (Color)
         if status_color:
             new_color = QColor(status_color)
             if new_color.isValid() and new_color != self._status_color:
@@ -171,12 +179,21 @@ class DeviceIconItem(QGraphicsObject):
                 self._glow.setColor(new_color)
                 self.update()
 
+        # 3. Update Badge
         if output_count > 0:
             self.output_badge.setPlainText(str(output_count))
             self.output_badge.setPos(self.w - 8, -self._padding - 8)
             self.output_badge.setVisible(True)
         else:
             self.output_badge.setVisible(False)
+
+        # 4. Update Tooltip
+        tooltip_text = f"ID: {self.equip_code}\nStatus: {status_display}"
+        if last_update:
+            clean_time = str(last_update).replace("T", " ").split(".")[0]
+            tooltip_text += f"\nUpdated: {clean_time}"
+
+        self.setToolTip(tooltip_text)
 
     def update_theme(self, is_dark: bool) -> None:
         if is_dark != self._is_dark:
