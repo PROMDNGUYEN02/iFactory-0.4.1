@@ -1,6 +1,6 @@
 """
-Generic JSON configuration loader.
-Pure I/O logic, zero business coupling.
+Infrastructure: Generic JSON Loader.
+Pure I/O utility.
 """
 
 import json
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class JsonConfigLoader:
-    """Reads configuration files securely from the filesystem."""
+    """Safe JSON file reader."""
 
     @staticmethod
     def load(filepath: Path) -> Dict[str, Any]:

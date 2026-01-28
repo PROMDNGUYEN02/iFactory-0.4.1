@@ -1,15 +1,18 @@
 """
-Infrastructure: Database Configuration using Pydantic V2.
+Infrastructure: Database Configuration.
 """
 
-import os
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
-from .app_paths import PATHS
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from iFactory.infrastructure.configuration.paths import PATHS
 
 
 class DatabaseConfig(BaseSettings):
-    """Cấu hình Database. Ưu tiên load từ biến môi trường (.env)."""
+    """
+    Database configuration settings.
+    Prioritizes environment variables (prefix DB_).
+    """
 
     model_config = SettingsConfigDict(env_prefix="DB_", case_sensitive=False, env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -33,4 +36,4 @@ class DatabaseConfig(BaseSettings):
         if not (self.mssql_host and self.mssql_db):
             return None
         driver = self.mssql_driver.replace(" ", "+")
-        return f"mssql+aioodbc://{self.mssql_user}:{self.mssql_password}@{self.mssql_host}/{self.mssql_db}?driver={driver}"
+        return f"mssql+aioodbc://{self.mssql_user}:{self.mssql_password}@" f"{self.mssql_host}/{self.mssql_db}?driver={driver}"

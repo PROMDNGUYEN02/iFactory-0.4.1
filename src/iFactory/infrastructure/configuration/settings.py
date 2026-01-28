@@ -1,6 +1,7 @@
 """
-Infrastructure: JSON Settings Manager.
-Implementation of Settings persistence using JSON files.
+Infrastructure: Application Settings Manager.
+Implements ISettingsManager using JSON persistence.
+Adapts to Qt environment if available, otherwise runs pure.
 """
 
 from __future__ import annotations
@@ -11,21 +12,67 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock, Lock
 from typing import Any, ClassVar, Final, Optional
+from abc import ABCMeta
 
-from PySide6.QtCore import QObject, Signal, QTimer
+try:
+    # Optional dependency: Adapter for Qt Environment
+    from PySide6.QtCore import QObject, Signal, QTimer
 
-from iFactory.infrastructure.config.app_paths import PATHS
-from iFactory.presentation.constants.ui_constants import UIConstants
+    HAS_QT = True
+
+    # Resolve Metaclass Conflict: Create a metaclass that inherits from both
+    # QObject's metaclass (Shiboken.ObjectType) and ABCMeta.
+    class QABCMeta(type(QObject), ABCMeta):
+        pass
+
+except ImportError:
+    HAS_QT = False
+
+    # Fallback mocks for pure python environment
+    class QObject:
+        pass
+
+    class Signal:
+        def __init__(self, *args):
+            pass
+
+        def emit(self, *args):
+            pass
+
+        def connect(self, func):
+            pass
+
+    class QTimer:
+        def __init__(self, parent=None):
+            self.timeout = Signal()
+
+        def setSingleShot(self, val):
+            pass
+
+        def start(self, ms):
+            pass
+
+        def connect(self, func):
+            pass
+
+    # In pure Python, QObject is a standard class (type),
+    # so ABCMeta is sufficient as the metaclass.
+    QABCMeta = ABCMeta
+
+
+from iFactory.application.ports.config import ISettingsManager
+from iFactory.infrastructure.configuration.paths import PATHS
 
 logger = logging.getLogger(__name__)
 
 DEBOUNCE_DELAY_MS: Final[int] = 500
 SCHEMA_VERSION: Final[str] = "1.0"
+DEFAULT_RIGHT_PANEL_WIDTH: Final[int] = 350  # Default value isolated from Presentation layer
 
 
 @dataclass(slots=True)
 class AppSettings:
-    """Application-level settings."""
+    """Application-level settings DTO."""
 
     profile: str = "Equipment Realtime Visualization"
     refresh_fast_ms: int = 3000
@@ -41,7 +88,7 @@ class AppSettings:
 
 @dataclass(slots=True)
 class UISettings:
-    """UI-related settings."""
+    """UI-related settings DTO."""
 
     theme: str = "light"
     right_panel_width: int = 800
@@ -56,10 +103,11 @@ class UISettings:
         return cls(**filtered)
 
 
-class SettingsManager(QObject):
+class SettingsManager(QObject, ISettingsManager, metaclass=QABCMeta):
     """
-    Thread-safe settings manager with debounced persistence.
-    Singleton pattern ensures single source of truth.
+    Thread-safe settings manager.
+    Acts as an adapter to the filesystem for persistence.
+    Acts as an adapter to Qt (via QObject/Signal) for reactive UI updates.
     """
 
     settings_changed = Signal(str, object)
@@ -80,7 +128,12 @@ class SettingsManager(QObject):
     def __init__(self, *args, **kwargs):
         if hasattr(self, "_initialized"):
             return
-        super().__init__()
+        # Initialize QObject only if Qt is present
+        if HAS_QT:
+            super().__init__()
+        else:
+            super().__init__()
+
         self._internal_init()
         self._initialized = True
 
@@ -92,9 +145,13 @@ class SettingsManager(QObject):
         self._dirty = False
         self._loading = False
 
-        self._save_timer = QTimer(self)
-        self._save_timer.setSingleShot(True)
-        self._save_timer.timeout.connect(self._save_sync)
+        if HAS_QT:
+            self._save_timer = QTimer(self)
+            self._save_timer.setSingleShot(True)
+            self._save_timer.timeout.connect(self._save_sync)
+        else:
+            # Simple fallback or no-op for timer in non-UI context
+            self._save_timer = None
 
         self._load()
 
@@ -126,7 +183,7 @@ class SettingsManager(QObject):
         self._data = {
             "_schema_version": SCHEMA_VERSION,
             "theme": "light",
-            "right_panel_width": UIConstants.RIGHT_PANEL_WIDTH_EXPANDED,
+            "right_panel_width": DEFAULT_RIGHT_PANEL_WIDTH,
             "app": {
                 "profile": "Equipment Realtime Visualization",
                 "refresh_fast_ms": 3000,
@@ -155,13 +212,21 @@ class SettingsManager(QObject):
                 temp_path.write_text(content, encoding="utf-8")
                 temp_path.replace(self._path)
                 self._dirty = False
-                self.save_completed.emit()
+                if HAS_QT:
+                    self.save_completed.emit()
             except Exception as e:
                 logger.error(f"Save failed: {e}")
-                self.save_failed.emit(str(e))
+                if HAS_QT:
+                    self.save_failed.emit(str(e))
 
     def _schedule_save(self) -> None:
-        self._save_timer.start(DEBOUNCE_DELAY_MS)
+        if self._save_timer and HAS_QT:
+            self._save_timer.start(DEBOUNCE_DELAY_MS)
+        else:
+            # Sync save in CLI/Test environment
+            self._save_sync()
+
+    # --- ISettingsManager Implementation ---
 
     def get(self, key: str, default: Any = None) -> Any:
         with self._rlock:
@@ -174,7 +239,7 @@ class SettingsManager(QObject):
                     return default
             return value
 
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: Any, immediate: bool = False) -> None:
         with self._rlock:
             keys = key.split(".")
             data = self._data
@@ -187,11 +252,20 @@ class SettingsManager(QObject):
             if data.get(final_key) != value:
                 data[final_key] = value
                 self._dirty = True
-                if not self._loading:
+                if not self._loading and HAS_QT:
                     self.settings_changed.emit(key, value)
                     if key == "theme":
                         self.theme_changed.emit(str(value))
-                self._schedule_save()
+
+                if immediate:
+                    self._save_sync()
+                else:
+                    self._schedule_save()
+
+    def save(self) -> None:
+        self._save_sync()
+
+    # --- Type-Safe Properties ---
 
     @property
     def theme(self) -> str:
@@ -210,26 +284,28 @@ class SettingsManager(QObject):
     def app_settings(self) -> AppSettings:
         return AppSettings.from_dict(self.get("app", {}))
 
+    # --- Adapter Methods for Device Config ---
+
     def get_page_devices(self, page: str) -> list[str]:
         try:
-            from .device_config import DeviceConfigLoader
+            from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
 
-            return DeviceConfigLoader().get_page_devices(page)
+            return DeviceFileAdapter().get_page_devices(page)
         except ImportError:
             return []
 
     def get_all_page_devices(self) -> dict[str, list[str]]:
         try:
-            from .device_config import DeviceConfigLoader
+            from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
 
-            return DeviceConfigLoader().get_all_page_devices()
+            return DeviceFileAdapter().get_all_page_devices()
         except ImportError:
             return {}
 
     def get_device_info(self, device_id: str) -> Optional[dict]:
         try:
-            from .device_config import DeviceConfigLoader
+            from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
 
-            return DeviceConfigLoader().get_device_info(device_id)
+            return DeviceFileAdapter().get_device_info(device_id)
         except ImportError:
             return None

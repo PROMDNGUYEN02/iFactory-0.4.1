@@ -1,48 +1,41 @@
 """
-SQLAlchemy ORM Models.
-Separated into Hot Storage (latest) and Cold Storage (history).
+Infrastructure: SQLAlchemy Models.
+Declarative definitions for Hot and Cold storage tables.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
-from sqlalchemy import String, DateTime, Boolean, Integer, ForeignKey, Index
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import String, DateTime, Boolean, Integer, Index
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-# =============================================================================
-# BASE CLASSES
-# =============================================================================
+# --- Base Classes ---
 
 
 class HotBase(DeclarativeBase):
-    """Base class for Hot Storage models (latest state)."""
+    """Base for Hot Storage (Latest State)"""
 
     pass
 
 
 class ColdBase(DeclarativeBase):
-    """Base class for Cold Storage models (history)."""
+    """Base for Cold Storage (History)"""
 
     pass
 
 
-# Backward compatibility alias
+# Compatibility alias
 Base = HotBase
 
 
-# =============================================================================
-# HOT STORAGE MODELS - Latest State
-# =============================================================================
+# --- Hot Storage Models ---
 
 
 class DeviceModel(HotBase):
-    """
-    Latest device status snapshot.
-    Hot Storage - frequently updated, fast reads.
-    """
+    """Latest device status snapshot."""
 
     __tablename__ = "devices"
 
@@ -54,15 +47,9 @@ class DeviceModel(HotBase):
     name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    def __repr__(self) -> str:
-        return f"DeviceModel(code={self.equip_code!r}, status={self.equip_status})"
-
 
 class LatestMaterialInputModel(HotBase):
-    """
-    Latest material input per device.
-    Hot Storage - current feeding state.
-    """
+    """Latest material batch feeding."""
 
     __tablename__ = "latest_material_inputs"
 
@@ -71,21 +58,12 @@ class LatestMaterialInputModel(HotBase):
     material_batch: Mapped[str] = mapped_column(String(100), nullable=False)
     feeding_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
-    def __repr__(self) -> str:
-        return f"LatestMaterialInput(code={self.equipment_code!r})"
 
-
-# =============================================================================
-# COLD STORAGE MODELS - History
-# =============================================================================
+# --- Cold Storage Models ---
 
 
 class StatusPeriodModel(ColdBase):
-    """
-    Status period history for Gantt chart.
-    Cold Storage - historical data, retention configurable.
-    Supports: 24h (default), 7d, 30d, 60d retention.
-    """
+    """Historical status periods (Gantt chart source)."""
 
     __tablename__ = "status_periods"
 
@@ -100,15 +78,9 @@ class StatusPeriodModel(ColdBase):
         Index("ix_status_periods_start_time", "start_time"),
     )
 
-    def __repr__(self) -> str:
-        return f"StatusPeriodModel(device={self.device_id!r}, status={self.status})"
-
 
 class MaterialInputHistoryModel(ColdBase):
-    """
-    Material input history.
-    Cold Storage - feeding history for traceability.
-    """
+    """Historical material feedings."""
 
     __tablename__ = "material_input_history"
 
@@ -123,21 +95,6 @@ class MaterialInputHistoryModel(ColdBase):
         Index("ix_material_history_recorded", "recorded_at"),
     )
 
-    def __repr__(self) -> str:
-        return f"MaterialInputHistory(code={self.equipment_code!r}, batch={self.material_batch!r})"
 
-
-# Legacy alias for backward compatibility
+# Compatibility alias
 MaterialInputModel = MaterialInputHistoryModel
-
-
-__all__ = [
-    "Base",
-    "HotBase",
-    "ColdBase",
-    "DeviceModel",
-    "LatestMaterialInputModel",
-    "StatusPeriodModel",
-    "MaterialInputHistoryModel",
-    "MaterialInputModel",
-]

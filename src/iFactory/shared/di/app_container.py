@@ -12,23 +12,28 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 # --- Infrastructure Layer Imports ---
-from iFactory.infrastructure.persistence.sqlalchemy.engine import (
+from iFactory.infrastructure.persistence.sqlalchemy.database import (
     get_hot_engine,
     get_cold_engine,
     get_hot_session_factory,
     get_cold_session_factory,
 )
-from iFactory.infrastructure.persistence.sqlalchemy.uow import (
+from iFactory.infrastructure.persistence.sqlalchemy.unit_of_work import (
     HotStorageUnitOfWork,
     ColdStorageUnitOfWork,
     DualStorageUnitOfWork,
 )
-from iFactory.infrastructure.data_sources.mssql_data_source import MssqlDataSource
-from iFactory.infrastructure.scheduling.background_scheduler import BackgroundScheduler
+
+# ADAPTER: Swapped MssqlDataSource for MssqlAdapter
+from iFactory.infrastructure.adapters.mssql_adapter import MssqlAdapter as MssqlDataSource
+from iFactory.infrastructure.scheduling.task_scheduler import BackgroundScheduler
 
 # --- Config & Path Management ---
-from iFactory.infrastructure.config.app_paths import PATHS
-from iFactory.infrastructure.config.db_config import DatabaseConfig
+from iFactory.infrastructure.configuration.paths import PATHS
+from iFactory.infrastructure.configuration.db_settings import DatabaseConfig
+
+# ADAPTER: Updated path for SettingsManager
+from iFactory.infrastructure.configuration.settings import SettingsManager
 
 # --- Application Layer Imports ---
 from iFactory.application.queries.get_latest_status import GetLatestDeviceStatusQuery
@@ -162,8 +167,6 @@ class AppContainer:
 
     def _load_settings(self) -> None:
         try:
-            from iFactory.infrastructure.config.json_manager import SettingsManager
-
             self._settings = SettingsManager()
             self._db_config = DatabaseConfig()
         except Exception as e:
@@ -183,18 +186,19 @@ class AppContainer:
         self._hot_session_factory = get_hot_session_factory()
         self._cold_session_factory = get_cold_session_factory()
 
-        # 4. Cache (AsyncLRUCache)
+        # 4. Cache (MemoryCache)
+        # ADAPTER: Use MemoryCache but alias as AsyncLRUCache if needed by interfaces,
+        # or simply rely on duck typing since MemoryCache implements the interface.
         try:
-            from iFactory.infrastructure.cache.async_lru_cache import AsyncLRUCache
+            from iFactory.infrastructure.cache.memory_cache import MemoryCache
 
-            self._cache_provider = AsyncLRUCache(max_size=500)
+            self._cache_provider = MemoryCache(max_size=500)
             logger.info("Cache initialized")
         except Exception as e:
             logger.warning(f"Cache init failed: {e}")
-            # Create fallback cache
-            from iFactory.infrastructure.cache.async_lru_cache import AsyncLRUCache
+            from iFactory.infrastructure.cache.memory_cache import MemoryCache
 
-            self._cache_provider = AsyncLRUCache(max_size=100)
+            self._cache_provider = MemoryCache(max_size=100)
 
         # 5. Remote Data Source (MSSQL)
         if self._db_config and self._db_config.mssql_url:
@@ -234,9 +238,9 @@ class AppContainer:
         # Ensure cache provider exists
         if self._cache_provider is None:
             logger.error("Cache provider is None! Creating fallback.")
-            from iFactory.infrastructure.cache.async_lru_cache import AsyncLRUCache
+            from iFactory.infrastructure.cache.memory_cache import MemoryCache
 
-            self._cache_provider = AsyncLRUCache(max_size=100)
+            self._cache_provider = MemoryCache(max_size=100)
 
         # --- Queries using Hot Storage (latest state) ---
         get_latest_qry = GetLatestDeviceStatusQuery(

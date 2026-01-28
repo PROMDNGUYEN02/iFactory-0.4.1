@@ -1,29 +1,29 @@
 """
-Infrastructure: Async Unit of Work.
-Manages transactions for both Hot and Cold storage.
+Infrastructure: Unit of Work.
+Manages atomic transactions for Hot and Cold stores.
 """
 
 from __future__ import annotations
 
 from typing import Optional
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iFactory.application.ports.unit_of_work import AbstractUnitOfWork
-from .repository import HotStorageRepository, ColdStorageRepository
+from iFactory.infrastructure.persistence.sqlalchemy.repositories.hot_repository import HotRepository
+from iFactory.infrastructure.persistence.sqlalchemy.repositories.cold_repository import ColdRepository
 
 
 class HotStorageUnitOfWork(AbstractUnitOfWork):
-    """Unit of Work for Hot Storage (latest state)."""
+    """Transaction manager for Hot Store."""
 
     def __init__(self, session_factory) -> None:
         self._session_factory = session_factory
         self._session: Optional[AsyncSession] = None
-        self.devices: Optional[HotStorageRepository] = None
+        self.devices: Optional[HotRepository] = None
 
     async def __aenter__(self) -> "HotStorageUnitOfWork":
         self._session = self._session_factory()
-        self.devices = HotStorageRepository(self._session)
+        self.devices = HotRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -44,16 +44,16 @@ class HotStorageUnitOfWork(AbstractUnitOfWork):
 
 
 class ColdStorageUnitOfWork:
-    """Unit of Work for Cold Storage (history)."""
+    """Transaction manager for Cold Store."""
 
     def __init__(self, session_factory) -> None:
         self._session_factory = session_factory
         self._session: Optional[AsyncSession] = None
-        self.history: Optional[ColdStorageRepository] = None
+        self.history: Optional[ColdRepository] = None
 
     async def __aenter__(self) -> "ColdStorageUnitOfWork":
         self._session = self._session_factory()
-        self.history = ColdStorageRepository(self._session)
+        self.history = ColdRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -75,8 +75,8 @@ class ColdStorageUnitOfWork:
 
 class DualStorageUnitOfWork:
     """
-    Combined Unit of Work for operations requiring both stores.
-    Example: Sync from remote updates hot store and creates history in cold store.
+    Orchestrates transactions across both Hot and Cold stores.
+    Used when syncing data from remote to local.
     """
 
     def __init__(self, hot_session_factory, cold_session_factory) -> None:
@@ -84,14 +84,14 @@ class DualStorageUnitOfWork:
         self._cold_session_factory = cold_session_factory
         self._hot_session: Optional[AsyncSession] = None
         self._cold_session: Optional[AsyncSession] = None
-        self.devices: Optional[HotStorageRepository] = None
-        self.history: Optional[ColdStorageRepository] = None
+        self.devices: Optional[HotRepository] = None
+        self.history: Optional[ColdRepository] = None
 
     async def __aenter__(self) -> "DualStorageUnitOfWork":
         self._hot_session = self._hot_session_factory()
         self._cold_session = self._cold_session_factory()
-        self.devices = HotStorageRepository(self._hot_session)
-        self.history = ColdStorageRepository(self._cold_session)
+        self.devices = HotRepository(self._hot_session)
+        self.history = ColdRepository(self._cold_session)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -107,27 +107,21 @@ class DualStorageUnitOfWork:
         self.history = None
 
     async def commit(self) -> None:
-        """Commit both stores."""
+        """Atomic-like commit (best effort)."""
         if self._hot_session:
             await self._hot_session.commit()
         if self._cold_session:
             await self._cold_session.commit()
 
     async def rollback(self) -> None:
-        """Rollback both stores."""
+        """Rollback both sessions."""
         if self._hot_session:
             await self._hot_session.rollback()
         if self._cold_session:
             await self._cold_session.rollback()
 
 
-# Backward compatibility alias
+# Compatibility Aliases
 SqlAlchemyUnitOfWork = HotStorageUnitOfWork
-
-
-__all__ = [
-    "HotStorageUnitOfWork",
-    "ColdStorageUnitOfWork",
-    "DualStorageUnitOfWork",
-    "SqlAlchemyUnitOfWork",
-]
+HotStorageRepository = HotRepository
+ColdStorageRepository = ColdRepository

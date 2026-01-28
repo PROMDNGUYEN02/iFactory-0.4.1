@@ -1,6 +1,6 @@
 """
-Infrastructure Job Scheduler.
-Executes Application Use Cases in the background. Does not contain business knowledge.
+Infrastructure: Task Scheduler.
+Generic background job runner using asyncio.
 """
 
 import asyncio
@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 class BackgroundScheduler:
     """
-    Pure infrastructure scheduler.
-    Triggers Application Use Cases at regular intervals without coupling to what the Use Case does.
+    Executes a given async callable at fixed intervals.
+    Agnostic to the actual task performed.
     """
 
     def __init__(self, interval_seconds: float):
@@ -21,13 +21,13 @@ class BackgroundScheduler:
         self._running = False
         self._task: asyncio.Task | None = None
 
-    def start(self, use_case_action: Callable[[], Awaitable[None]]) -> None:
+    def start(self, action: Callable[[], Awaitable[None]]) -> None:
         if self._running:
             return
 
         self._running = True
-        self._task = asyncio.create_task(self._job_loop(use_case_action))
-        logger.info(f"BackgroundScheduler: Started with interval {self._interval}s.")
+        self._task = asyncio.create_task(self._job_loop(action))
+        logger.info(f"BackgroundScheduler: Started (Interval: {self._interval}s).")
 
     async def stop(self) -> None:
         self._running = False
@@ -40,11 +40,11 @@ class BackgroundScheduler:
             self._task = None
         logger.info("BackgroundScheduler: Stopped.")
 
-    async def _job_loop(self, use_case_action: Callable[[], Awaitable[None]]) -> None:
+    async def _job_loop(self, action: Callable[[], Awaitable[None]]) -> None:
         while self._running:
             try:
-                await use_case_action()
+                await action()
             except Exception as e:
-                logger.error(f"BackgroundScheduler: Task execution failed: {e}")
+                logger.error(f"BackgroundScheduler: Job failed: {e}")
 
             await asyncio.sleep(self._interval)

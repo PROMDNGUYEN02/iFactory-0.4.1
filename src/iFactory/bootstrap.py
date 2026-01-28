@@ -37,12 +37,12 @@ async def init_database() -> None:
     Uses conn.run_sync() to create tables with AsyncEngine.
     """
     # 1. Ensure physical directories exist
-    from iFactory.infrastructure.config.app_paths import PATHS
+    from iFactory.infrastructure.configuration.paths import PATHS
 
     PATHS.ensure_directories()
 
     # 2. Get Async Engines
-    from iFactory.infrastructure.persistence.sqlalchemy.engine import (
+    from iFactory.infrastructure.persistence.sqlalchemy.database import (
         get_hot_engine,
         get_cold_engine,
     )

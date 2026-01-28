@@ -1,26 +1,52 @@
+"""
+Infrastructure: MSSQL Adapter.
+Implements IRemoteDataSource for external database communication.
+"""
+
 import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+
 from iFactory.application.ports.remote_data_source import IRemoteDataSource
+
+# UPDATED: Import shared engine factory to eliminate duplication
+from iFactory.infrastructure.persistence.sqlalchemy.database import get_mssql_engine
 
 logger = logging.getLogger(__name__)
 
 
-class MssqlDataSource(IRemoteDataSource):
-    def __init__(self, connection_string: str):
-        if "TrustServerCertificate" not in connection_string:
-            connection_string += "&TrustServerCertificate=yes"
-        self._engine = create_async_engine(connection_string, pool_pre_ping=True, echo=False)
+class MssqlAdapter(IRemoteDataSource):
+    """
+    Adapter for MSSQL Server.
+    Fetches raw status data and converts to dictionary format.
+    """
+
+    def __init__(self, connection_string: Optional[str] = None) -> None:
+        """
+        Args:
+            connection_string: Optional. If None, uses the shared application engine.
+        """
+        if connection_string:
+            # Create a dedicated engine if a specific connection string is provided (e.g., testing)
+            if "TrustServerCertificate" not in connection_string:
+                connection_string += "&TrustServerCertificate=yes"
+            self._engine = create_async_engine(connection_string, pool_pre_ping=True, echo=False)
+        else:
+            # Use the shared singleton engine from the infrastructure layer
+            self._engine = get_mssql_engine()
+
+        if self._engine is None:
+            logger.warning("MSSQL configuration missing. Adapter disabled.")
 
     def _parse_datetime(self, val: Any) -> datetime:
-        """Helper để convert dữ liệu thời gian từ SQL sang Python datetime."""
+        """Helper to convert SQL datetime types to Python datetime."""
         if isinstance(val, datetime):
             return val
         if isinstance(val, str):
             try:
-                # Cắt bớt phần nano giây dư thừa nếu có (MSSQL thường có 7 chữ số sau dấu chấm)
+                # Truncate excessive nanoseconds if present
                 clean_val = val[:23] if len(val) > 23 else val
                 return datetime.strptime(clean_val, "%Y-%m-%d %H:%M:%S.%f")
             except Exception:
@@ -31,6 +57,9 @@ class MssqlDataSource(IRemoteDataSource):
         return datetime.now()
 
     async def fetch_latest_status(self, equipment_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        if not self._engine:
+            return []
+
         query = """
         WITH RankedStatus AS (
             SELECT 
@@ -51,25 +80,27 @@ class MssqlDataSource(IRemoteDataSource):
 
                 data = []
                 for row in rows:
-                    # Mapping chính xác dựa trên kết quả debug
                     data.append(
                         {
                             "equip_code": str(row[0]).strip(),
                             "equip_status": str(row[1]),
                             "raw_status": str(row[1]),
-                            "last_update": self._parse_datetime(row[2]),  # Ép kiểu datetime chuẩn
+                            "last_update": self._parse_datetime(row[2]),
                         }
                     )
 
                 if data:
-                    logger.info(f"[MssqlDataSource] Fetched {len(data)} records from MSSQL.")
+                    logger.info(f"[MssqlAdapter] Fetched {len(data)} records.")
                 return data
 
         except Exception as e:
-            logger.error(f"[MssqlDataSource] Error: {e}")
+            logger.error(f"[MssqlAdapter] Fetch error: {e}")
             return []
 
     async def fetch_device_status(self, equip_code: str) -> Optional[Dict[str, Any]]:
+        if not self._engine:
+            return None
+
         query = """
         SELECT TOP 1 EQUIP_CODE, EQUIP_STATUS, START_TIME
         FROM TT_EQ_STATUS
@@ -89,8 +120,10 @@ class MssqlDataSource(IRemoteDataSource):
                     }
                 return None
         except Exception as e:
-            logger.error(f"[MssqlDataSource] Error device {equip_code}: {e}")
+            logger.error(f"[MssqlAdapter] Error device {equip_code}: {e}")
             return None
 
-    async def dispose(self):
-        await self._engine.dispose()
+    async def dispose(self) -> None:
+        if self._engine:
+            # We don't dispose the shared engine here as it's managed by the DI container / app lifecycle
+            pass

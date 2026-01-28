@@ -1,6 +1,6 @@
 """
 Infrastructure: Application Paths Management.
-Đảm bảo các thư mục hệ thống (data, logs, db) luôn tồn tại.
+Ensures system directories (data, logs, db) exist.
 """
 
 from functools import lru_cache
@@ -9,12 +9,12 @@ from pathlib import Path
 
 @lru_cache(maxsize=1)
 def get_project_root() -> Path:
-    """Trả về thư mục gốc của project."""
+    """Returns the project root directory."""
     return Path(__file__).resolve().parents[4]
 
 
 class AppPaths:
-    def __init__(self):
+    def __init__(self) -> None:
         self.project_root = get_project_root()
         self.data_dir = self.project_root / "data"
         self.storage_dir = self.data_dir / "storage_data"
@@ -30,10 +30,11 @@ class AppPaths:
 
     def ensure_directories(self) -> None:
         """
-        [FIX BUGS] Đảm bảo thư mục tồn tại trước khi SQLAlchemy ghi file.
+        Creates necessary directories if they do not exist.
         """
         for directory in [self.data_dir, self.storage_dir, self.logs_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
 
+# Global instance for easy access, but prefer DI where possible.
 PATHS = AppPaths()

@@ -1,24 +1,25 @@
 """
-Infrastructure: Device Configuration Loader.
-Loads device positions and metadata from JSON.
+Infrastructure: Device File Adapter.
+Reads device positions and metadata from the filesystem.
 """
 
 import json
 import logging
 from typing import Dict, List, Optional, Any
-from iFactory.infrastructure.config.app_paths import PATHS
+
+from iFactory.infrastructure.configuration.paths import PATHS
 
 logger = logging.getLogger(__name__)
 
 
-class DeviceConfigLoader:
+class DeviceFileAdapter:
     """
-    Loads device configuration from device_positions.json.
+    Adapter for device_positions.json.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._path = PATHS.device_positions_path
-        self._data = self._load()
+        self._data: Dict[str, Any] = self._load()
 
     def _load(self) -> Dict[str, Any]:
         if not self._path.exists():
@@ -32,7 +33,6 @@ class DeviceConfigLoader:
 
     def get_page_devices(self, page: str) -> List[str]:
         """Get list of device IDs for a specific page."""
-        # Giả định cấu trúc JSON: { "pages": { "page_name": ["dev1", "dev2"] } }
         return self._data.get("pages", {}).get(page, [])
 
     def get_all_page_devices(self) -> Dict[str, List[str]]:

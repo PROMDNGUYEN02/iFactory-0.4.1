@@ -3,7 +3,7 @@ SQLAlchemy persistence infrastructure.
 Supports dual storage: Hot (latest) and Cold (history).
 """
 
-from .engine import (
+from .database import (
     get_hot_engine,
     get_cold_engine,
     get_hot_session_factory,
@@ -21,13 +21,17 @@ from .models import (
     MaterialInputModel,
 )
 from .mapper import OrmDeviceMapper
-from .repository import HotStorageRepository, ColdStorageRepository
-from .uow import (
+from .unit_of_work import (
     HotStorageUnitOfWork,
     ColdStorageUnitOfWork,
     DualStorageUnitOfWork,
 )
 
+# REPOSITORIES: Fixed imports to match new split-file structure
+from .repositories.hot_repository import HotRepository as HotStorageRepository
+from .repositories.cold_repository import ColdRepository as ColdStorageRepository
+
+# Alias for backward compatibility if needed
 SqlAlchemyDeviceRepository = HotStorageRepository
 SqlAlchemyUnitOfWork = HotStorageUnitOfWork
 
