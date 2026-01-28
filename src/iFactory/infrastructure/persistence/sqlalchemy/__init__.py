@@ -20,19 +20,26 @@ from .models import (
     MaterialInputHistoryModel,
     MaterialInputModel,
 )
-from .mapper import OrmDeviceMapper
+
+# Import from .mapper (singular) to match file system
+from .mapper import SQLAlchemyMapper
+
+# Alias for backward compatibility
+OrmDeviceMapper = SQLAlchemyMapper
+
 from .unit_of_work import (
     HotStorageUnitOfWork,
     ColdStorageUnitOfWork,
     DualStorageUnitOfWork,
 )
 
-# REPOSITORIES: Fixed imports to match new split-file structure
-from .repositories.hot_repository import HotRepository as HotStorageRepository
-from .repositories.cold_repository import ColdRepository as ColdStorageRepository
+# REPOSITORIES
+from .repositories.device_repository import SqlAlchemyDeviceRepository
+from .repositories.production_repository import SqlAlchemyProductionRepository
 
-# Alias for backward compatibility if needed
-SqlAlchemyDeviceRepository = HotStorageRepository
+# Aliases
+HotStorageRepository = SqlAlchemyDeviceRepository
+ColdStorageRepository = SqlAlchemyProductionRepository
 SqlAlchemyUnitOfWork = HotStorageUnitOfWork
 
 __all__ = [
@@ -53,11 +60,13 @@ __all__ = [
     "MaterialInputHistoryModel",
     "MaterialInputModel",
     # Mapper
+    "SQLAlchemyMapper",
     "OrmDeviceMapper",
     # Repositories
     "HotStorageRepository",
     "ColdStorageRepository",
     "SqlAlchemyDeviceRepository",
+    "SqlAlchemyProductionRepository",
     # Unit of Work
     "HotStorageUnitOfWork",
     "ColdStorageUnitOfWork",

@@ -1,17 +1,12 @@
-"""
-Infrastructure: MSSQL Adapter.
-Implements IRemoteDataSource for external database communication.
-"""
-
 import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
 
 from iFactory.application.ports.remote_data_source import IRemoteDataSource
 
-# UPDATED: Import shared engine factory to eliminate duplication
+# Assuming database factory is available here, or injected.
 from iFactory.infrastructure.persistence.sqlalchemy.database import get_mssql_engine
 
 logger = logging.getLogger(__name__)
@@ -19,47 +14,39 @@ logger = logging.getLogger(__name__)
 
 class MssqlAdapter(IRemoteDataSource):
     """
-    Adapter for MSSQL Server.
-    Fetches raw status data and converts to dictionary format.
+    Adapter for External MSSQL PLC/SCADA Database.
+    Responsible ONLY for fetching raw data. No business logic.
     """
 
     def __init__(self, connection_string: Optional[str] = None) -> None:
-        """
-        Args:
-            connection_string: Optional. If None, uses the shared application engine.
-        """
+        self._engine: Optional[AsyncEngine] = None
         if connection_string:
-            # Create a dedicated engine if a specific connection string is provided (e.g., testing)
-            if "TrustServerCertificate" not in connection_string:
-                connection_string += "&TrustServerCertificate=yes"
             self._engine = create_async_engine(connection_string, pool_pre_ping=True, echo=False)
         else:
-            # Use the shared singleton engine from the infrastructure layer
             self._engine = get_mssql_engine()
 
-        if self._engine is None:
-            logger.warning("MSSQL configuration missing. Adapter disabled.")
-
     def _parse_datetime(self, val: Any) -> datetime:
-        """Helper to convert SQL datetime types to Python datetime."""
+        """Robust datetime parsing for legacy SQL types."""
         if isinstance(val, datetime):
             return val
         if isinstance(val, str):
             try:
-                # Truncate excessive nanoseconds if present
+                # Handle SQL Server high-precision strings
                 clean_val = val[:23] if len(val) > 23 else val
                 return datetime.strptime(clean_val, "%Y-%m-%d %H:%M:%S.%f")
-            except Exception:
+            except ValueError:
                 try:
                     return datetime.strptime(val.split(".")[0], "%Y-%m-%d %H:%M:%S")
-                except Exception:
+                except ValueError:
                     return datetime.now()
         return datetime.now()
 
     async def fetch_latest_status(self, equipment_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         if not self._engine:
+            logger.warning("MSSQL Engine not initialized.")
             return []
 
+        # Raw SQL used here as this is an adapter for a legacy/external schema
         query = """
         WITH RankedStatus AS (
             SELECT 
@@ -78,23 +65,17 @@ class MssqlAdapter(IRemoteDataSource):
                 result = await conn.execute(text(query))
                 rows = result.fetchall()
 
-                data = []
-                for row in rows:
-                    data.append(
-                        {
-                            "equip_code": str(row[0]).strip(),
-                            "equip_status": str(row[1]),
-                            "raw_status": str(row[1]),
-                            "last_update": self._parse_datetime(row[2]),
-                        }
-                    )
-
-                if data:
-                    logger.info(f"[MssqlAdapter] Fetched {len(data)} records.")
-                return data
-
+                return [
+                    {
+                        "equip_code": str(row[0]).strip(),
+                        "equip_status": str(row[1]),
+                        "raw_status": str(row[1]),
+                        "last_update": self._parse_datetime(row[2]),
+                    }
+                    for row in rows
+                ]
         except Exception as e:
-            logger.error(f"[MssqlAdapter] Fetch error: {e}")
+            logger.error(f"[MssqlAdapter] Bulk fetch error: {e}")
             return []
 
     async def fetch_device_status(self, equip_code: str) -> Optional[Dict[str, Any]]:
@@ -120,10 +101,5 @@ class MssqlAdapter(IRemoteDataSource):
                     }
                 return None
         except Exception as e:
-            logger.error(f"[MssqlAdapter] Error device {equip_code}: {e}")
+            logger.error(f"[MssqlAdapter] Single fetch error for {equip_code}: {e}")
             return None
-
-    async def dispose(self) -> None:
-        if self._engine:
-            # We don't dispose the shared engine here as it's managed by the DI container / app lifecycle
-            pass

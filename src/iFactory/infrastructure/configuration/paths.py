@@ -10,6 +10,8 @@ from pathlib import Path
 @lru_cache(maxsize=1)
 def get_project_root() -> Path:
     """Returns the project root directory."""
+    # Adjust parents count based on actual depth: src/iFactory/infrastructure/configuration/paths.py
+    # This is depth 4 from 'src'
     return Path(__file__).resolve().parents[4]
 
 

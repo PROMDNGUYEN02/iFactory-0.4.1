@@ -1,25 +1,20 @@
-"""
-Infrastructure: Task Scheduler.
-Generic background job runner using asyncio.
-"""
-
 import asyncio
 import logging
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class BackgroundScheduler:
     """
-    Executes a given async callable at fixed intervals.
-    Agnostic to the actual task performed.
+    Infrastructure Service: Executes async tasks at fixed intervals.
+    Totally agnostic to the domain or application logic of the task.
     """
 
     def __init__(self, interval_seconds: float):
         self._interval = interval_seconds
         self._running = False
-        self._task: asyncio.Task | None = None
+        self._task: Optional[asyncio.Task] = None
 
     def start(self, action: Callable[[], Awaitable[None]]) -> None:
         if self._running:

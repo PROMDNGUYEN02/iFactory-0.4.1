@@ -23,7 +23,7 @@ def get_hot_engine() -> AsyncEngine:
     Used for latest state (read-heavy, frequent writes).
     """
     config = DatabaseConfig()
-    # Ensure asyncio compatible driver
+    # Ensure asyncio compatible driver for SQLite
     url = config.hot_db_url.replace("sqlite:///", "sqlite+aiosqlite:///")
     return create_async_engine(
         url,
@@ -58,11 +58,10 @@ def get_mssql_engine() -> Optional[AsyncEngine]:
     if not url:
         return None
 
-    # Ensure aioodbc driver is used for async support
+    # Ensure aioodbc driver is used for async support if not present
     if "aioodbc" not in url and "pyodbc" in url:
         url = url.replace("pyodbc", "aioodbc")
     elif "driver=" in url and "aioodbc" not in url:
-        # Fallback if protocol isn't explicit but it is an mssql url
         if url.startswith("mssql://"):
             url = url.replace("mssql://", "mssql+aioodbc://")
 

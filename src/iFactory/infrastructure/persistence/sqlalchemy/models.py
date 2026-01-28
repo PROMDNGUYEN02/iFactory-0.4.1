@@ -16,26 +16,26 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class HotBase(DeclarativeBase):
-    """Base for Hot Storage (Latest State)"""
+    """Base for Hot Storage (Latest State)."""
 
     pass
 
 
 class ColdBase(DeclarativeBase):
-    """Base for Cold Storage (History)"""
+    """Base for Cold Storage (History)."""
 
     pass
 
 
-# Compatibility alias
+# Compatibility Alias (defaults to HotBase for generic uses)
 Base = HotBase
 
 
-# --- Hot Storage Models ---
+# --- Hot Storage Models (Current State) ---
 
 
 class DeviceModel(HotBase):
-    """Latest device status snapshot."""
+    """Latest snapshot of device state."""
 
     __tablename__ = "devices"
 
@@ -49,7 +49,7 @@ class DeviceModel(HotBase):
 
 
 class LatestMaterialInputModel(HotBase):
-    """Latest material batch feeding."""
+    """Latest material batch feeding (Cache/Hot)."""
 
     __tablename__ = "latest_material_inputs"
 
@@ -59,11 +59,11 @@ class LatestMaterialInputModel(HotBase):
     feeding_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
-# --- Cold Storage Models ---
+# --- Cold Storage Models (History) ---
 
 
 class StatusPeriodModel(ColdBase):
-    """Historical status periods (Gantt chart source)."""
+    """Historical status periods."""
 
     __tablename__ = "status_periods"
 
@@ -80,7 +80,7 @@ class StatusPeriodModel(ColdBase):
 
 
 class MaterialInputHistoryModel(ColdBase):
-    """Historical material feedings."""
+    """Historical material feedings log."""
 
     __tablename__ = "material_input_history"
 
@@ -96,5 +96,5 @@ class MaterialInputHistoryModel(ColdBase):
     )
 
 
-# Compatibility alias
+# Alias for backward compatibility
 MaterialInputModel = MaterialInputHistoryModel

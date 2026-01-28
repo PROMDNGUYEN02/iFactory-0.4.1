@@ -1,68 +1,53 @@
-"""
-Infrastructure: In-Memory Cache.
-Thread-safe Async LRU implementation with TTL.
-"""
-
-from __future__ import annotations
 import asyncio
-from collections import OrderedDict
-from datetime import timedelta, datetime
-from typing import Generic, Optional, TypeVar, Union, Any
-from dataclasses import dataclass
+import time
+from typing import Any, Dict, Optional, Tuple
 
 from iFactory.application.ports.cache import ICacheProvider
 
-T = TypeVar("T")
 
-
-@dataclass
-class CacheEntry(Generic[T]):
-    data: T
-    expires_at: datetime
-
-    @property
-    def is_expired(self) -> bool:
-        return datetime.now() >= self.expires_at
-
-
-class MemoryCache(ICacheProvider, Generic[T]):
+class MemoryCache(ICacheProvider):
     """
-    Async LRU cache implementation.
+    Infrastructure Adapter: In-Memory Cache.
+    Implements ICacheProvider port.
     """
 
-    def __init__(self, max_size: int = 500, default_ttl_seconds: float = 30.0):
-        self._cache: OrderedDict[str, CacheEntry[T]] = OrderedDict()
-        self._max_size = max_size
-        self._default_ttl = timedelta(seconds=default_ttl_seconds)
+    def __init__(self, max_size: int = 1000) -> None:
+        self._store: Dict[str, Tuple[Any, float]] = {}
         self._lock = asyncio.Lock()
+        self._max_size = max_size
 
     async def get(self, key: str) -> Optional[Any]:
         async with self._lock:
-            entry = self._cache.get(key)
-            if entry is None:
+            if key not in self._store:
                 return None
-            if entry.is_expired:
-                del self._cache[key]
-                return None
-            self._cache.move_to_end(key)
-            return entry.data
 
-    async def set(self, key: str, value: Any, ttl: Union[int, float] = 60) -> None:
+            value, expiry = self._store[key]
+            if time.time() > expiry:
+                del self._store[key]
+                return None
+
+            return value
+
+    async def set(self, key: str, value: Any, ttl: int = 60) -> None:
+        expiry = time.time() + ttl
         async with self._lock:
-            while len(self._cache) >= self._max_size:
-                self._cache.popitem(last=False)
+            # Basic eviction if full
+            if len(self._store) >= self._max_size:
+                self._prune_expired()
+                # If still full after pruning, evict the oldest inserted (FIFO-like behavior of dict)
+                if len(self._store) >= self._max_size:
+                    self._store.pop(next(iter(self._store)), None)
 
-            effective_ttl = timedelta(seconds=ttl)
-            expiration = datetime.now() + effective_ttl
+            self._store[key] = (value, expiry)
 
-            self._cache[key] = CacheEntry(data=value, expires_at=expiration)
-            self._cache.move_to_end(key)
+    def _prune_expired(self) -> None:
+        """Helper to remove expired items."""
+        now = time.time()
+        # Create list to avoid runtime error during iteration
+        keys_to_remove = [k for k, v in self._store.items() if v[1] < now]
+        for k in keys_to_remove:
+            del self._store[k]
 
     async def clear(self) -> None:
         async with self._lock:
-            self._cache.clear()
-
-    async def exists(self, key: str) -> bool:
-        async with self._lock:
-            entry = self._cache.get(key)
-            return entry is not None and not entry.is_expired
+            self._store.clear()

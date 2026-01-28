@@ -36,4 +36,5 @@ class DatabaseConfig(BaseSettings):
         if not (self.mssql_host and self.mssql_db):
             return None
         driver = self.mssql_driver.replace(" ", "+")
+        # Ensure aioodbc protocol
         return f"mssql+aioodbc://{self.mssql_user}:{self.mssql_password}@" f"{self.mssql_host}/{self.mssql_db}?driver={driver}"

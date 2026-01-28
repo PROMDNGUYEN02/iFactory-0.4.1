@@ -1,8 +1,3 @@
-"""
-Infrastructure: Device File Adapter.
-Reads device positions and metadata from the filesystem.
-"""
-
 import json
 import logging
 from typing import Dict, List, Optional, Any
@@ -14,14 +9,14 @@ logger = logging.getLogger(__name__)
 
 class DeviceFileAdapter:
     """
-    Adapter for device_positions.json.
+    Read-only Adapter for device configuration files (JSON).
     """
 
     def __init__(self) -> None:
         self._path = PATHS.device_positions_path
-        self._data: Dict[str, Any] = self._load()
 
-    def _load(self) -> Dict[str, Any]:
+    def _load_data(self) -> Dict[str, Any]:
+        """Reads file from disk on demand or caches if appropriate."""
         if not self._path.exists():
             logger.warning(f"Device config not found at {self._path}")
             return {}
@@ -32,13 +27,13 @@ class DeviceFileAdapter:
             return {}
 
     def get_page_devices(self, page: str) -> List[str]:
-        """Get list of device IDs for a specific page."""
-        return self._data.get("pages", {}).get(page, [])
+        data = self._load_data()
+        return data.get("pages", {}).get(page, [])
 
     def get_all_page_devices(self) -> Dict[str, List[str]]:
-        """Get mapping of all pages to device IDs."""
-        return self._data.get("pages", {})
+        data = self._load_data()
+        return data.get("pages", {})
 
     def get_device_info(self, device_id: str) -> Optional[Dict[str, Any]]:
-        """Get metadata for a specific device."""
-        return self._data.get("devices", {}).get(device_id)
+        data = self._load_data()
+        return data.get("devices", {}).get(device_id)

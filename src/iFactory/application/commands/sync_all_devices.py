@@ -72,19 +72,18 @@ class SyncAllDevicesCommand:
                         status_enum = MachineStatus.UNKNOWN
 
                     # 3. Update Hot Store - Latest device status
-                    # Using direct constructor as this is a synchronization/reconstitution,
-                    # not a new business registration
                     device_entity = Device(
                         equipment_code=code_vo,
                         current_status=status_enum,
                         last_updated_at=timestamp,
-                        name=record.get("name"),  # Optional metadata
-                        description=record.get("description"),  # Optional metadata
+                        name=record.get("name"),
+                        description=record.get("description"),
                     )
+                    # Use 'devices' attribute for Hot Store
                     await uow.devices.save(device_entity)
 
                     # 4. Update Cold Store - Status history
-                    # uow.history should implement ProductionRepository
+                    # Use 'history' attribute for Cold Store
                     await self._handle_status_history(uow.history, code_vo, status_enum, timestamp)
 
                     count += 1
