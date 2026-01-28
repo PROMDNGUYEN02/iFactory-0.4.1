@@ -35,13 +35,10 @@ from iFactory.infrastructure.configuration.db_settings import DatabaseConfig
 # ADAPTER: Updated path for SettingsManager
 from iFactory.infrastructure.configuration.settings import SettingsManager
 
-# --- Application Layer Imports ---
-from iFactory.application.queries.get_latest_status import GetLatestDeviceStatusQuery
-from iFactory.application.queries.get_all_devices_status import GetAllDevicesStatusQuery
-from iFactory.application.queries.get_device_history import GetDeviceHistoryQuery
-from iFactory.application.queries.generate_production_timeline import GenerateProductionTimelineQuery
-from iFactory.application.commands.sync_all_devices import SyncAllDevicesCommand
-from iFactory.application.commands.sync_device_status import SyncDeviceStatusCommand
+# --- Application Layer Imports (Refactored) ---
+from iFactory.application.queries.devices import GetLatestDeviceStatusQuery, GetAllDevicesStatusQuery
+from iFactory.application.queries.history import GetDeviceHistoryQuery, GenerateProductionTimelineQuery
+from iFactory.application.commands.sync import SyncAllDevicesCommand
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -187,8 +184,6 @@ class AppContainer:
         self._cold_session_factory = get_cold_session_factory()
 
         # 4. Cache (MemoryCache)
-        # ADAPTER: Use MemoryCache but alias as AsyncLRUCache if needed by interfaces,
-        # or simply rely on duck typing since MemoryCache implements the interface.
         try:
             from iFactory.infrastructure.cache.memory_cache import MemoryCache
 
@@ -212,7 +207,7 @@ class AppContainer:
 
         # 6. Scheduler
         if self._remote_data_source:
-            self._scheduler = BackgroundScheduler(interval_seconds=60.0)
+            self._scheduler = BackgroundScheduler(interval_seconds=3.0)
 
     # -------------------------------------------------------------------------
     # UoW Factory Methods

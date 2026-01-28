@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
 
-from iFactory.application.ports.remote_data_source import IRemoteDataSource
+from iFactory.application.ports.remote import IRemoteDataSource
 
 # Assuming database factory is available here, or injected.
 from iFactory.infrastructure.persistence.sqlalchemy.database import get_mssql_engine

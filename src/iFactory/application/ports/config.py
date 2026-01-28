@@ -1,5 +1,6 @@
 """
-Application: Config Interfaces for Dependency Inversion.
+Application Port: Configuration.
+Interface for accessing application settings.
 """
 
 from abc import ABC, abstractmethod

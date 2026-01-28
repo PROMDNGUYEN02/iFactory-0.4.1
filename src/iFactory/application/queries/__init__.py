@@ -1,6 +1,14 @@
-from .get_latest_status import GetLatestDeviceStatusQuery
-from .get_all_devices_status import GetAllDevicesStatusQuery
-from .get_device_history import GetDeviceHistoryQuery
-from .generate_production_timeline import GenerateProductionTimelineQuery
+"""
+Queries Export Module.
+Maintains backward compatibility for imports from UI/DI layer.
+"""
 
-__all__ = ["GetLatestDeviceStatusQuery", "GetAllDevicesStatusQuery", "GetDeviceHistoryQuery", "GenerateProductionTimelineQuery"]
+from .devices import GetLatestDeviceStatusQuery, GetAllDevicesStatusQuery
+from .history import GetDeviceHistoryQuery, GenerateProductionTimelineQuery
+
+__all__ = [
+    "GetLatestDeviceStatusQuery",
+    "GetAllDevicesStatusQuery",
+    "GetDeviceHistoryQuery",
+    "GenerateProductionTimelineQuery",
+]
