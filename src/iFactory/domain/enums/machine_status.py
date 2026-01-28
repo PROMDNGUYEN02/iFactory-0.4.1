@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from enum import IntEnum, unique
+from typing import FrozenSet
 
 
 @unique
 class MachineStatus(IntEnum):
     """
     Canonical core states of a manufacturing device.
+    Encapsulates state classifications.
     """
 
     UNKNOWN = 0
@@ -41,7 +43,8 @@ class MachineStatus(IntEnum):
         return self in _PRODUCTION_CAPABLE_STATUSES
 
 
-_DOWNTIME_STATUSES = frozenset(
+# Domain Classifications (Immutable)
+_DOWNTIME_STATUSES: FrozenSet[MachineStatus] = frozenset(
     {
         MachineStatus.SHUTDOWN,
         MachineStatus.STOPPED,
@@ -50,28 +53,28 @@ _DOWNTIME_STATUSES = frozenset(
     }
 )
 
-_ATTENTION_REQUIRED_STATUSES = frozenset(
+_ATTENTION_REQUIRED_STATUSES: FrozenSet[MachineStatus] = frozenset(
     {
         MachineStatus.ALARM,
         MachineStatus.STOPPED,
     }
 )
 
-_INACTIVE_STATUSES = frozenset(
+_INACTIVE_STATUSES: FrozenSet[MachineStatus] = frozenset(
     {
         MachineStatus.SHUTDOWN,
         MachineStatus.UNKNOWN,
     }
 )
 
-_IDLE_STATUSES = frozenset(
+_IDLE_STATUSES: FrozenSet[MachineStatus] = frozenset(
     {
         MachineStatus.STOPPED,
         MachineStatus.UNKNOWN,
     }
 )
 
-_PRODUCTION_CAPABLE_STATUSES = frozenset(
+_PRODUCTION_CAPABLE_STATUSES: FrozenSet[MachineStatus] = frozenset(
     {
         MachineStatus.RUNNING,
         MachineStatus.STOPPED,

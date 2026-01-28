@@ -30,15 +30,15 @@ class Device(AggregateRoot):
     def __init__(
         self,
         equipment_code: EquipmentCode,
-        current_status: MachineStatus = MachineStatus.UNKNOWN,
-        last_updated_at: Optional[datetime] = None,
+        current_status: MachineStatus,
+        last_updated_at: datetime,
         name: Optional[str] = None,
         description: Optional[str] = None,
     ) -> None:
         super().__init__()
         self._equipment_code = equipment_code
         self._current_status = current_status
-        self._last_updated_at = last_updated_at or datetime.now()
+        self._last_updated_at = last_updated_at
         self._name = name
         self._description = description
 
@@ -46,16 +46,20 @@ class Device(AggregateRoot):
     def register_new(
         cls,
         code: EquipmentCode,
+        timestamp: datetime,
         name: Optional[str] = None,
         description: Optional[str] = None,
     ) -> Device:
-        """Factory method to register a new device in the system."""
+        """
+        Factory method to register a new device in the system.
+        Requires explicit timestamp to ensure purity.
+        """
         return cls(
             equipment_code=code,
             name=name,
             description=description,
             current_status=MachineStatus.UNKNOWN,
-            last_updated_at=datetime.now(),
+            last_updated_at=timestamp,
         )
 
     # --- Properties ---
@@ -173,4 +177,4 @@ class Device(AggregateRoot):
         return hash(self._equipment_code)
 
     def __repr__(self) -> str:
-        return f"Device(code={self._equipment_code}, " f"status={self._current_status.name}, " f"last_updated={self._last_updated_at})"
+        return f"Device(code={self._equipment_code}, status={self._current_status.name})"

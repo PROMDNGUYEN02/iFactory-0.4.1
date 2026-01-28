@@ -10,7 +10,6 @@ from ..value_objects.equipment_code import EquipmentCode
 class DeviceRepository(ABC):
     """
     Abstract Port interface for managing Device Aggregates.
-    Infrastructure layer must provide a concrete implementation (Adapter).
     """
 
     @abstractmethod

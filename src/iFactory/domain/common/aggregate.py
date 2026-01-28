@@ -10,7 +10,7 @@ class AggregateRoot:
     Base class for Domain Aggregates.
 
     Acts as a transaction boundary for state changes and captures Domain Events
-    to be dispatched by the Unit of Work / Application Layer.
+    to be dispatched by the Application Layer.
     """
 
     __slots__ = ("_domain_events",)

@@ -55,4 +55,4 @@ class MaterialInput:
         )
 
     def __repr__(self) -> str:
-        return f"MaterialInput(code={self._equipment_code!r}, " f"batch={self._material_batch!r}, " f"time={self._feeding_time!r})"
+        return f"MaterialInput(code={self._equipment_code!r}, batch={self._material_batch!r}, time={self._feeding_time!r})"

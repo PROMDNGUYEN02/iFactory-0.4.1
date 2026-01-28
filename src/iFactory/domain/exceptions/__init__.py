@@ -4,8 +4,8 @@ from .domain_exceptions import (
     InvalidEquipmentCodeError,
     InvalidStatusTransitionError,
     InvalidTimeRangeError,
-    StatusMergeError,
     StaleDataError,
+    StatusMergeError,
 )
 
 __all__ = [
@@ -14,6 +14,6 @@ __all__ = [
     "InvalidEquipmentCodeError",
     "InvalidStatusTransitionError",
     "InvalidTimeRangeError",
-    "StatusMergeError",
     "StaleDataError",
+    "StatusMergeError",
 ]

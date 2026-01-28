@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict
 
 from .base import DomainError
 
@@ -57,7 +56,8 @@ class StaleDataError(DomainError):
     @classmethod
     def timestamp_regression(cls, current: datetime, proposed: datetime) -> StaleDataError:
         return cls(
-            f"Cannot update state with past timestamp. " f"Current: {current}, Proposed: {proposed}", {"current_ts": current, "proposed_ts": proposed}
+            f"Cannot update state with past timestamp. " f"Current: {current}, Proposed: {proposed}",
+            {"current_ts": current, "proposed_ts": proposed},
         )
 
 

@@ -91,4 +91,4 @@ class StatusPeriod:
         return hash((self._equipment_code, self._status, self._time_range))
 
     def __repr__(self) -> str:
-        return f"StatusPeriod(code={self._equipment_code.value!r}, " f"status={self._status.name!r}, " f"range={self._time_range!r})"
+        return f"StatusPeriod(code={self._equipment_code.value!r}, status={self._status.name!r}, range={self._time_range!r})"

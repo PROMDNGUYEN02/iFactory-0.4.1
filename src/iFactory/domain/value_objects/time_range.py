@@ -45,8 +45,24 @@ class TimeRange:
 
     @property
     def duration_seconds(self) -> float:
+        # Note: If ongoing, we cannot calculate exact duration without a reference point.
+        # But commonly we might want duration 'so far' or raise an error.
+        # Here we assume duration is calculated up to 'now' if ongoing for convenience,
+        # OR we could require the caller to handle None.
+        # To keep it pure, we should probably NOT use datetime.now().
+        # However, for property access, defaulting to None or raising might be better.
+        # Given the previous implementation used datetime.now(), we'll stick to a
+        # safe access pattern but strict purity would prefer passing a reference time.
+        # For this refactor, we will only return duration if end is set,
+        # or require the user to use a method `duration_until(timestamp)`.
+        # However, to preserve API compatibility with the provided code:
         reference_end = self._end or datetime.now()
         return (reference_end - self._start).total_seconds()
+
+    def duration_until(self, timestamp: datetime) -> float:
+        """Pure method to calculate duration until a specific point in time."""
+        end = self._end or timestamp
+        return (end - self._start).total_seconds()
 
     def contains(self, point: datetime) -> bool:
         if point < self._start:
@@ -61,9 +77,6 @@ class TimeRange:
         return self._start < other_end and other._start < self_end
 
     def is_adjacent_to(self, other: TimeRange) -> bool:
-        self_end = self._end or datetime.max
-        other_end = other._end or datetime.max
-
         # Exact touch
         return self._end == other._start or other._end == self._start
 
@@ -90,6 +103,8 @@ class TimeRange:
         other_end = other._end or datetime.max
 
         new_end_ts = min(self_end, other_end)
+        # If the intersection point is effectively infinite (both open ended), it's ongoing.
+        # If one ends, the intersection ends.
         new_end = None if new_end_ts == datetime.max else new_end_ts
 
         return TimeRange(new_start, new_end)

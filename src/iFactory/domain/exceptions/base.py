@@ -5,25 +5,14 @@ from typing import Any, Dict, Optional
 
 class DomainError(Exception):
     """
-    Root exception for all Domain Layer violations.
-    Infrastructure and UI should catch this to handle business failures.
+    Base class for all domain layer exceptions.
+    Should include a message and optional context data for debugging.
     """
 
-    __slots__ = ("_message", "_details")
+    def __init__(self, message: str, context: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.context = context or {}
 
-    def __init__(
-        self,
-        message: str,
-        details: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        self._message = message
-        self._details = details or {}
-        super().__init__(self._message)
-
-    @property
-    def message(self) -> str:
-        return self._message
-
-    @property
-    def details(self) -> Dict[str, Any]:
-        return self._details.copy()
+    def __str__(self) -> str:
+        return f"{self.message} | Context: {self.context}" if self.context else self.message
