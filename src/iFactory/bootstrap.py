@@ -54,6 +54,7 @@ async def init_database() -> None:
         cold_engine = get_cold_engine()
 
         # 3. Import Base classes to register metadata
+        # NOTE: This triggers models.py execution, so StatusHistoryModel is registered to ColdBase.metadata
         from iFactory.infrastructure.persistence.sqlalchemy.models import (
             HotBase,
             ColdBase,

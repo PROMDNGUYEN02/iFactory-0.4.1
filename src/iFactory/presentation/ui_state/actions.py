@@ -20,6 +20,7 @@ class UIActionType(Enum):
     LOADING_STARTED = "LOADING_STARTED"
     LOADING_FINISHED = "LOADING_FINISHED"
     ERROR_OCCURRED = "ERROR_OCCURRED"
+    SET_DATA_RANGE = "SET_DATA_RANGE"  # New Action
 
 
 @dataclass
@@ -81,6 +82,11 @@ def set_error(message: str) -> Action:
     return Action(type=UIActionType.ERROR_OCCURRED.value, payload={"message": message})
 
 
+def set_data_range(days: int) -> Action:
+    """Create action to set history data range (in days)."""
+    return Action(type=UIActionType.SET_DATA_RANGE.value, payload=days)
+
+
 __all__ = [
     "UIActionType",
     "Action",
@@ -92,4 +98,5 @@ __all__ = [
     "select_device",
     "set_loading",
     "set_error",
+    "set_data_range",
 ]

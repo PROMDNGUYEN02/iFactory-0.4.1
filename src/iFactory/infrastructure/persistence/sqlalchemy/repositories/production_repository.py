@@ -10,7 +10,7 @@ from iFactory.domain.value_objects.equipment_code import EquipmentCode
 from iFactory.domain.value_objects.material_input import MaterialInput
 from iFactory.domain.value_objects.status_period import StatusPeriod
 from iFactory.domain.value_objects.time_range import TimeRange
-from iFactory.infrastructure.persistence.sqlalchemy.models import StatusPeriodModel, MaterialInputHistoryModel
+from iFactory.infrastructure.persistence.sqlalchemy.models import StatusHistoryModel, MaterialInputHistoryModel
 
 # FIXED: Import from .mapper (singular) instead of .mappers
 from iFactory.infrastructure.persistence.sqlalchemy.mapper import SQLAlchemyMapper
@@ -29,18 +29,25 @@ class SqlAlchemyProductionRepository(ProductionRepository):
         """
         Fetches the active status period (end_time is None) or the most recent one.
         """
-        stmt = select(StatusPeriodModel).where(StatusPeriodModel.device_id == code.value).order_by(desc(StatusPeriodModel.start_time)).limit(1)
+        stmt = select(StatusHistoryModel).where(StatusHistoryModel.equip_code == code.value).order_by(desc(StatusHistoryModel.start_time)).limit(1)
         result = await self._session.execute(stmt)
         model = result.scalar_one_or_none()
         return SQLAlchemyMapper.to_status_period(model)
 
     async def get_status_history(self, code: EquipmentCode, window: TimeRange) -> Sequence[StatusPeriod]:
+        """
+        Fetches status history overlapping with the given window.
+        """
         stmt = (
-            select(StatusPeriodModel)
+            select(StatusHistoryModel)
             .where(
-                StatusPeriodModel.device_id == code.value, StatusPeriodModel.start_time >= window.start, StatusPeriodModel.start_time <= window.end
+                StatusHistoryModel.equip_code == code.value,
+                # Start time must be before window end
+                StatusHistoryModel.start_time <= window.end,
+                # End time must be after window start, OR End time is NULL (active) AND Start time is before window end
+                (StatusHistoryModel.end_time == None) | (StatusHistoryModel.end_time >= window.start),
             )
-            .order_by(StatusPeriodModel.start_time)
+            .order_by(StatusHistoryModel.start_time)
         )
         result = await self._session.execute(stmt)
         models = result.scalars().all()

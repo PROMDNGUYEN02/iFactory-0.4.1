@@ -1,6 +1,6 @@
 import logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import text, bindparam
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
 
@@ -41,6 +41,9 @@ class MssqlAdapter(IRemoteDataSource):
         return datetime.now()
 
     async def fetch_latest_status(self, equipment_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        Fetch the single LATEST status for multiple devices (Bulk Sync).
+        """
         if not self._engine:
             logger.warning("MSSQL Engine not initialized.")
             return []
@@ -81,13 +84,6 @@ class MssqlAdapter(IRemoteDataSource):
 
                 data = []
                 for row in rows:
-                    # 0: EQUIP_CODE
-                    # 1: EQUIP_STATUS
-                    # 2: START_TIME
-                    # 3: END_TIME
-                    # 4: REASON_CODE
-                    # 5: EQUIP_NAME
-
                     equip_code = str(row[0]).strip() if row[0] else "UNKNOWN"
                     equip_status = str(row[1]) if row[1] else "0"
                     start_time = self._parse_datetime(row[2])
@@ -95,7 +91,7 @@ class MssqlAdapter(IRemoteDataSource):
                     reason_code = str(row[4]).strip() if row[4] else None
                     equip_name = str(row[5]).strip() if row[5] else None
 
-                    # Logic tính last_update: Nếu có END_TIME -> lấy END_TIME, ngược lại lấy NOW
+                    # Logic tính last_update
                     if end_time_val:
                         last_update = self._parse_datetime(end_time_val)
                     else:
@@ -119,25 +115,38 @@ class MssqlAdapter(IRemoteDataSource):
             logger.error(f"[MssqlAdapter] Bulk fetch error: {e}")
             return []
 
-    async def fetch_device_status(self, equip_code: str) -> Optional[Dict[str, Any]]:
+    async def fetch_device_status(self, equip_code: str, days: int = 30) -> List[Dict[str, Any]]:
+        """
+        Fetch HISTORY status for a single device within a time range.
+        Default range: 30 days.
+        Returns a LIST of records ordered by START_TIME ASC.
+        """
         if not self._engine:
-            return None
+            return []
 
-        # Updated Query: Join with TT_EQ_EQUIPMENT
+        # Calculate Cutoff Date
+        cutoff_date = datetime.now() - timedelta(days=days)
+
+        # Query: Fetch all records starting after cutoff
+        # ORDER BY ASC ensures we process history linearly
         query = """
-        SELECT TOP 1 
+        SELECT 
             S.EQUIP_CODE, S.EQUIP_STATUS, S.START_TIME, S.END_TIME, S.REASON_CODE,
             E.EQUIP_NAME
         FROM TT_EQ_STATUS S
         LEFT JOIN TT_EQ_EQUIPMENT E ON S.EQUIP_CODE = E.EQUIP_CODE
-        WHERE S.EQUIP_CODE = :code
-        ORDER BY S.START_TIME DESC
+        WHERE S.EQUIP_CODE = :code 
+          AND (S.START_TIME >= :cutoff OR S.END_TIME >= :cutoff)
+        ORDER BY S.START_TIME ASC
         """
+
         try:
             async with self._engine.connect() as conn:
-                result = await conn.execute(text(query), {"code": equip_code})
-                row = result.fetchone()
-                if row:
+                result = await conn.execute(text(query), {"code": equip_code, "cutoff": cutoff_date})
+                rows = result.fetchall()
+
+                results = []
+                for row in rows:
                     equip_code_val = str(row[0]).strip() if row[0] else "UNKNOWN"
                     equip_status = str(row[1]) if row[1] else "0"
                     start_time = self._parse_datetime(row[2])
@@ -150,17 +159,21 @@ class MssqlAdapter(IRemoteDataSource):
                     else:
                         last_update = datetime.now()
 
-                    return {
-                        "equip_code": equip_code_val,
-                        "equip_status": equip_status,
-                        "raw_status": equip_status,
-                        "start_time": start_time,
-                        "end_time": self._parse_datetime(end_time_val) if end_time_val else None,
-                        "reason_code": reason_code,
-                        "equip_name": equip_name,
-                        "last_update": last_update,
-                    }
-                return None
+                    results.append(
+                        {
+                            "equip_code": equip_code_val,
+                            "equip_status": equip_status,
+                            "raw_status": equip_status,
+                            "start_time": start_time,
+                            "end_time": self._parse_datetime(end_time_val) if end_time_val else None,
+                            "reason_code": reason_code,
+                            "equip_name": equip_name,
+                            "last_update": last_update,
+                        }
+                    )
+
+                return results
+
         except Exception as e:
-            logger.error(f"[MssqlAdapter] Single fetch error for {equip_code}: {e}")
-            return None
+            logger.error(f"[MssqlAdapter] History fetch error for {equip_code}: {e}")
+            return []

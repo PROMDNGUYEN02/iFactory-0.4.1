@@ -22,6 +22,9 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QVBoxLayout,
     QWidget,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
 )
 
 import iFactory.presentation.resources.resources_rc as resources_rc
@@ -34,7 +37,7 @@ from .widgets.device_canvas import DeviceCanvasWidget
 from .widgets.legend_widget import LegendWidget
 from ..constants.ui_constants import UIConstants
 from ..ui_state.store import Action
-from ..ui_state.actions import UIActionType
+from ..ui_state.actions import UIActionType, set_data_range
 from ..ui_state.selectors import (
     select_theme,
     select_current_page,
@@ -45,6 +48,7 @@ from ..ui_state.selectors import (
     select_left_menu_expanded,
     select_right_panel_expanded,
     select_selected_device_id,
+    select_data_range_days,
 )
 
 from ..resources.themes.theme_manager import theme_manager
@@ -106,6 +110,7 @@ class MainView(QMainWindow):
         self._setup_device_canvas()
         self._setup_gantt_chart()
         self._setup_legend()
+        self._setup_settings_page()  # NEW: Setup Settings UI
         self._setup_shortcuts()
         self._connect_ui_events()
 
@@ -270,6 +275,47 @@ class MainView(QMainWindow):
         settings_item.setData(Qt.UserRole, "settings_page")
         settings_item.setToolTip("Settings")
         self.ui.listWidget_settings.addItem(settings_item)
+
+    def _setup_settings_page(self) -> None:
+        """Initializes the Settings Page UI with Data Range Selection."""
+        settings_widget = self.ui.stackedWidget.findChild(QWidget, "settings_page")
+        if not settings_widget:
+            return
+
+        if not settings_widget.layout():
+            layout = QVBoxLayout(settings_widget)
+            layout.setAlignment(Qt.AlignTop)
+        else:
+            layout = settings_widget.layout()
+
+        # Data Configuration Group
+        group = QGroupBox("Data Configuration")
+        form_layout = QFormLayout()
+
+        self.combo_data_range = QComboBox()
+        self.combo_data_range.addItem("1 Day", 1)
+        self.combo_data_range.addItem("1 Week", 7)
+        self.combo_data_range.addItem("1 Month", 30)
+        self.combo_data_range.addItem("3 Months", 90)
+
+        # Sync with store
+        current_days = select_data_range_days(self._store.get_state())
+        index = self.combo_data_range.findData(current_days)
+        if index >= 0:
+            self.combo_data_range.setCurrentIndex(index)
+
+        self.combo_data_range.currentIndexChanged.connect(self._on_data_range_changed)
+
+        form_layout.addRow(QLabel("History Data Size:"), self.combo_data_range)
+        group.setLayout(form_layout)
+        layout.addWidget(group)
+
+    def _on_data_range_changed(self, index: int) -> None:
+        """Handle data range selection change."""
+        days = self.combo_data_range.currentData()
+        self._store.dispatch(set_data_range(days))
+        # Optional: Trigger data refresh immediately via controller if implemented
+        # self._controller.refresh_data()
 
     def _setup_right_panel(self) -> None:
         layout = self.ui.right_slide_menu_frame.layout()

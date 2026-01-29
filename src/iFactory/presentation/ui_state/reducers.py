@@ -16,6 +16,7 @@ initial_state = {
     "last_error": None,
     "system_status": {"mssql": False, "sqlite": False},
     "last_log_message": "Initializing...",
+    "data_range_days": 1,  # Default: 1 Day
 }
 
 
@@ -72,6 +73,10 @@ def root_reducer(state: Dict[str, Any] = None, action: Action = None) -> Dict[st
 
     elif action_type == UIActionType.ERROR_OCCURRED.value:
         new_state["last_error"] = payload.get("message")
+
+    elif action_type == UIActionType.SET_DATA_RANGE.value:
+        # Payload is integer days (1, 7, 30, 90)
+        new_state["data_range_days"] = payload
 
     return new_state
 

@@ -16,7 +16,7 @@ from iFactory.domain.value_objects.material_input import MaterialInput
 from iFactory.domain.value_objects.status_period import StatusPeriod
 from iFactory.domain.value_objects.time_range import TimeRange
 
-from .models import DeviceModel, StatusPeriodModel, MaterialInputHistoryModel, LatestMaterialInputModel
+from .models import DeviceModel, StatusHistoryModel, MaterialInputHistoryModel, LatestMaterialInputModel
 
 
 class SQLAlchemyMapper:
@@ -56,23 +56,30 @@ class SQLAlchemyMapper:
             is_active=getattr(entity, "is_active", True),
         )
 
-    # --- Status Period Mapping ---
+    # --- Status Period Mapping (UPDATED) ---
     @staticmethod
-    def to_status_period(model: Optional[StatusPeriodModel]) -> Optional[StatusPeriod]:
+    def to_status_period(model: Optional[StatusHistoryModel]) -> Optional[StatusPeriod]:
         if not model:
             return None
 
         try:
-            status = MachineStatus(model.status)
+            status = MachineStatus(model.equip_status)
         except ValueError:
             status = MachineStatus.UNKNOWN
 
-        return StatusPeriod(equipment_code=EquipmentCode(model.device_id), status=status, time_range=TimeRange(model.start_time, model.end_time))
+        # LOGIC: Nếu end_time is null thì chèn now
+        effective_end = model.end_time if model.end_time else datetime.now()
+
+        return StatusPeriod(equipment_code=EquipmentCode(model.equip_code), status=status, time_range=TimeRange(model.start_time, effective_end))
 
     @staticmethod
-    def to_status_period_model(vo: StatusPeriod) -> StatusPeriodModel:
-        return StatusPeriodModel(
-            id=str(uuid4()), device_id=vo.equipment_code.value, status=vo.status.value, start_time=vo.time_range.start, end_time=vo.time_range.end
+    def to_status_period_model(vo: StatusPeriod) -> StatusHistoryModel:
+        return StatusHistoryModel(
+            id=str(uuid4()),
+            equip_code=vo.equipment_code.value,
+            equip_status=vo.status.value,
+            start_time=vo.time_range.start,
+            end_time=vo.time_range.end,
         )
 
     # --- Material Input Mapping ---

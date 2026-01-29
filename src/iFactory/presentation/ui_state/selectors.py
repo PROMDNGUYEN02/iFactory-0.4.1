@@ -39,6 +39,10 @@ def select_selected_device_id(state: Dict[str, Any]) -> Optional[str]:
     return state.get("selected_device_id")
 
 
+def select_data_range_days(state: Dict[str, Any]) -> int:
+    return state.get("data_range_days", 1)
+
+
 def select_factory_summary(state: Dict[str, Any]) -> Dict[str, Any]:
     """Calculate factory statistics from device data."""
     devices = state.get("devices", {})
@@ -100,4 +104,5 @@ __all__ = [
     "select_selected_device_id",
     "select_factory_summary",
     "select_selected_device_data",
+    "select_data_range_days",
 ]

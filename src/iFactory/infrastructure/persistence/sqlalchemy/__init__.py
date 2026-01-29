@@ -16,7 +16,7 @@ from .models import (
     ColdBase,
     DeviceModel,
     LatestMaterialInputModel,
-    StatusPeriodModel,
+    StatusHistoryModel,  # UPDATED: Renamed from StatusPeriodModel
     MaterialInputHistoryModel,
     MaterialInputModel,
 )
@@ -56,7 +56,7 @@ __all__ = [
     # Models
     "DeviceModel",
     "LatestMaterialInputModel",
-    "StatusPeriodModel",
+    "StatusHistoryModel",  # UPDATED
     "MaterialInputHistoryModel",
     "MaterialInputModel",
     # Mapper

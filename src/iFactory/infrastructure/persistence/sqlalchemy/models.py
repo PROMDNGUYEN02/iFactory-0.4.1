@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, DateTime, Boolean, Integer, Index, BigInteger
+from sqlalchemy import String, DateTime, Boolean, Integer, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -27,7 +27,7 @@ class ColdBase(DeclarativeBase):
     pass
 
 
-# Compatibility Alias (defaults to HotBase for generic uses)
+# Compatibility Alias
 Base = HotBase
 
 
@@ -62,20 +62,25 @@ class LatestMaterialInputModel(HotBase):
 # --- Cold Storage Models (History) ---
 
 
-class StatusPeriodModel(ColdBase):
-    """Historical status periods."""
+class StatusHistoryModel(ColdBase):
+    """
+    Historical status logs.
+    Table: status_historys
+    Replaces old status_periods table.
+    """
 
-    __tablename__ = "status_periods"
+    __tablename__ = "status_historys"
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    device_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    status: Mapped[int] = mapped_column(Integer, nullable=False)
+    equip_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    equip_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    equip_status: Mapped[int] = mapped_column(Integer, nullable=False)
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
-        Index("ix_status_periods_device_time", "device_id", "start_time"),
-        Index("ix_status_periods_start_time", "start_time"),
+        Index("ix_status_history_code_time", "equip_code", "start_time"),
+        Index("ix_status_history_start_time", "start_time"),
     )
 
 
