@@ -79,23 +79,25 @@ class MainView(QMainWindow):
         self._is_menu_open = False
         self._is_right_panel_open = False
         self._selected_menu_index: Optional[int] = 0
-        self._last_main_page_index: int = 0  # Track last valid main page for highlighting
+        self._last_main_page_index: int = 0
 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
 
-        # --- FIX: Force Dashboard Page Immediately ---
-        # Tìm widget dashboard và set làm trang hiện tại ngay khi khởi tạo
-        # Giúp tránh hiện tượng hiện trang Order trước
         dashboard_widget = self.ui.stackedWidget.findChild(QWidget, "daboard_page")
         if dashboard_widget:
             self.ui.stackedWidget.setCurrentWidget(dashboard_widget)
         else:
             self.ui.stackedWidget.setCurrentIndex(0)
 
+        if self.ui.listWidget.count() > 0:
+            self.ui.listWidget.setCurrentRow(0)
+            self._selected_menu_index = 0
+            self._last_main_page_index = 0
+
         # --- FIX: Prevent Startup Flash ---
-        self.setAutoFillBackground(True)  # Đảm bảo background được vẽ ngay
-        self._apply_theme(self._current_theme)  # Apply theme và force update
+        self.setAutoFillBackground(True)
+        self._apply_theme(self._current_theme)
 
         self._setup_initial_state()
         self._setup_header()
@@ -269,12 +271,6 @@ class MainView(QMainWindow):
         settings_item.setToolTip("Settings")
         self.ui.listWidget_settings.addItem(settings_item)
 
-        # Initial selection
-        if self.ui.listWidget.count() > 0:
-            self.ui.listWidget.setCurrentRow(0)
-            self._selected_menu_index = 0
-            self._last_main_page_index = 0
-
     def _setup_right_panel(self) -> None:
         layout = self.ui.right_slide_menu_frame.layout()
         if not layout:
@@ -440,7 +436,6 @@ class MainView(QMainWindow):
     def _on_settings_clicked(self, item: QListWidgetItem) -> None:
         page_id = item.data(Qt.UserRole)
         # Visual trick: Keep the main menu selected to imply overlay/modal nature
-        # We DO NOT clear listWidget selection
         if self._last_main_page_index is not None:
             self.ui.listWidget.setCurrentRow(self._last_main_page_index)
 
@@ -457,12 +452,15 @@ class MainView(QMainWindow):
                 self._controller.handle_navigation(page_id)
 
     def _on_device_clicked(self, device_id: str) -> None:
-        self._store.dispatch(Action(type=UIActionType.DEVICE_SELECTED.value, payload={"id": device_id}))
+        """Xử lý khi click vào thiết bị: Chọn và tự động mở Right Panel."""
+        # 1. Dispatch action chọn thiết bị
+        self._controller.handle_device_selection(device_id)
 
-        # Explicitly check if we need to open the panel
-        # We assume if the user clicked, they want to see it.
-        # If the state is closed, toggle it.
-        if not self._is_right_panel_open:
+        # 2. KIỂM TRA VÀ MỞ PANEL (VẤN ĐỀ 1)
+        current_state = self._store.get_state()
+        is_panel_expanded = current_state.get("right_panel_expanded", False)
+
+        if not is_panel_expanded:
             self._controller.handle_right_panel_toggle()
 
     def _on_state_changed(self, state: Dict[str, Any]) -> None:
@@ -474,6 +472,9 @@ class MainView(QMainWindow):
         menu_expanded = select_left_menu_expanded(state)
         panel_expanded = select_right_panel_expanded(state)
 
+        self._is_menu_open = menu_expanded
+        self._is_right_panel_open = panel_expanded
+
         if theme != self._current_theme or menu_expanded != self._is_menu_open:
             self._is_menu_open = menu_expanded
             self._apply_theme(theme)
@@ -481,7 +482,6 @@ class MainView(QMainWindow):
         # UPDATE TOGGLE BUTTON OBJECT NAME FOR STYLING
         if hasattr(self.ui, "pushButton"):
             self.ui.pushButton.setObjectName("menu_close_btn" if menu_expanded else "menu_open_btn")
-            # Force style refresh
             self.ui.pushButton.style().unpolish(self.ui.pushButton)
             self.ui.pushButton.style().polish(self.ui.pushButton)
 
@@ -613,10 +613,9 @@ class MainView(QMainWindow):
         if gantt_data and dev_id_raw in gantt_data:
             now = datetime.now()
             start = now - timedelta(hours=24)
-            # Render ONLY the selected device
             self.rp_gantt.render_timeline({dev_id_raw: gantt_data[dev_id_raw]}, start, now)
         elif hasattr(self, "rp_gantt"):
-            self.rp_gantt.render_timeline({})  # Clear if no data
+            self.rp_gantt.render_timeline({})
         # --------------------------------------------------
 
         self.rp_error.setText(f"⚠️ Alert: {error}")

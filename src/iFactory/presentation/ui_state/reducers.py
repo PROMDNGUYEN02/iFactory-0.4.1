@@ -1,14 +1,30 @@
 """Pure Reducers for UI State."""
 
 from typing import Any, Dict
-
 from .actions import UIActionType, Action
 
+initial_state = {
+    "theme": "light",
+    "current_page": "daboard_page",
+    "selected_menu_index": 0,
+    "left_menu_expanded": False,
+    "right_panel_expanded": False,
+    "devices": {},
+    "gantt_timeline": {},
+    "selected_device_id": None,
+    "is_loading": False,
+    "last_error": None,
+    "system_status": {"mssql": False, "sqlite": False},
+    "last_log_message": "Initializing...",
+}
 
-def root_reducer(state: Dict[str, Any], action: Action) -> Dict[str, Any]:
+
+def root_reducer(state: Dict[str, Any] = None, action: Action = None) -> Dict[str, Any]:
     """Handles global UI state transitions."""
-    new_state = state.copy()
+    if state is None:
+        state = initial_state
 
+    new_state = state.copy()
     action_type = action.type if hasattr(action, "type") else str(action)
     payload = action.payload if hasattr(action, "payload") else {}
 
@@ -38,11 +54,11 @@ def root_reducer(state: Dict[str, Any], action: Action) -> Dict[str, Any]:
     elif action_type == UIActionType.RIGHT_PANEL_TOGGLED.value:
         new_state["right_panel_expanded"] = not state.get("right_panel_expanded", False)
 
-    elif action.type == UIActionType.SYSTEM_STATUS_UPDATED.value:
+    elif action_type == UIActionType.SYSTEM_STATUS_UPDATED.value:
         return {
             **state,
-            "system_status": {"mssql": action.payload.get("mssql", False), "sqlite": action.payload.get("sqlite", False)},
-            "last_log_message": action.payload.get("message", state.get("last_log_message")),
+            "system_status": {"mssql": payload.get("mssql", False), "sqlite": payload.get("sqlite", False)},
+            "last_log_message": payload.get("message", state.get("last_log_message")),
         }
 
     elif action_type == UIActionType.DEVICE_SELECTED.value:
