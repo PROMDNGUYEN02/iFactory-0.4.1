@@ -84,8 +84,18 @@ class MainView(QMainWindow):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
 
-        # Apply Theme Immediately (Prevent Startup Flash)
-        self._apply_theme(self._current_theme)
+        # --- FIX: Force Dashboard Page Immediately ---
+        # Tìm widget dashboard và set làm trang hiện tại ngay khi khởi tạo
+        # Giúp tránh hiện tượng hiện trang Order trước
+        dashboard_widget = self.ui.stackedWidget.findChild(QWidget, "daboard_page")
+        if dashboard_widget:
+            self.ui.stackedWidget.setCurrentWidget(dashboard_widget)
+        else:
+            self.ui.stackedWidget.setCurrentIndex(0)
+
+        # --- FIX: Prevent Startup Flash ---
+        self.setAutoFillBackground(True)  # Đảm bảo background được vẽ ngay
+        self._apply_theme(self._current_theme)  # Apply theme và force update
 
         self._setup_initial_state()
         self._setup_header()
@@ -690,6 +700,10 @@ class MainView(QMainWindow):
         stylesheet = theme_manager.get_stylesheet()
         if stylesheet:
             self.setStyleSheet(stylesheet)
+            # --- FIX: Force Polish ---
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
         else:
             logger.warning("Empty stylesheet generated.")
 
