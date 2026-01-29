@@ -21,25 +21,37 @@ class GetAllDevicesStatusQuery:
         self._cache = cache
 
     async def execute(self, equipment_codes: Optional[List[str]] = None) -> List[DeviceStatusDTO]:
-        cache_key = "all_devices_status"
+        # Caching strategy: Short TTL for liveliness
+        cache_key = "all_devices_status_extended"
         cached = await self._cache.get(cache_key)
 
         if cached:
             results = cached
         else:
             async with self._uow_factory() as uow:
-                devices = await uow.devices.get_all()
+                # Use the new optimized snapshot method from repository
+                snapshot_rows = await uow.devices.get_dashboard_snapshot()
 
-            results = [
-                DeviceStatusDTO(
-                    equip_code=d.equipment_code.value,
-                    status_code=str(d.current_status.value),
-                    status_name=d.current_status.name,
-                    last_update=d.last_updated_at,
-                    is_active=d.is_active,
+            results = []
+            for device, material in snapshot_rows:
+                if not device:
+                    continue
+
+                dto = DeviceStatusDTO(
+                    equip_code=device.equipment_code.value,
+                    status_code=str(device.current_status.value),
+                    status_name=device.current_status.name,
+                    last_update=device.last_updated_at,
+                    is_active=device.is_active,
+                    # Extended Data
+                    name=device.name,
+                    description=device.description,
+                    material_batch=material.material_batch.value if material else None,
+                    feeding_time=material.feeding_time if material else None,
+                    input_count=0,  # Placeholder: Real count requires heavy history aggregation
                 )
-                for d in devices
-            ]
+                results.append(dto)
+
             await self._cache.set(cache_key, results, ttl=1)
 
         if equipment_codes:
@@ -64,9 +76,11 @@ class GetLatestDeviceStatusQuery:
 
         async with self._uow_factory() as uow:
             device = await uow.devices.get_by_code_string(equip_code)
+            if not device:
+                pass
 
         if not device:
-            raise ResourceNotFoundException(f"Device {equip_code} not found")
+            return None
 
         dto = DeviceStatusDTO(
             equip_code=device.equipment_code.value,
@@ -74,6 +88,8 @@ class GetLatestDeviceStatusQuery:
             status_name=device.current_status.name,
             last_update=device.last_updated_at,
             is_active=device.is_active,
+            name=device.name,
+            description=device.description,
         )
 
         await self._cache.set(cache_key, dto, ttl=1)

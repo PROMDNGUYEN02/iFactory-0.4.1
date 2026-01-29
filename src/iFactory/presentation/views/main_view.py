@@ -114,33 +114,28 @@ class MainView(QMainWindow):
 
     def _setup_status_bar(self) -> None:
         """Modern Status Bar Setup."""
-        # CSS cho Status Bar hiện đại: Phẳng, tối giản
         self.ui.statusbar.setStyleSheet(
             """
             QStatusBar {
-                background-color: #FAFAFA; /* Hoặc #1e1e1e nếu dark mode */
+                background-color: #FAFAFA;
                 border-top: 1px solid #E5E5E5;
                 color: #333;
             }
         """
         )
 
-        # 1. System Message (Log trôi) - Font thường, màu xám
         self.lbl_system_message = QLabel("Ready")
         self.lbl_system_message.setStyleSheet("color: #666666; padding-left: 10px; font-size: 12px;")
         self.ui.statusbar.addWidget(self.lbl_system_message, 1)
 
-        # Container cho indicators
         self.status_container = QWidget()
         container_layout = QHBoxLayout(self.status_container)
         container_layout.setContentsMargins(0, 0, 15, 0)
         container_layout.setSpacing(15)
 
-        # Helper để tạo Badge Style (Bo tròn, có viền nhẹ hoặc dot)
         def create_indicator(text):
             lbl = QLabel(text)
             lbl.setAlignment(Qt.AlignCenter)
-            # Style mặc định: Xám (Disabled/Unknown)
             lbl.setStyleSheet(
                 """
                 QLabel {
@@ -150,24 +145,21 @@ class MainView(QMainWindow):
                     font-size: 11px;
                     padding: 4px 8px;
                     border: 1px solid #E0E0E0;
-                    border-radius: 10px; /* Pill shape */
+                    border-radius: 10px;
                 }
             """
             )
             return lbl
 
-        # 2. Indicators
         self.lbl_sqlite_status = create_indicator("Local DB")
         self.lbl_mssql_status = create_indicator("Remote DB")
 
-        # 3. Overall Mode (Thay thế cho READY)
         self.lbl_app_mode = QLabel("ONLINE")
         self.lbl_app_mode.setStyleSheet("font-weight: bold; font-size: 11px; color: #10B981;")
 
         container_layout.addWidget(self.lbl_sqlite_status)
         container_layout.addWidget(self.lbl_mssql_status)
 
-        # Thêm một thanh ngăn cách nhỏ
         separator = QFrame()
         separator.setFrameShape(QFrame.VLine)
         separator.setStyleSheet("color: #CCCCCC;")
@@ -208,7 +200,6 @@ class MainView(QMainWindow):
         return super().eventFilter(obj, event)
 
     def _setup_header(self) -> None:
-        """Configure header bar."""
         if hasattr(self.ui, "title_icon"):
             self.ui.title_icon.setPixmap(QPixmap(":/icon/logo.png").scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             self.ui.title_icon.setText("")
@@ -231,7 +222,6 @@ class MainView(QMainWindow):
             self.ui.close_window_button.clicked.connect(self.close)
 
     def _setup_left_menu(self) -> None:
-        """Configure left navigation menu."""
         self.ui.listWidget.clear()
         self.ui.listWidget_settings.clear()
 
@@ -257,13 +247,11 @@ class MainView(QMainWindow):
         settings_item.setData(Qt.UserRole, "settings_page")
         self.ui.listWidget_settings.addItem(settings_item)
 
-        # Select first item (Dashboard) by default
         if self.ui.listWidget.count() > 0:
             self.ui.listWidget.setCurrentRow(0)
             self._selected_menu_index = 0
 
     def _setup_right_panel(self) -> None:
-        """Configure right detail panel."""
         layout = self.ui.right_slide_menu_frame.layout()
         if not layout:
             layout = QVBoxLayout(self.ui.right_slide_menu_frame)
@@ -281,9 +269,30 @@ class MainView(QMainWindow):
         header_layout.addWidget(self.rp_status_badge)
         layout.addLayout(header_layout)
 
+        # Added Description Label
+        self.rp_desc = QLabel("")
+        self.rp_desc.setStyleSheet("font-size: 12px; font-style: italic; color: #555;")
+        self.rp_desc.setWordWrap(True)
+        layout.addWidget(self.rp_desc)
+
         self.rp_last_update = QLabel("Last Update: --")
         self.rp_last_update.setStyleSheet("font-size: 11px; margin-bottom: 5px; color: #808080;")
         layout.addWidget(self.rp_last_update)
+
+        # Material Info Section
+        self.rp_material_frame = QFrame()
+        self.rp_material_frame.setStyleSheet("background-color: #f5f5f5; border-radius: 6px; padding: 6px;")
+        mat_layout = QVBoxLayout(self.rp_material_frame)
+        mat_layout.setContentsMargins(5, 5, 5, 5)
+
+        self.rp_material_batch = QLabel("Batch: --")
+        self.rp_material_batch.setStyleSheet("font-weight: bold; color: #34495e;")
+        self.rp_feeding_time = QLabel("Fed: --")
+        self.rp_feeding_time.setStyleSheet("font-size: 10px; color: #7f8c8d;")
+
+        mat_layout.addWidget(self.rp_material_batch)
+        mat_layout.addWidget(self.rp_feeding_time)
+        layout.addWidget(self.rp_material_frame)
 
         self.lbl_oee = QLabel("OEE: 0%")
         self.lbl_oee.setStyleSheet("font-weight: bold; margin-top: 10px;")
@@ -322,7 +331,6 @@ class MainView(QMainWindow):
         layout.addStretch()
 
     def _setup_device_canvas(self) -> None:
-        """Configure device visualization canvases."""
         if hasattr(self.ui, "daboard_midle_frame_1"):
             self.canvas_dashboard = DeviceCanvasWidget("daboard_midle_frame_1", self)
             self.canvas_dashboard.device_clicked.connect(self._on_device_clicked)
@@ -342,7 +350,6 @@ class MainView(QMainWindow):
             layout.addWidget(self.canvas_orders)
 
     def _setup_gantt_chart(self) -> None:
-        """Configure Gantt chart widgets."""
         if hasattr(self.ui, "daboard_midle_frame_2"):
             self.gantt_dashboard = GanttCanvasWidget(self)
             layout = self.ui.daboard_midle_frame_2.layout()
@@ -360,7 +367,6 @@ class MainView(QMainWindow):
             layout.addWidget(self.gantt_orders)
 
     def _setup_legend(self) -> None:
-        """Configure legend widgets."""
         if hasattr(self.ui, "daboard_bottom_frame"):
             self.ui.daboard_bottom_frame.setMaximumHeight(60)
             self.legend_dashboard = LegendWidget(self)
@@ -378,65 +384,44 @@ class MainView(QMainWindow):
             layout.addWidget(self.legend_orders)
 
     def _setup_shortcuts(self) -> None:
-        """Configure keyboard shortcuts."""
         QShortcut(QKeySequence("Ctrl+T"), self).activated.connect(lambda: self._controller.handle_theme_toggle(self._current_theme))
         QShortcut(QKeySequence("Ctrl+M"), self).activated.connect(self._controller.handle_left_menu_toggle)
         QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(self._controller.handle_right_panel_toggle)
 
     def _connect_ui_events(self) -> None:
-        """Connect UI widget signals to controller."""
         self.ui.pushButton.clicked.connect(self._controller.handle_left_menu_toggle)
         self.ui.listWidget.itemClicked.connect(self._on_menu_item_clicked)
         self.ui.listWidget_settings.itemClicked.connect(self._on_settings_clicked)
 
     def _on_menu_item_clicked(self, item: QListWidgetItem) -> None:
-        """Handle menu item click with selection update."""
         page_id = item.data(Qt.UserRole)
         row = self.ui.listWidget.row(item)
-
-        # Clear settings selection
         self.ui.listWidget_settings.clearSelection()
-
-        # Update selection state
         self._selected_menu_index = row
-
-        # Navigate to page
         self._controller.handle_navigation(page_id)
 
     def _on_settings_clicked(self, item: QListWidgetItem) -> None:
-        """Handle settings menu click."""
         page_id = item.data(Qt.UserRole)
-
-        # Clear main menu selection
         self.ui.listWidget.clearSelection()
-
-        # Update selection state
-        self._selected_menu_index = -1  # Settings is special
-
-        # Navigate to page
+        self._selected_menu_index = -1
         self._controller.handle_navigation(page_id)
 
     def select_menu_item(self, index: int) -> None:
-        """Public method to select menu item by index."""
         if 0 <= index < self.ui.listWidget.count():
             self.ui.listWidget.setCurrentRow(index)
             self.ui.listWidget_settings.clearSelection()
             self._selected_menu_index = index
-
-            # Also navigate to the page
             item = self.ui.listWidget.item(index)
             if item:
                 page_id = item.data(Qt.UserRole)
                 self._controller.handle_navigation(page_id)
 
     def _on_device_clicked(self, device_id: str) -> None:
-        """Handle device selection from canvas."""
         self._store.dispatch(Action(type=UIActionType.DEVICE_SELECTED.value, payload={"id": device_id}))
         if not self._is_right_panel_open:
             self._controller.handle_right_panel_toggle()
 
     def _on_state_changed(self, state: Dict[str, Any]) -> None:
-        """React to Redux store state changes."""
         theme = select_theme(state)
         page = select_current_page(state)
         devices = select_all_devices(state)
@@ -451,30 +436,25 @@ class MainView(QMainWindow):
 
         self._is_right_panel_open = panel_expanded
 
-        # Navigate to page
         target = self.ui.stackedWidget.findChild(QWidget, page)
         if target and self.ui.stackedWidget.currentWidget() != target:
             self.ui.stackedWidget.setCurrentWidget(target)
 
-        # Update menu width
         menu_w = UIConstants.MENU_EXPANDED_WIDTH if menu_expanded else UIConstants.MENU_COLLAPSED_WIDTH
         self.ui.left_slide_menu_frame.setFixedWidth(menu_w)
         self.ui.title_frame.setFixedWidth(menu_w)
         self.ui.title_label.setVisible(menu_expanded)
         self.ui.title_icon.setVisible(menu_expanded)
 
-        # Update right panel width
         panel_w = UIConstants.RIGHT_PANEL_WIDTH_EXPANDED if panel_expanded else 0
         self.ui.right_slide_menu_frame.setFixedWidth(panel_w)
 
-        # Update canvases
         is_dark = theme_manager.is_dark
         if hasattr(self, "canvas_dashboard"):
             self.canvas_dashboard.render_state(devices, is_dark)
         if hasattr(self, "canvas_orders"):
             self.canvas_orders.render_state(devices, is_dark)
 
-        # Update Gantt charts
         if hasattr(self, "gantt_dashboard") and gantt_data:
             self.gantt_dashboard.render_timeline(gantt_data)
         if hasattr(self, "gantt_orders") and gantt_data:
@@ -483,7 +463,6 @@ class MainView(QMainWindow):
         self._update_right_panel(state)
         self._update_lcd_numbers(summary)
 
-        # Update system status
         sys_status = state.get("system_status", {})
         if hasattr(self, "update_system_status"):
             self.update_system_status(
@@ -493,16 +472,21 @@ class MainView(QMainWindow):
             )
 
     def _update_right_panel(self, state: Dict[str, Any]) -> None:
-        """Update right panel with selected device data."""
         selected_data = select_selected_device_data(state)
         if not selected_data or not hasattr(self, "rp_title"):
             return
 
+        # Basic Info
         dev_id = selected_data.get("id", "Unknown")
-        status = selected_data.get("status", "Offline")
-        color = selected_data.get("color", "#888888")
+        display_name = selected_data.get("display_name", dev_id)
+        desc = selected_data.get("description", "")
+        status = selected_data.get("status_display", "Offline")  # Use display status
+        color = selected_data.get("status_color", "#888888")
 
-        inputs = selected_data.get("inputs", 0)
+        # Material & Metrics
+        batch = selected_data.get("material_batch", "--")
+        fed_time = selected_data.get("feeding_time", "--")
+        inputs = selected_data.get("input_count", 0)
         outputs = selected_data.get("outputs", 0)
         error = selected_data.get("error", "No recent errors")
         oee = selected_data.get("oee", 0)
@@ -510,7 +494,14 @@ class MainView(QMainWindow):
         cycle_time = selected_data.get("cycle_time", 0.0)
         last_update = selected_data.get("last_update")
 
-        self.rp_title.setText(f"DEVICE: {dev_id}")
+        self.rp_title.setText(display_name)
+
+        # Update description if available
+        if desc:
+            self.rp_desc.setText(desc)
+            self.rp_desc.setVisible(True)
+        else:
+            self.rp_desc.setVisible(False)
 
         if last_update:
             clean_time = str(last_update).replace("T", " ").split(".")[0]
@@ -522,6 +513,10 @@ class MainView(QMainWindow):
         self.rp_status_badge.setStyleSheet(
             f"background-color: {color}; color: white; font-weight: bold; " f"padding: 4px 10px; border-radius: 12px; font-size: 11px;"
         )
+
+        # Update Material
+        self.rp_material_batch.setText(f"Batch: {batch}")
+        self.rp_feeding_time.setText(f"Fed: {fed_time}")
 
         self.lbl_oee.setText(f"OEE: {oee}%")
         self.bar_oee.setValue(int(oee))
@@ -541,17 +536,12 @@ class MainView(QMainWindow):
         self.rp_error.setStyleSheet("color: #e74c3c; font-weight: bold;" if has_error else "color: #7f8c8d;")
 
     def _update_lcd_numbers(self, summary: Dict[str, Any]) -> None:
-        """Update LCD number displays with factory summary."""
         if hasattr(self.ui, "lcdNumber_20"):
             self.ui.lcdNumber_20.display(summary.get("output", 0))
         if hasattr(self.ui, "lcdNumber_15"):
             self.ui.lcdNumber_15.display(summary.get("yield_rate", 0))
 
     def update_system_status(self, mssql_connected: bool = False, sqlite_connected: bool = False, message: str = None) -> None:
-        """
-        Update visual status with Modern Logic.
-        """
-        # Palette màu hiện đại (Tailwind CSS colors)
         COLOR_SUCCESS_BG = "#D1FAE5"
         COLOR_SUCCESS_TEXT = "#065F46"
         COLOR_SUCCESS_BORDER = "#10B981"
@@ -564,7 +554,6 @@ class MainView(QMainWindow):
 
         def set_style(label, state, text_ok, text_err):
             if state:
-                # Style: Nền nhạt, chữ đậm, viền mỏng (Rất hiện đại)
                 label.setText(f"● {text_ok}")
                 label.setStyleSheet(
                     f"""
@@ -585,33 +574,26 @@ class MainView(QMainWindow):
                 """
                 )
 
-        # Cập nhật MSSQL
         set_style(self.lbl_mssql_status, mssql_connected, "Remote: On", "Remote: Off")
-
-        # Cập nhật SQLite (Local)
         set_style(self.lbl_sqlite_status, sqlite_connected, "Local: On", "Local: Err")
 
-        # Logic tổng hợp (Smart Mode)
         if mssql_connected and sqlite_connected:
             self.lbl_app_mode.setText("ONLINE SYSTEM")
             self.lbl_app_mode.setStyleSheet(f"color: {COLOR_SUCCESS_BORDER}; font-weight: 900;")
         elif not mssql_connected and sqlite_connected:
-            self.lbl_app_mode.setText("OFFLINE MODE")  # Nghe chuyên nghiệp hơn là "Error"
+            self.lbl_app_mode.setText("OFFLINE MODE")
             self.lbl_app_mode.setStyleSheet(f"color: {COLOR_WARN_BORDER}; font-weight: 900;")
         else:
             self.lbl_app_mode.setText("SYSTEM HALTED")
             self.lbl_app_mode.setStyleSheet(f"color: {COLOR_ERROR_BORDER}; font-weight: 900;")
 
-        # Update message
         if message:
-            # Thêm timestamp vào log message cho chuyên nghiệp
             import datetime
 
             time_str = datetime.datetime.now().strftime("%H:%M:%S")
             self.lbl_system_message.setText(f"[{time_str}] {message}")
 
     def _update_menu_icons(self, mode: str) -> None:
-        """Update menu icons based on theme."""
         btn_key = ":/icon/close.svg" if self._is_menu_open else ":/icon/open.svg"
         self.ui.pushButton.setIcon(QIcon(theme_manager.get_icon_path(btn_key)))
 
@@ -626,16 +608,9 @@ class MainView(QMainWindow):
             settings_item.setIcon(QIcon(theme_manager.get_icon_path(":/icon/settings.svg")))
 
     def _apply_theme(self, mode: str) -> None:
-        """Apply theme stylesheet."""
         self._current_theme = mode
-
-        # 1. Update Manager
         theme_manager.set_theme(mode)
-
-        # 2. Update Icons
         self._update_menu_icons(mode)
-
-        # 3. Load QSS
         stylesheet = theme_manager.get_stylesheet()
         if stylesheet:
             self.setStyleSheet(stylesheet)

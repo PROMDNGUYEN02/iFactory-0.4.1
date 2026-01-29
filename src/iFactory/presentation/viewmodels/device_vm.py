@@ -23,7 +23,7 @@ class DeviceViewModel:
     requires_attention: bool
     last_update: Optional[str]
 
-    # Extended metrics (optional)
+    # Extended metrics
     input_count: int = 0
     output_count: int = 0
     error_count: int = 0
@@ -31,6 +31,11 @@ class DeviceViewModel:
     yield_rate: float = 0.0
     cycle_time: float = 0.0
     last_error: Optional[str] = None
+
+    # Metadata & Material
+    description: Optional[str] = None
+    material_batch: Optional[str] = None
+    feeding_time: Optional[str] = None
 
     @property
     def id(self) -> str:

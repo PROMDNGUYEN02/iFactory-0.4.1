@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iFactory.domain.entities.device import Device
 from iFactory.domain.repositories.device_repository import DeviceRepository
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
-from iFactory.infrastructure.persistence.sqlalchemy.models import DeviceModel
+from iFactory.domain.value_objects.material_input import MaterialInput
+from iFactory.infrastructure.persistence.sqlalchemy.models import DeviceModel, LatestMaterialInputModel
 
-# FIXED: Import from .mapper (singular) instead of .mappers
 from iFactory.infrastructure.persistence.sqlalchemy.mapper import SQLAlchemyMapper
 
 
@@ -33,6 +33,44 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         result = await self._session.execute(stmt)
         models = result.scalars().all()
         return [SQLAlchemyMapper.to_device_entity(m) for m in models if m]
+
+    async def get_dashboard_snapshot(self) -> Sequence[Tuple[Device, Optional[MaterialInput]]]:
+        """
+        Optimized join query to fetch Device + Latest Material Input in one go.
+        """
+        stmt = (
+            select(DeviceModel, LatestMaterialInputModel)
+            .outerjoin(LatestMaterialInputModel, DeviceModel.equip_code == LatestMaterialInputModel.equipment_code)
+            .order_by(DeviceModel.equip_code)
+        )
+
+        result = await self._session.execute(stmt)
+        rows = result.all()
+
+        snapshot = []
+        for dev_model, input_model in rows:
+            if not dev_model:
+                continue
+
+            device_entity = SQLAlchemyMapper.to_device_entity(dev_model)
+            material_vo = None
+            if input_model:
+                try:
+                    material_vo = SQLAlchemyMapper.to_material_input(input_model)
+                except Exception:
+                    from iFactory.domain.value_objects.material_input import MaterialInput
+                    from iFactory.domain.value_objects.material_batch import MaterialBatch
+
+                    material_vo = MaterialInput(
+                        equipment_code=EquipmentCode(input_model.equipment_code),
+                        material_batch=MaterialBatch(input_model.material_batch),
+                        feeding_time=input_model.feeding_time,
+                    )
+
+            if device_entity:
+                snapshot.append((device_entity, material_vo))
+
+        return snapshot
 
     async def get_active(self) -> Sequence[Device]:
         stmt = select(DeviceModel).where(DeviceModel.is_active == True).order_by(DeviceModel.equip_code)

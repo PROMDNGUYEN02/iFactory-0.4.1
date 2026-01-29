@@ -18,11 +18,6 @@ class DevicePresenter:
     """
 
     def __init__(self, theme: str = "light"):
-        # Theme is now handled globally by ThemeManager, but we keep init signature for compatibility
-        pass
-
-    def set_theme(self, theme: str) -> None:
-        """Deprecated: Theme is now handled globally."""
         pass
 
     def present_device_list(self, dtos: Dict[str, Any]) -> Dict[str, DeviceViewModel]:
@@ -39,20 +34,28 @@ class DevicePresenter:
     def present_single_device(self, data: Any) -> DeviceViewModel:
         # 1. Normalize Input
         code = self._extract_attr(data, "equip_code", "code", default="UNKNOWN")
+        name = self._extract_attr(data, "name", default=None)
+        desc = self._extract_attr(data, "description", default="")
         last_update = self._extract_attr(data, "last_update", default=None)
         raw_status = self._extract_attr(data, "status_code", default="0")
 
+        # Extended Fields
+        batch = self._extract_attr(data, "material_batch", default="--")
+        feeding_dt = self._extract_attr(data, "feeding_time", default=None)
+        inp_count = self._extract_attr(data, "input_count", default=0)
+
         # 2. Resolve UI Logic
         status_code = self._parse_status_code(raw_status)
-
-        # [FIXED] Call get_color with ONLY status_code.
         status_color = StatusColors.get_color(status_code)
         status_name = StatusColors.get_name(status_code)
+
+        # Display Name Logic: Use Name if available, else Code
+        display_label = f"{name} ({code})" if name else code
 
         # 3. Build ViewModel
         return DeviceViewModel(
             device_id=code,
-            display_name=code,
+            display_name=display_label,
             status_code=str(status_code),
             status_display=status_name,
             status_color=status_color,
@@ -60,6 +63,13 @@ class DevicePresenter:
             is_running=(status_code == StatusColors.RUNNING),
             requires_attention=(status_code in (StatusColors.STOPPED, StatusColors.ALARM)),
             last_update=last_update.isoformat() if last_update else None,
+            # Metrics
+            input_count=inp_count,
+            output_count=0,  # Placeholder
+            # Meta
+            description=desc,
+            material_batch=batch,
+            feeding_time=feeding_dt.strftime("%H:%M:%S") if feeding_dt else "--",
         )
 
     def _create_fallback_vm(self, code: str) -> DeviceViewModel:
@@ -68,7 +78,7 @@ class DevicePresenter:
             display_name=code,
             status_code="0",
             status_display="Unknown",
-            status_color=StatusColors.get_color(0),  # [FIXED] No theme arg
+            status_color=StatusColors.get_color(0),
             status_emoji="❓",
             is_running=False,
             requires_attention=False,

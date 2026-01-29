@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
 from ..entities.device import Device
 from ..value_objects.equipment_code import EquipmentCode
+from ..value_objects.material_input import MaterialInput
 
 
 class DeviceRepository(ABC):
     """
-    Abstract Port interface for managing Device Aggregates.
+    Abstract Port for Device Aggregate access.
     """
 
     @abstractmethod
     async def get_by_code(self, code: EquipmentCode) -> Optional[Device]:
-        """Retrieve a device by its unique equipment code."""
+        """Retrieve a single device by its code."""
         pass
 
     @abstractmethod
@@ -23,26 +24,35 @@ class DeviceRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_dashboard_snapshot(self) -> Sequence[Tuple[Device, Optional[MaterialInput]]]:
+        """
+        Retrieve a rich snapshot of all devices including their
+        latest material input (if available).
+        Optimized for dashboard display.
+        """
+        pass
+
+    @abstractmethod
     async def get_active(self) -> Sequence[Device]:
-        """Retrieve devices that are currently in an active state."""
+        """Retrieve only active devices."""
         pass
 
     @abstractmethod
     async def save(self, device: Device) -> None:
-        """Persist the current state of a device aggregate."""
+        """Persist device state."""
         pass
 
     @abstractmethod
     async def delete(self, code: EquipmentCode) -> bool:
-        """Remove a device from the system. Returns True if deleted."""
+        """Remove a device."""
         pass
 
     @abstractmethod
     async def exists(self, code: EquipmentCode) -> bool:
-        """Check if a device exists by code."""
+        """Check if device exists."""
         pass
 
     @abstractmethod
     async def count(self) -> int:
-        """Return total number of registered devices."""
+        """Count total devices."""
         pass

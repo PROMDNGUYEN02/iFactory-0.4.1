@@ -19,8 +19,15 @@ class DeviceStatusDTO:
     status_name: str
     last_update: Optional[datetime] = None
     is_active: bool = True
+
+    # Extended Meta Data
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+    # Material / Production Data
     material_batch: Optional[str] = None
     feeding_time: Optional[datetime] = None
+    input_count: int = 0  # Placeholder for daily/shift count
 
 
 @dataclass(frozen=True, slots=True)
