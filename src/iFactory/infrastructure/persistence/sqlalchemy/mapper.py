@@ -56,7 +56,7 @@ class SQLAlchemyMapper:
             is_active=getattr(entity, "is_active", True),
         )
 
-    # --- Status Period Mapping (UPDATED) ---
+    # --- Status Period Mapping (FIXED) ---
     @staticmethod
     def to_status_period(model: Optional[StatusHistoryModel]) -> Optional[StatusPeriod]:
         if not model:
@@ -68,7 +68,13 @@ class SQLAlchemyMapper:
             status = MachineStatus.UNKNOWN
 
         # LOGIC: Nếu end_time is null thì chèn now
-        effective_end = model.end_time if model.end_time else datetime.now()
+        # FIX: Kẹp (Clamp) giá trị now để đảm bảo không nhỏ hơn start_time
+        if model.end_time:
+            effective_end = model.end_time
+        else:
+            now = datetime.now()
+            # Nếu start_time ở tương lai (do lệch giờ), ép end_time = start_time để tránh lỗi
+            effective_end = max(model.start_time, now)
 
         return StatusPeriod(equipment_code=EquipmentCode(model.equip_code), status=status, time_range=TimeRange(model.start_time, effective_end))
 

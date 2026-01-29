@@ -35,7 +35,13 @@ async def _update_history_logic(
 
     # Case 1: No history -> Start new
     if not latest_period:
-        new_period = StatusPeriod(equipment_code=code, status=new_status, time_range=TimeRange(start=effective_start, end=end_time))
+        # Validate New Period (Start vs End)
+        actual_end = end_time
+        if actual_end and actual_end < effective_start:
+            logger.warning(f"Data error for {code.value}: End {actual_end} < Start {effective_start}. Clamping.")
+            actual_end = effective_start
+
+        new_period = StatusPeriod(equipment_code=code, status=new_status, time_range=TimeRange(start=effective_start, end=actual_end))
         await history_repo.save_status_period(new_period)
         return
 
@@ -44,14 +50,12 @@ async def _update_history_logic(
         # Determine closing time for the old period
         closing_time = effective_start
 
-        # FIX: Time Travel Check (Closing time < Start time)
-        # If the new status starts BEFORE the old status ended (impossible in linear time),
-        # we clamp the closing time to the start time of the old period (creating a 0-duration period)
+        # FIX 1: Time Travel Check (Closing time < Old Start time)
         if closing_time < latest_period.time_range.start:
             logger.warning(
                 f"Timeline conflict for {code.value}: "
-                f"Closing ({closing_time}) < Start ({latest_period.time_range.start}). "
-                f"Clamping closing time to Start time."
+                f"Closing ({closing_time}) < Old Start ({latest_period.time_range.start}). "
+                f"Clamping closing time."
             )
             closing_time = latest_period.time_range.start
 
@@ -62,14 +66,24 @@ async def _update_history_logic(
         # Open new period
         # Ensure new period doesn't start before the old one closed
         new_period_start = max(effective_start, closing_time)
-        new_period = StatusPeriod(equipment_code=code, status=new_status, time_range=TimeRange(start=new_period_start, end=end_time))
+
+        # FIX 2: Time Travel Check for New Period (End < New Start)
+        # This happens if 'end_time' is real (e.g. 18:26) but 'new_period_start' was forced to future (e.g. 18:28)
+        actual_end = end_time
+        if actual_end and actual_end < new_period_start:
+            logger.warning(
+                f"Timeline conflict for {code.value}: " f"New End ({actual_end}) < New Start ({new_period_start}). " f"Clamping End to Start."
+            )
+            actual_end = new_period_start
+
+        new_period = StatusPeriod(equipment_code=code, status=new_status, time_range=TimeRange(start=new_period_start, end=actual_end))
         await history_repo.save_status_period(new_period)
 
     # Case 3: Same Status, but Ended? (Remote provided END_TIME)
     elif end_time and latest_period.time_range.end is None:
         closing_time = end_time
 
-        # FIX: Time Travel Check
+        # FIX 3: Time Travel Check
         if closing_time < latest_period.time_range.start:
             logger.warning(f"Timeline conflict for {code.value}: " f"End ({closing_time}) < Start ({latest_period.time_range.start}). " f"Clamping.")
             closing_time = latest_period.time_range.start
@@ -123,10 +137,8 @@ class SyncAllDevicesCommand:
         raw_code = str(record.get("equip_code"))
         raw_status = record.get("raw_status", "0")
 
-        # LOGIC: last_update determined by Adapter (END_TIME or NOW)
         timestamp = record.get("last_update") or datetime.now()
 
-        # Raw remote fields
         reason_code = record.get("reason_code")
         equip_name = record.get("equip_name")
         remote_start_time = record.get("start_time")
@@ -166,6 +178,7 @@ class SyncDeviceStatusCommand:
     async def execute(self, equip_code: str, days: int = 30) -> bool:
         try:
             # Fetch data (Can be Dict or List[Dict] depending on Adapter)
+            # Supports 'days' parameter for history fetching
             data = await self._remote_api.fetch_device_status(equip_code, days=days)
 
             if not data:

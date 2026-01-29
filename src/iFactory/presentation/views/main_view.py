@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Dict, Any, Optional
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt
-from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut, QAction, QCursor
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -22,9 +22,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QVBoxLayout,
     QWidget,
-    QComboBox,
-    QFormLayout,
-    QGroupBox,
+    QMenu,
 )
 
 import iFactory.presentation.resources.resources_rc as resources_rc
@@ -110,7 +108,7 @@ class MainView(QMainWindow):
         self._setup_device_canvas()
         self._setup_gantt_chart()
         self._setup_legend()
-        self._setup_settings_page()  # NEW: Setup Settings UI
+        # self._setup_settings_page()  <-- REMOVED: Using Popup Menu instead
         self._setup_shortcuts()
         self._connect_ui_events()
 
@@ -276,47 +274,6 @@ class MainView(QMainWindow):
         settings_item.setToolTip("Settings")
         self.ui.listWidget_settings.addItem(settings_item)
 
-    def _setup_settings_page(self) -> None:
-        """Initializes the Settings Page UI with Data Range Selection."""
-        settings_widget = self.ui.stackedWidget.findChild(QWidget, "settings_page")
-        if not settings_widget:
-            return
-
-        if not settings_widget.layout():
-            layout = QVBoxLayout(settings_widget)
-            layout.setAlignment(Qt.AlignTop)
-        else:
-            layout = settings_widget.layout()
-
-        # Data Configuration Group
-        group = QGroupBox("Data Configuration")
-        form_layout = QFormLayout()
-
-        self.combo_data_range = QComboBox()
-        self.combo_data_range.addItem("1 Day", 1)
-        self.combo_data_range.addItem("1 Week", 7)
-        self.combo_data_range.addItem("1 Month", 30)
-        self.combo_data_range.addItem("3 Months", 90)
-
-        # Sync with store
-        current_days = select_data_range_days(self._store.get_state())
-        index = self.combo_data_range.findData(current_days)
-        if index >= 0:
-            self.combo_data_range.setCurrentIndex(index)
-
-        self.combo_data_range.currentIndexChanged.connect(self._on_data_range_changed)
-
-        form_layout.addRow(QLabel("History Data Size:"), self.combo_data_range)
-        group.setLayout(form_layout)
-        layout.addWidget(group)
-
-    def _on_data_range_changed(self, index: int) -> None:
-        """Handle data range selection change."""
-        days = self.combo_data_range.currentData()
-        self._store.dispatch(set_data_range(days))
-        # Optional: Trigger data refresh immediately via controller if implemented
-        # self._controller.refresh_data()
-
     def _setup_right_panel(self) -> None:
         layout = self.ui.right_slide_menu_frame.layout()
         if not layout:
@@ -480,12 +437,59 @@ class MainView(QMainWindow):
         self._controller.handle_navigation(page_id)
 
     def _on_settings_clicked(self, item: QListWidgetItem) -> None:
-        page_id = item.data(Qt.UserRole)
-        # Visual trick: Keep the main menu selected to imply overlay/modal nature
+        """
+        Thay vì chuyển trang, hiển thị Popup Menu để chọn Data Range ngay lập tức.
+        """
+        # 1. Lấy giá trị hiện tại từ Store để đánh dấu (Check)
+        current_days = select_data_range_days(self._store.get_state())
+
+        # 2. Tạo Menu
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            """
+            QMenu {
+                background-color: #FFFFFF;
+                border: 1px solid #CCCCCC;
+                padding: 5px;
+            }
+            QMenu::item {
+                padding: 8px 25px;
+                font-size: 13px;
+                color: #000000;
+            }
+            QMenu::item:selected {
+                background-color: #E0E0E0;
+                color: #000000;
+            }
+        """
+        )
+
+        # 3. Định nghĩa các tùy chọn
+        options = [("Last 1 Day", 1), ("Last 1 Week", 7), ("Last 1 Month", 30), ("Last 3 Months", 90)]
+
+        # 4. Tạo Action cho từng tùy chọn
+        for text, days in options:
+            action = QAction(text, self)
+            action.setCheckable(True)
+
+            # Đánh dấu nếu đang được chọn
+            if days == current_days:
+                action.setChecked(True)
+
+            # Sử dụng lambda để bắt biến 'days'
+            action.triggered.connect(lambda chk, d=days: self._store.dispatch(set_data_range(d)))
+
+            menu.addAction(action)
+
+        # 5. Hiển thị Menu tại vị trí con trỏ chuột
+        menu.exec(QCursor.pos())
+
+        # 6. Bỏ chọn item trong list widget để không bị "dính" màu selection
+        self.ui.listWidget_settings.clearSelection()
+
+        # (Optional) Giữ focus ở trang chính, không chuyển sang trang Settings rỗng
         if self._last_main_page_index is not None:
             self.ui.listWidget.setCurrentRow(self._last_main_page_index)
-
-        self._controller.handle_navigation(page_id)
 
     def select_menu_item(self, index: int) -> None:
         if 0 <= index < self.ui.listWidget.count():
