@@ -44,8 +44,10 @@ class GetAllDevicesStatusQuery:
                     last_update=device.last_updated_at,
                     is_active=device.is_active,
                     # Extended Data
-                    name=device.name,
-                    description=device.description,
+                    # [FIX] Updated from device.name to device.equip_name
+                    name=device.equip_name,
+                    # [FIX] Description removed from Entity, set to None or remove field from DTO if needed
+                    description=None,
                     material_batch=material.material_batch.value if material else None,
                     feeding_time=material.feeding_time if material else None,
                     input_count=0,  # Placeholder: Real count requires heavy history aggregation
@@ -88,8 +90,8 @@ class GetLatestDeviceStatusQuery:
             status_name=device.current_status.name,
             last_update=device.last_updated_at,
             is_active=device.is_active,
-            name=device.name,
-            description=device.description,
+            name=device.equip_name,
+            description=None,
         )
 
         await self._cache.set(cache_key, dto, ttl=1)

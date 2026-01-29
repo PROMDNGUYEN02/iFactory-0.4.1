@@ -62,7 +62,15 @@ class SyncAllDevicesCommand:
         # 1. Parse Data
         raw_code = str(record.get("equip_code"))
         raw_status = record.get("raw_status", "0")
+
+        # LOGIC: last_update determined by Adapter (END_TIME or NOW)
         timestamp = record.get("last_update") or datetime.now()
+
+        # Raw remote fields
+        reason_code = record.get("reason_code")
+        equip_name = record.get("equip_name")
+        remote_start_time = record.get("start_time")
+        remote_end_time = record.get("end_time")
 
         code_vo = EquipmentCode(raw_code)
         try:
@@ -75,33 +83,49 @@ class SyncAllDevicesCommand:
             equipment_code=code_vo,
             current_status=status_enum,
             last_updated_at=timestamp,
-            name=record.get("name"),
-            description=record.get("description"),
+            equip_name=equip_name,
+            reason_code=reason_code,
         )
         await uow.devices.save(device)
 
         # 3. Update Cold Storage (History)
-        # We rely on UoW to provide the history repository
         if uow.history:
-            await self._update_history(uow.history, code_vo, status_enum, timestamp)
+            await self._update_history(uow.history, code_vo, status_enum, timestamp, remote_start_time, remote_end_time)
 
-    async def _update_history(self, history_repo, code: EquipmentCode, new_status: MachineStatus, timestamp: datetime) -> None:
-        """Ensures history continuity: Close old period, Open new period."""
+    async def _update_history(
+        self,
+        history_repo,
+        code: EquipmentCode,
+        new_status: MachineStatus,
+        timestamp: datetime,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> None:
+        """
+        Ensures history continuity: Close old period, Open new period.
+        """
         latest_period: Optional[StatusPeriod] = await history_repo.get_latest_status(code)
+
+        effective_start = start_time if start_time else timestamp
 
         # Case 1: No history -> Start new
         if not latest_period:
-            new_period = StatusPeriod(equipment_code=code, status=new_status, time_range=TimeRange.starting_from(timestamp))
+            new_period = StatusPeriod(equipment_code=code, status=new_status, time_range=TimeRange(start=effective_start, end=end_time))
             await history_repo.save_status_period(new_period)
             return
 
         # Case 2: Status changed -> Close old, Start new
         if latest_period.status != new_status:
-            closed_period = latest_period.with_end_time(timestamp)
+            closed_period = latest_period.with_end_time(effective_start)
             await history_repo.save_status_period(closed_period)
 
-            new_period = StatusPeriod(equipment_code=code, status=new_status, time_range=TimeRange.starting_from(timestamp))
+            new_period = StatusPeriod(equipment_code=code, status=new_status, time_range=TimeRange(start=effective_start, end=end_time))
             await history_repo.save_status_period(new_period)
+
+        # Case 3: Same status, but Remote says it has ended (END_TIME is present)
+        elif end_time and latest_period.time_range.end is None:
+            closed_period = latest_period.with_end_time(end_time)
+            await history_repo.save_status_period(closed_period)
 
 
 class SyncDeviceStatusCommand:
@@ -125,10 +149,14 @@ class SyncDeviceStatusCommand:
             except (ValueError, TypeError):
                 pass
 
+            timestamp = data.get("last_update") or datetime.now()
+
             device = Device(
                 equipment_code=EquipmentCode(data.get("equip_code")),
                 current_status=status_enum,
-                last_updated_at=data.get("last_update") or datetime.now(),
+                last_updated_at=timestamp,
+                equip_name=data.get("equip_name"),
+                reason_code=data.get("reason_code"),
             )
 
             async with self._uow as uow:

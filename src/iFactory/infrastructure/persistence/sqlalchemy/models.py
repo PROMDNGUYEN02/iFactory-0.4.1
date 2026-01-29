@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, DateTime, Boolean, Integer, Index
+from sqlalchemy import String, DateTime, Boolean, Integer, Index, BigInteger
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -41,11 +41,11 @@ class DeviceModel(HotBase):
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     equip_code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    equip_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     equip_status: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_update: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reason_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    last_update: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class LatestMaterialInputModel(HotBase):

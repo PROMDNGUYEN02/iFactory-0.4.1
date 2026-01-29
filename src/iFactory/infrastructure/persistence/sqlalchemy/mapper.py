@@ -40,8 +40,8 @@ class SQLAlchemyMapper:
             equipment_code=EquipmentCode(model.equip_code),
             current_status=status,
             last_updated_at=model.last_update,
-            name=model.name,
-            description=model.description,
+            equip_name=model.equip_name,
+            reason_code=model.reason_code,
         )
 
     @staticmethod
@@ -51,13 +51,12 @@ class SQLAlchemyMapper:
             equip_code=entity.equipment_code.value,
             equip_status=entity.current_status.value,
             last_update=entity.last_updated_at or datetime.now(),
+            equip_name=entity.equip_name,
+            reason_code=entity.reason_code,
             is_active=getattr(entity, "is_active", True),
-            name=entity.name,
-            description=entity.description,
         )
 
     # --- Status Period Mapping ---
-
     @staticmethod
     def to_status_period(model: Optional[StatusPeriodModel]) -> Optional[StatusPeriod]:
         if not model:
@@ -96,5 +95,5 @@ class SQLAlchemyMapper:
         return LatestMaterialInputModel(id=str(uuid4()), equipment_code=vo.code.value, material_batch=vo.batch_id, feeding_time=vo.timestamp)
 
 
-# Compatibility Alias for code expecting the old name
+# Compatibility Alias
 OrmDeviceMapper = SQLAlchemyMapper

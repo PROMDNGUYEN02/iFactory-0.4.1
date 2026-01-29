@@ -14,17 +14,14 @@ from ..value_objects.equipment_code import EquipmentCode
 class Device(AggregateRoot):
     """
     Aggregate Root representing a manufacturing device.
-
-    Enforces business invariants for state transitions and encapsulates
-    all device lifecycle operations.
     """
 
     __slots__ = (
         "_equipment_code",
         "_current_status",
         "_last_updated_at",
-        "_name",
-        "_description",
+        "_equip_name",  # Renamed
+        "_reason_code",
     )
 
     def __init__(
@@ -32,32 +29,29 @@ class Device(AggregateRoot):
         equipment_code: EquipmentCode,
         current_status: MachineStatus,
         last_updated_at: datetime,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
+        equip_name: Optional[str] = None,
+        reason_code: Optional[str] = None,
     ) -> None:
         super().__init__()
         self._equipment_code = equipment_code
         self._current_status = current_status
         self._last_updated_at = last_updated_at
-        self._name = name
-        self._description = description
+        self._equip_name = equip_name
+        self._reason_code = reason_code
 
     @classmethod
     def register_new(
         cls,
         code: EquipmentCode,
         timestamp: datetime,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
+        equip_name: Optional[str] = None,
     ) -> Device:
         """
         Factory method to register a new device in the system.
-        Requires explicit timestamp to ensure purity.
         """
         return cls(
             equipment_code=code,
-            name=name,
-            description=description,
+            equip_name=equip_name,
             current_status=MachineStatus.UNKNOWN,
             last_updated_at=timestamp,
         )
@@ -77,12 +71,12 @@ class Device(AggregateRoot):
         return self._last_updated_at
 
     @property
-    def name(self) -> Optional[str]:
-        return self._name
+    def equip_name(self) -> Optional[str]:
+        return self._equip_name
 
     @property
-    def description(self) -> Optional[str]:
-        return self._description
+    def reason_code(self) -> Optional[str]:
+        return self._reason_code
 
     @property
     def is_active(self) -> bool:
@@ -121,20 +115,11 @@ class Device(AggregateRoot):
         new_status: MachineStatus,
         timestamp: datetime,
     ) -> None:
-        """
-        Updates the device status from an external source (e.g., sensor).
-        """
         self._transition_to(new_status, timestamp)
 
-    def update_metadata(
-        self,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-    ) -> None:
-        if name is not None:
-            self._name = name
-        if description is not None:
-            self._description = description
+    def update_remote_info(self, equip_name: Optional[str], reason_code: Optional[str]) -> None:
+        self._equip_name = equip_name
+        self._reason_code = reason_code
 
     # --- Internal Behavior ---
 
@@ -143,19 +128,15 @@ class Device(AggregateRoot):
         new_status: MachineStatus,
         timestamp: datetime,
     ) -> None:
-        # Enforce Time Monotonicity to protect history integrity
         if timestamp < self._last_updated_at:
             raise StaleDataError.timestamp_regression(self._last_updated_at, timestamp)
 
         if self._current_status == new_status:
-            # Idempotent: just update the timestamp to confirm liveliness
             self._last_updated_at = timestamp
             return
 
-        # Validate Transition Rules
         StatusTransitionPolicy.validate(self._current_status, new_status)
 
-        # Record Domain Event
         event = StatusChangedEvent(
             occurred_at=timestamp,
             equipment_code=self._equipment_code,
@@ -164,7 +145,6 @@ class Device(AggregateRoot):
         )
         self._record_event(event)
 
-        # Mutate State
         self._current_status = new_status
         self._last_updated_at = timestamp
 
