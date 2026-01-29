@@ -5,7 +5,8 @@
     "menu.itemH": "40px",
     "separator.h": "1px",
     "radius": "5px",
-    "item.padLeft": "5px"
+    "item.padLeft": "5px",
+    "menu.widthCollapsed": "50px"
   },
   "light": {
     "app.bg": "#F2F2F2",
@@ -15,9 +16,25 @@
     "frame.bg": "#FAFAFA",
     "border": "#E0E0E0",
     "hover": "rgba(0,0,0,0.06)",
+    "selected": "#E3F2FD",
+    "selected.text": "#007acc",
+    "selected.border": "#007acc",
     "icon.hover": "#E6E6E6",
     "icon.border": "#CFCFCF",
-    "hint": "#888888"
+    "hint": "#888888",
+    "tooltip.bg": "#FFFFFF",
+    "tooltip.text": "#000000",
+    "tooltip.border": "#888888",
+    "status.unknown": "#9E9E9E",
+    "status.running": "#4CAF50",
+    "status.shutdown": "#BDBDBD",
+    "status.stopped": "#F44336",
+    "status.maintenance": "#03A9F4",
+    "status.alarm": "#FFEB3B",
+    "chart.bg": "#FFFFFF",
+    "chart.grid": "#E0E0E0",
+    "chart.text": "#333333",
+    "chart.now": "#F44336"
   },
   "dark": {
     "app.bg": "#2B2B2B",
@@ -27,9 +44,25 @@
     "frame.bg": "#747474",
     "border": "rgba(255,255,255,0.1)",
     "hover": "rgba(255,255,255,0.08)",
+    "selected": "#094771",
+    "selected.text": "#ffffff",
+    "selected.border": "#007acc",
     "icon.hover": "#747474",
     "icon.border": "rgba(255,255,255,0.14)",
-    "hint": "#3A3A3A"
+    "hint": "#3A3A3A",
+    "tooltip.bg": "#2d2d30",
+    "tooltip.text": "#ffffff",
+    "tooltip.border": "#555555",
+    "status.unknown": "#757575",
+    "status.running": "#66BB6A",
+    "status.shutdown": "#9E9E9E",
+    "status.stopped": "#EF5350",
+    "status.maintenance": "#29B6F6",
+    "status.alarm": "#FDD835",
+    "chart.bg": "#0d1117",
+    "chart.grid": "#2a3040",
+    "chart.text": "#e0e0e0",
+    "chart.now": "#ef4444"
   },
   "iconAlias": {
     "dark": {
@@ -43,24 +76,10 @@
       ":/icon/close.svg": ":/icon/close-white.svg",
       ":/icon/expand.svg": ":/icon/expand-white.svg",
       ":/icon/arrow_menu_open.svg": ":/icon/arrow_menu_open-white.svg",
-      ":/icon/arrow_menu_close.svg": ":/icon/arrow_menu_close-white.svg"
+      ":/icon/arrow_menu_close.svg": ":/icon/arrow_menu_close-white.svg",
+      ":/icon/dashboard_layout.svg": ":/icon/dashboard_layout-white.svg",
+      ":/icon/orders_layout.svg": ":/icon/orders_layout-white.svg"
     },
     "light": {}
-  },
-  "icons": {
-    "_default": { "pad": 2, "scale": 1.08 },
-    ":/icon/settings.svg": { "pad": 0, "scale": 1.08 },
-    ":/icon/open.svg": { "pad": 2, "scale": 1.1 },
-    ":/icon/close.svg": { "pad": 2, "scale": 1.1 }
-  },
-  "pageSvg": {
-    "daboard_midle_frame_1": {
-      "light": ":/icon/dashboard_layout.svg",
-      "dark": ":/icon/dashboard_layout-white.svg"
-    },
-    "orders_midle_frame_1": {
-      "light": ":/icon/orders_layout.svg",
-      "dark": ":/icon/orders_layout-white.svg"
-    }
   }
 }

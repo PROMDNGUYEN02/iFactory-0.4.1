@@ -4,10 +4,8 @@ Pure transformation layer - NO domain imports, NO side effects.
 """
 
 from __future__ import annotations
-
 import logging
 from typing import Any, Dict, Union
-
 from ..constants.ui_constants import StatusColors
 from ..viewmodels.device_vm import DeviceViewModel
 
@@ -17,23 +15,17 @@ logger = logging.getLogger(__name__)
 class DevicePresenter:
     """
     Responsible for converting raw Device DTOs into UI-ready DeviceViewModels.
-    Handles color mapping, status string formatting, and error fallbacks.
     """
 
     def __init__(self, theme: str = "light"):
-        self._theme = theme
+        # Theme is now handled globally by ThemeManager, but we keep init signature for compatibility
+        pass
 
     def set_theme(self, theme: str) -> None:
-        """Update theme for color resolution."""
-        self._theme = "dark" if theme == "dark" else "light"
+        """Deprecated: Theme is now handled globally."""
+        pass
 
-    def present_device_list(
-        self,
-        dtos: Dict[str, Any],
-    ) -> Dict[str, DeviceViewModel]:
-        """
-        Batch transform a dictionary of DTOs into ViewModels.
-        """
+    def present_device_list(self, dtos: Dict[str, Any]) -> Dict[str, DeviceViewModel]:
         result = {}
         for code, data in dtos.items():
             try:
@@ -45,10 +37,6 @@ class DevicePresenter:
         return result
 
     def present_single_device(self, data: Any) -> DeviceViewModel:
-        """
-        Transform a single DTO into a ViewModel.
-        Accepts both object attributes (DTO) and dictionary (legacy).
-        """
         # 1. Normalize Input
         code = self._extract_attr(data, "equip_code", "code", default="UNKNOWN")
         last_update = self._extract_attr(data, "last_update", default=None)
@@ -56,7 +44,9 @@ class DevicePresenter:
 
         # 2. Resolve UI Logic
         status_code = self._parse_status_code(raw_status)
-        status_color = StatusColors.get_color(status_code, self._theme)
+
+        # [FIXED] Call get_color with ONLY status_code.
+        status_color = StatusColors.get_color(status_code)
         status_name = StatusColors.get_name(status_code)
 
         # 3. Build ViewModel
@@ -78,7 +68,7 @@ class DevicePresenter:
             display_name=code,
             status_code="0",
             status_display="Unknown",
-            status_color=StatusColors.get_color(0, self._theme),
+            status_color=StatusColors.get_color(0),  # [FIXED] No theme arg
             status_emoji="❓",
             is_running=False,
             requires_attention=False,
@@ -86,7 +76,6 @@ class DevicePresenter:
         )
 
     def _extract_attr(self, data: Any, *keys: str, default: Any = None) -> Any:
-        """Helper to extract data from either object or dict."""
         for key in keys:
             if isinstance(data, dict):
                 if key in data:
@@ -105,12 +94,5 @@ class DevicePresenter:
             return 0
 
     def _get_status_emoji(self, status_code: int) -> str:
-        emojis = {
-            0: "❓",
-            1: "🟢",
-            2: "⬛",
-            3: "🔴",
-            4: "🔧",
-            5: "⚠️",
-        }
+        emojis = {0: "❓", 1: "🟢", 2: "⬛", 3: "🔴", 4: "🔧", 5: "⚠️"}
         return emojis.get(status_code, "❓")

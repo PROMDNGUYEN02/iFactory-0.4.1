@@ -1,13 +1,12 @@
 """
 Device Canvas Widget - Factory Map Visualization.
-Renders device icons with status-based BACKGROUND FILL color.
+STABLE & OPTIMIZED: Fixes C++ object deletion crash while maintaining high performance.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from typing import Dict, Any, Optional
 
 from iFactory.infrastructure.configuration.paths import PATHS
@@ -27,7 +26,7 @@ from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsObject,
     QGraphicsScene,
-    QGraphicsTextItem,
+    QGraphicsSimpleTextItem,
     QGraphicsView,
     QGraphicsDropShadowEffect,
     QVBoxLayout,
@@ -55,7 +54,7 @@ class DeviceIconItem(QGraphicsObject):
 
         self.w = device_data.get("width", 40)
         self.h = device_data.get("height", 40)
-        self._padding = 4
+        self._padding = 2
 
         x = (device_data.get("x_percent", 0) / 100) * ref_width
         y = (device_data.get("y_percent", 0) / 100) * ref_height
@@ -63,27 +62,40 @@ class DeviceIconItem(QGraphicsObject):
 
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        # Tắt Selectable để giảm overhead xử lý sự kiện ngầm của Qt
+        self.setFlag(QGraphicsItem.ItemIsSelectable, False)
 
-        self._status_color = QColor(Qt.transparent)  # Default transparent
+        self._status_color = QColor(Qt.transparent)
         self._is_hovered = False
 
         self._pixmap: Optional[QPixmap] = None
         self._is_dark = False
         self._load_icon()
 
+        # Dùng SimpleTextItem để render text nhanh hơn
         lbl_text = device_data.get("label_text", self.equip_code)
-        self.label = QGraphicsTextItem(lbl_text, self)
+        self.label = QGraphicsSimpleTextItem(lbl_text, self)
         self.label.setFont(QFont("Segoe UI", 7))
+        self.label.setBrush(QBrush(QColor("#2c3e50")))
         self._position_label()
 
-        self.output_badge = QGraphicsTextItem("", self)
+        self.output_badge = QGraphicsSimpleTextItem("", self)
         self.output_badge.setFont(QFont("Segoe UI", 6, QFont.Bold))
+        self.output_badge.setBrush(QBrush(QColor("#2c3e50")))
         self.output_badge.setVisible(False)
 
+        # [CRITICAL FIX]
+        # 1. Khởi tạo Effect
         self._glow = QGraphicsDropShadowEffect()
-        self._glow.setBlurRadius(0)
+        self._glow.setBlurRadius(15)
         self._glow.setOffset(0, 0)
+        self._glow.setColor(self._status_color)
+
+        # 2. Tắt mặc định (Performance Optimization: Qt sẽ bỏ qua render khi enabled=False)
+        self._glow.setEnabled(False)
+
+        # 3. Cài đặt vào Item MỘT LẦN DUY NHẤT. Qt sẽ quản lý vòng đời của _glow.
+        # Không bao giờ gọi setGraphicsEffect(None) sau dòng này.
         self.setGraphicsEffect(self._glow)
 
     def boundingRect(self) -> QRectF:
@@ -97,30 +109,24 @@ class DeviceIconItem(QGraphicsObject):
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget=None) -> None:
         painter.setRenderHint(QPainter.Antialiasing)
 
-        bg_rect = QRectF(
-            -self._padding,
-            -self._padding,
-            self.w + 2 * self._padding,
-            self.h + 2 * self._padding,
-        )
+        bg_rect = QRectF(0, 0, self.w, self.h)
         corner_radius = 6
-
-        gradient = QLinearGradient(bg_rect.topLeft(), bg_rect.bottomRight())
-        base_color = QColor(self._status_color)
-
-        if self._is_hovered:
-            gradient.setColorAt(0, base_color.lighter(120))
-            gradient.setColorAt(1, base_color)
-        else:
-            gradient.setColorAt(0, base_color)
-            gradient.setColorAt(1, base_color.darker(110))
+        base_color = self._status_color
 
         path = QPainterPath()
         path.addRoundedRect(bg_rect, corner_radius, corner_radius)
-        painter.fillPath(path, QBrush(gradient))
 
-        border_color = base_color.darker(130) if not self._is_hovered else QColor("#ffffff")
-        painter.setPen(QPen(border_color, 1.5 if self._is_hovered else 1))
+        gradient = QLinearGradient(bg_rect.topLeft(), bg_rect.bottomRight())
+        if self._is_hovered:
+            gradient.setColorAt(0, base_color.lighter(120))
+            gradient.setColorAt(1, base_color)
+            painter.setPen(QPen(QColor("#ffffff"), 1.5))
+        else:
+            gradient.setColorAt(0, base_color)
+            gradient.setColorAt(1, base_color.darker(110))
+            painter.setPen(QPen(base_color.darker(130), 1))
+
+        painter.fillPath(path, QBrush(gradient))
         painter.drawPath(path)
 
         if self._pixmap and not self._pixmap.isNull():
@@ -129,90 +135,96 @@ class DeviceIconItem(QGraphicsObject):
     def _load_icon(self) -> None:
         icon_key = "image_dark" if self._is_dark else "image"
         icon_path = self.device_data.get(icon_key, "")
+        if not icon_path:
+            icon_path = ":/icon/logo.png"
 
-        if icon_path:
-            pixmap = QPixmap(icon_path)
-            if not pixmap.isNull():
-                self._pixmap = pixmap.scaled(self.w, self.h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                return
-
-        self._pixmap = QPixmap(":/icon/logo.png").scaled(self.w, self.h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        pm = QPixmap(icon_path)
+        if not pm.isNull():
+            self._pixmap = pm.scaled(self.w, self.h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
     def _position_label(self) -> None:
         lbl_rect = self.label.boundingRect()
         spacing = self.device_data.get("label_spacing", 3)
         lbl_pos = self.device_data.get("label_position", "bottom")
 
+        x, y = 0.0, 0.0
         if lbl_pos == "left":
-            self.label.setPos(-lbl_rect.width() - spacing - self._padding, (self.h - lbl_rect.height()) / 2)
+            x = -lbl_rect.width() - spacing
+            y = (self.h - lbl_rect.height()) / 2
         elif lbl_pos == "right":
-            self.label.setPos(self.w + spacing + self._padding, (self.h - lbl_rect.height()) / 2)
+            x = self.w + spacing
+            y = (self.h - lbl_rect.height()) / 2
         elif lbl_pos == "top":
-            self.label.setPos((self.w - lbl_rect.width()) / 2, -lbl_rect.height() - spacing - self._padding)
+            x = (self.w - lbl_rect.width()) / 2
+            y = -lbl_rect.height() - spacing
         else:
-            self.label.setPos((self.w - lbl_rect.width()) / 2, self.h + spacing + self._padding)
+            x = (self.w - lbl_rect.width()) / 2
+            y = self.h + spacing
+
+        self.label.setPos(x, y)
 
     def update_live_data(self, device_vm) -> None:
-        """Update from ViewModel - handles DeviceViewModel, dict, or any object with status_color."""
-        status_color = None
+        """Update from ViewModel."""
+        status_color_str = "#9E9E9E"
         output_count = 0
         last_update = None
         status_display = "Unknown"
 
-        # 1. Extract Data (bao gồm cả last_update và status_display)
         if hasattr(device_vm, "status_color"):
-            status_color = device_vm.status_color
+            status_color_str = device_vm.status_color
             output_count = getattr(device_vm, "output_count", 0) or 0
             last_update = getattr(device_vm, "last_update", None)
             status_display = getattr(device_vm, "status_display", "Unknown")
         elif isinstance(device_vm, dict):
-            status_color = device_vm.get("status_color", "#9E9E9E")
+            status_color_str = device_vm.get("status_color", "#9E9E9E")
             output_count = device_vm.get("output_count", 0) or 0
             last_update = device_vm.get("last_update")
             status_display = device_vm.get("status_display", "Unknown")
 
-        # 2. Update Visuals (Color)
-        if status_color:
-            new_color = QColor(status_color)
-            if new_color.isValid() and new_color != self._status_color:
-                self._status_color = new_color
-                self._glow.setColor(new_color)
-                self.update()
+        new_color = QColor(status_color_str)
+        if new_color != self._status_color:
+            self._status_color = new_color
+            # Cập nhật màu cho effect (an toàn vì object luôn tồn tại)
+            self._glow.setColor(new_color)
+            self.update()
 
-        # 3. Update Badge
         if output_count > 0:
-            self.output_badge.setPlainText(str(output_count))
-            self.output_badge.setPos(self.w - 8, -self._padding - 8)
-            self.output_badge.setVisible(True)
+            txt = str(output_count)
+            if self.output_badge.text() != txt:
+                self.output_badge.setText(txt)
+                br = self.output_badge.boundingRect()
+                self.output_badge.setPos(self.w - br.width() + 4, -4)
+                self.output_badge.setVisible(True)
         else:
-            self.output_badge.setVisible(False)
+            if self.output_badge.isVisible():
+                self.output_badge.setVisible(False)
 
-        # 4. Update Tooltip
         tooltip_text = f"ID: {self.equip_code}\nStatus: {status_display}"
         if last_update:
             clean_time = str(last_update).replace("T", " ").split(".")[0]
             tooltip_text += f"\nUpdated: {clean_time}"
-
         self.setToolTip(tooltip_text)
 
     def update_theme(self, is_dark: bool) -> None:
         if is_dark != self._is_dark:
             self._is_dark = is_dark
             self._load_icon()
-            text_color = QColor("#E0E0E0") if is_dark else QColor("#2c3e50")
-            self.label.setDefaultTextColor(text_color)
-            self.output_badge.setDefaultTextColor(text_color)
+            c = QColor("#E0E0E0") if is_dark else QColor("#2c3e50")
+            self.label.setBrush(QBrush(c))
+            self.output_badge.setBrush(QBrush(c))
             self.update()
 
     def hoverEnterEvent(self, event) -> None:
         self._is_hovered = True
-        self._glow.setBlurRadius(15)
+        # [FIX] Chỉ bật cờ enabled, KHÔNG setGraphicsEffect lại
+        self._glow.setEnabled(True)
         self.update()
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
         self._is_hovered = False
-        self._glow.setBlurRadius(0)
+        # [FIX] Chỉ tắt cờ enabled (siêu nhẹ), KHÔNG setGraphicsEffect(None) -> Tránh delete object
+        self._glow.setEnabled(False)
         self.update()
         super().hoverLeaveEvent(event)
 
@@ -252,7 +264,13 @@ class DeviceCanvasWidget(QWidget):
         self.view.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.view.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
+
+        # [CRITICAL OPTIMIZATION]
+        # Sử dụng BoundingRectViewportUpdate: Chỉ vẽ lại vùng chữ nhật bị thay đổi.
+        # Đây là chìa khóa để chạy mượt 1000+ item.
+        self.view.setViewportUpdateMode(QGraphicsView.BoundingRectViewportUpdate)
+
+        self.view.setCacheMode(QGraphicsView.CacheBackground)
 
         layout.addWidget(self.view)
 
@@ -281,6 +299,8 @@ class DeviceCanvasWidget(QWidget):
                 )
                 self._bg_item = self.scene.addPixmap(bg_pixmap)
                 self._bg_item.setZValue(-10)
+                self._bg_item.setFlag(QGraphicsItem.ItemIsSelectable, False)
+                self._bg_item.setAcceptHoverEvents(False)
 
             for dev in area_data.get("devices", []):
                 item = DeviceIconItem(dev, self._ref_width, self._ref_height, self)
@@ -292,10 +312,7 @@ class DeviceCanvasWidget(QWidget):
 
     def _get_background_image(self, is_dark: bool) -> str:
         suffix = "-white.svg" if is_dark else ".svg"
-        if "daboard" in self.area_key.lower() or "dashboard" in self.area_key.lower():
-            base = "dashboard_layout"
-        else:
-            base = "orders_layout"
+        base = "dashboard_layout" if ("daboard" in self.area_key.lower() or "dashboard" in self.area_key.lower()) else "orders_layout"
         return f":/icon/{base}{suffix}"
 
     def render_state(self, devices_state: Dict[str, Any], is_dark: bool) -> None:
@@ -318,8 +335,9 @@ class DeviceCanvasWidget(QWidget):
                 item.update_theme(is_dark)
 
         for dev_id, vm in devices_state.items():
-            if dev_id in self._device_items:
-                self._device_items[dev_id].update_live_data(vm)
+            item = self._device_items.get(dev_id)
+            if item:
+                item.update_live_data(vm)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

@@ -23,11 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-# [CRITICAL FIX] Use 'as' to capture the module directly.
-# This avoids accessing 'iFactory.presentation' while it is still initializing.
 import iFactory.presentation.resources.resources_rc as resources_rc
 
-# Map the aliased module to sys.modules so generated UI files can find "resources_rc"
 sys.modules["resources_rc"] = resources_rc
 
 from .ui.generated.main_ui import Ui_MainWindow
@@ -47,6 +44,8 @@ from ..ui_state.selectors import (
     select_left_menu_expanded,
     select_right_panel_expanded,
 )
+
+from ..resources.themes.theme_manager import theme_manager
 
 if TYPE_CHECKING:
     from ..controllers.main_controller import MainController
@@ -97,10 +96,9 @@ class MainView(QMainWindow):
 
         self._store.state_changed.connect(self._on_state_changed)
         QApplication.instance().installEventFilter(self)
+        self.update_system_status(mssql_connected=False, sqlite_connected=True, message="Initializing system components...")
 
         logger.debug("[MainView] Initialized.")
-
-        self.update_system_status(mssql_connected=False, sqlite_connected=True, message="Initializing system components...")
 
     def _setup_initial_state(self) -> None:
         """Configure initial UI state."""
@@ -470,7 +468,7 @@ class MainView(QMainWindow):
         self.ui.right_slide_menu_frame.setFixedWidth(panel_w)
 
         # Update canvases
-        is_dark = theme == "dark"
+        is_dark = theme_manager.is_dark
         if hasattr(self, "canvas_dashboard"):
             self.canvas_dashboard.render_state(devices, is_dark)
         if hasattr(self, "canvas_orders"):
@@ -614,112 +612,35 @@ class MainView(QMainWindow):
 
     def _update_menu_icons(self, mode: str) -> None:
         """Update menu icons based on theme."""
-        suffix = "-white.svg" if mode == "dark" else ".svg"
-        btn_icon = "close" if self._is_menu_open else "open"
-        self.ui.pushButton.setIcon(QIcon(f":/icon/{btn_icon}{suffix}"))
+        btn_key = ":/icon/close.svg" if self._is_menu_open else ":/icon/open.svg"
+        self.ui.pushButton.setIcon(QIcon(theme_manager.get_icon_path(btn_key)))
 
         for i in range(self.ui.listWidget.count()):
             item = self.ui.listWidget.item(i)
             page_id = item.data(Qt.UserRole)
-            icon_name = "dashboard" if "daboard" in page_id else "orders"
-            item.setIcon(QIcon(f":/icon/{icon_name}{suffix}"))
+            icon_key = ":/icon/dashboard.svg" if "daboard" in page_id else ":/icon/orders.svg"
+            item.setIcon(QIcon(theme_manager.get_icon_path(icon_key)))
 
         settings_item = self.ui.listWidget_settings.item(0)
         if settings_item:
-            settings_item.setIcon(QIcon(f":/icon/settings{suffix}"))
+            settings_item.setIcon(QIcon(theme_manager.get_icon_path(":/icon/settings.svg")))
 
     def _apply_theme(self, mode: str) -> None:
         """Apply theme stylesheet."""
         self._current_theme = mode
+
+        # 1. Update Manager
+        theme_manager.set_theme(mode)
+
+        # 2. Update Icons
         self._update_menu_icons(mode)
 
-        common_qss = """
-            QListWidget {
-                background: transparent;
-                border: none;
-                outline: none;
-                icon-size: 24px;
-            }
-            QListWidget::item {
-                padding-left: 10px;
-                height: 45px;
-                font-size: 14px;
-                font-weight: 500;
-                text-align: left;
-            }
-            QPushButton#pushButton {
-                background: transparent;
-                border: none;
-                padding-left: 10px;
-                text-align: left;
-            }
-            QToolTip {
-                padding: 4px;
-                border-radius: 4px;
-                font-family: "Segoe UI";
-                font-size: 12px;
-            }
-        """
-
-        if mode == "dark":
-            colors = """
-                QMainWindow, QWidget {
-                    background-color: #1e1e1e;
-                    color: #ffffff;
-                }
-                QLabel { color: #ffffff; }
-                QFrame#left_slide_menu_frame,
-                QFrame#right_slide_menu_frame,
-                QFrame#title_frame {
-                    background-color: #252526;
-                }
-                QListWidget::item { color: #ffffff; }
-                QListWidget::item:hover,
-                QPushButton#pushButton:hover {
-                    background-color: #3e3e42;
-                }
-                QListWidget::item:selected {
-                    background-color: #094771;
-                    color: white;
-                    border-left: 3px solid #007acc;
-                }
-                /* [FIX] Tooltip Dark Mode */
-                QToolTip {
-                    background-color: #2d2d30;
-                    color: #ffffff;
-                    border: 1px solid #555555;
-                }
-            """
+        # 3. Load QSS
+        stylesheet = theme_manager.get_stylesheet()
+        if stylesheet:
+            self.setStyleSheet(stylesheet)
         else:
-            colors = """
-                QMainWindow, QWidget {
-                    background-color: #f3f3f3;
-                    color: #000000;
-                }
-                QLabel { color: #000000; }
-                QFrame#left_slide_menu_frame,
-                QFrame#right_slide_menu_frame,
-                QFrame#title_frame {
-                    background-color: #ffffff;
-                }
-                QListWidget::item { color: #000000; }
-                QListWidget::item:hover,
-                QPushButton#pushButton:hover {
-                    background-color: #e8e8e8;
-                }
-                QListWidget::item:selected {
-                    background-color: #e3f2fd;
-                    color: #007acc;
-                    border-left: 3px solid #007acc;
-                }
-                QToolTip {
-                    background-color: #ffffff;
-                    color: #000000;
-                    border: 1px solid #888888;
-                }
-            """
-
-        self.setStyleSheet(common_qss + colors)
+            logger.warning("Empty stylesheet generated.")
 
 
 __all__ = ["MainView"]

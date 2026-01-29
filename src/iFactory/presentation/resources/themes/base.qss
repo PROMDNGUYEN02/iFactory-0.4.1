@@ -1,4 +1,3 @@
-/* src\iFactory\resources\themes\base.qss */
 /* ===== BASE ===== */
 QMainWindow, QWidget#centralwidget {
     background: ${app.bg};
