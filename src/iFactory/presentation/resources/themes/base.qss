@@ -54,7 +54,7 @@ QLabel#pageTitle {
 
 QLabel#pageTitle { font-size: 20px; }
 
-/* ===== LIST WIDGETS ===== */
+/* ===== LIST WIDGETS (MENU) ===== */
 QListWidget,
 QListWidget::viewport,
 QListView#listView {
@@ -65,26 +65,39 @@ QListView#listView {
     outline: none;
 }
 
+/* --- LOGIC CHỐNG NHẢY ICON (BÙ TRỪ 10PX) --- */
+
+/* 1. TRẠNG THÁI MẶC ĐỊNH (KHÔNG CHỌN) */
 QListWidget::item,
 QListView#listView::item {
     height: ${menu.itemH};
-    border: none;
-    padding-left: ${item.padLeft};
-    border-radius: 6px;
-    margin: 2px 8px; /* Bo góc mượt cho các item menu */
+    margin: 2px 0px; 
+    
+    /* Border 0 + Padding 10 = Tổng 10px */
+    border: none;       
+    padding-left: 10px; 
 }
 
+/* 2. TRẠNG THÁI ĐANG CHỌN (SELECTED) */
+QListWidget::item:selected,
+QListView#listView::item:selected {
+    background: transparent;  
+    color: #3498db;           
+    font-weight: bold;
+
+    /* Border 5 + Padding 5 = Tổng 10px */
+    border-left: 5px solid #3498db; 
+    padding-left: 5px; 
+}
+
+/* 3. HIỆU ỨNG HOVER */
 QListWidget::item:hover,
 QListView#listView::item:hover {
     background: ${hover};
     color: #3498db;
 }
 
-QListWidget::item:selected,
-QListView#listView::item:selected {
-    background: transparent;
-}
-
+/* --- XỬ LÝ KHI MENU THU NHỎ (COLLAPSED) --- */
 QListWidget[collapsed="true"] {
     width: ${menu.widthCollapsed};
 }
@@ -94,36 +107,77 @@ QListWidget[collapsed="true"]::item {
     padding: 8px 0;
     border-radius: ${radius};
     text-align: center;
+    /* Khi thu nhỏ, ta dùng border trong suốt để giữ chỗ, tránh nhảy khi hover/select */
+    border-left: 5px solid transparent; 
+    padding-left: 0;
+}
+
+QListWidget[collapsed="true"]::item:selected {
+    border-left: 5px solid #3498db;
 }
 
 QListWidget[collapsed="true"]::item:hover {
     background: ${icon.hover};
     border: 1px solid ${icon.border};
+    /* Giữ lại border-left để không bị ghi đè */
+    border-left: 5px solid transparent; 
 }
 
-/* ===== BUTTONS ===== */
-QPushButton#menu_btn,
-QPushButton#panelBtn {
+
+/* ===== TOGGLE BUTTONS (OPEN/CLOSE) ===== */
+
+QPushButton#menu_toggle_btn {
     background: transparent;
     border: none;
     color: ${app.fg};
     font-family: ${font.family};
 }
 
-QPushButton#menu_btn:hover,
-QPushButton#panelBtn:hover {
+/* Nút OPEN (Khi menu đang đóng) */
+QPushButton#menu_open_btn {
+    background: transparent;
+    border: none;
+    qproperty-iconSize: 20px 20px;
+}
+
+QPushButton#menu_open_btn:hover {
     background: ${hover};
     border-radius: ${radius};
 }
 
-/* ===== RIGHT PANEL & DASHBOARD (NÂNG CẤP MAX LEVEL) ===== */
+/* Nút CLOSE (Khi menu đang mở) - MÀU NHẸ DỊU */
+QPushButton#menu_close_btn {
+    /* Đỏ rất nhạt (Alpha 0.1) */
+    background-color: rgba(231, 76, 60, 0.1); 
+    border: 1px solid transparent;
+    border-radius: 4px;
+    margin: 4px; 
+    qproperty-iconSize: 20px 20px;
+}
+
+QPushButton#menu_close_btn:hover {
+    /* Đậm hơn xíu khi hover */
+    background-color: rgba(231, 76, 60, 0.2); 
+    border: 1px solid rgba(231, 76, 60, 0.3); 
+}
+
+/* ===== TOOLTIP ===== */
+QToolTip {
+    background-color: #333333;
+    color: #ffffff;
+    border: 1px solid #555555;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+}
+
+/* ===== RIGHT PANEL & DASHBOARD ===== */
 QFrame#right_slide_menu_frame {
     background: ${slide.bg};
     border-left: 1px solid ${border};
-    border-radius: 12px 0 0 12px; /* Bo góc viền trái mượt mà */
+    border-radius: 12px 0 0 12px;
 }
 
-/* Khung chi tiết bên trong Right Panel */
 QFrame#frame_details {
     background: ${stack.bg};
     border: 1px solid ${border};
@@ -131,7 +185,6 @@ QFrame#frame_details {
     padding: 10px;
 }
 
-/* Tối ưu Progress Bar chuẩn Glassmorphism/Modern Flat */
 QProgressBar {
     background-color: ${stack.bg};
     border: none;
@@ -142,7 +195,6 @@ QProgressBar::chunk {
     border-radius: 4px;
 }
 
-/* ===== TABLE VIEW ===== */
 QTableView#tableView {
     background: ${stack.bg};
     border: none;

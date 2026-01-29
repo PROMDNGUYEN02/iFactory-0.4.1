@@ -219,8 +219,10 @@ class MainView(QMainWindow):
 
         if hasattr(self.ui, "pushButton"):
             self.ui.pushButton.setText("")
-            self.ui.pushButton.setIconSize(QSize(24, 24))
+            self.ui.pushButton.setIconSize(QSize(20, 20))
             self.ui.pushButton.setCursor(Qt.PointingHandCursor)
+            self.ui.pushButton.setToolTip("Toggle Menu (Ctrl+M)")
+            self.ui.pushButton.setObjectName("menu_toggle_btn")
 
         if hasattr(self.ui, "minimize_window_button"):
             self.ui.minimize_window_button.clicked.connect(self.showMinimized)
@@ -249,10 +251,12 @@ class MainView(QMainWindow):
         for text, icon, page_id in pages:
             item = QListWidgetItem(QIcon(icon), text)
             item.setData(Qt.UserRole, page_id)
+            item.setToolTip(text)
             self.ui.listWidget.addItem(item)
 
         settings_item = QListWidgetItem(QIcon(":/icon/settings.svg"), "Settings")
         settings_item.setData(Qt.UserRole, "settings_page")
+        settings_item.setToolTip("Settings")
         self.ui.listWidget_settings.addItem(settings_item)
 
         # Initial selection
@@ -463,6 +467,13 @@ class MainView(QMainWindow):
         if theme != self._current_theme or menu_expanded != self._is_menu_open:
             self._is_menu_open = menu_expanded
             self._apply_theme(theme)
+
+        # UPDATE TOGGLE BUTTON OBJECT NAME FOR STYLING
+        if hasattr(self.ui, "pushButton"):
+            self.ui.pushButton.setObjectName("menu_close_btn" if menu_expanded else "menu_open_btn")
+            # Force style refresh
+            self.ui.pushButton.style().unpolish(self.ui.pushButton)
+            self.ui.pushButton.style().polish(self.ui.pushButton)
 
         # Update local state
         self._is_right_panel_open = panel_expanded
