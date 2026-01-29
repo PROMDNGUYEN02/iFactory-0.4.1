@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Dict, Any, Optional
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt
@@ -43,6 +44,7 @@ from ..ui_state.selectors import (
     select_selected_device_data,
     select_left_menu_expanded,
     select_right_panel_expanded,
+    select_selected_device_id,
 )
 
 from ..resources.themes.theme_manager import theme_manager
@@ -69,13 +71,21 @@ class MainView(QMainWindow):
         super().__init__(parent)
         self._store = store
         self._controller = controller
+
+        # Initialize Theme EARLY
         self._current_theme = "light"
+        theme_manager.set_theme(self._current_theme)
+
         self._is_menu_open = False
         self._is_right_panel_open = False
-        self._selected_menu_index: Optional[int] = None
+        self._selected_menu_index: Optional[int] = 0
+        self._last_main_page_index: int = 0  # Track last valid main page for highlighting
 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+
+        # Apply Theme Immediately (Prevent Startup Flash)
+        self._apply_theme(self._current_theme)
 
         self._setup_initial_state()
         self._setup_header()
@@ -86,8 +96,6 @@ class MainView(QMainWindow):
         self._setup_legend()
         self._setup_shortcuts()
         self._connect_ui_events()
-
-        self._apply_theme(self._current_theme)
 
         # Collapse menu initially
         current_state = self._store.get_state()
@@ -247,9 +255,11 @@ class MainView(QMainWindow):
         settings_item.setData(Qt.UserRole, "settings_page")
         self.ui.listWidget_settings.addItem(settings_item)
 
+        # Initial selection
         if self.ui.listWidget.count() > 0:
             self.ui.listWidget.setCurrentRow(0)
             self._selected_menu_index = 0
+            self._last_main_page_index = 0
 
     def _setup_right_panel(self) -> None:
         layout = self.ui.right_slide_menu_frame.layout()
@@ -323,6 +333,17 @@ class MainView(QMainWindow):
         details_layout.addWidget(self.rp_outputs)
         details_layout.addWidget(self.rp_cycletime)
         layout.addWidget(self.frame_details)
+
+        # --- NEW GANTT CHART IN RIGHT PANEL (COMPACT) ---
+        self.lbl_rp_gantt = QLabel("Timeline (Last 24h)")
+        self.lbl_rp_gantt.setStyleSheet("font-weight: bold; margin-top: 10px; color: #555;")
+        layout.addWidget(self.lbl_rp_gantt)
+
+        # Use Compact Mode
+        self.rp_gantt = GanttCanvasWidget(self, is_compact=True)
+        self.rp_gantt.setFixedHeight(60)  # Compact fixed height
+        layout.addWidget(self.rp_gantt)
+        # --------------------------------------
 
         self.rp_error = QLabel("Last Error: None")
         self.rp_error.setWordWrap(True)
@@ -398,12 +419,17 @@ class MainView(QMainWindow):
         row = self.ui.listWidget.row(item)
         self.ui.listWidget_settings.clearSelection()
         self._selected_menu_index = row
+        # Track main page for persistence
+        self._last_main_page_index = row
         self._controller.handle_navigation(page_id)
 
     def _on_settings_clicked(self, item: QListWidgetItem) -> None:
         page_id = item.data(Qt.UserRole)
-        self.ui.listWidget.clearSelection()
-        self._selected_menu_index = -1
+        # Visual trick: Keep the main menu selected to imply overlay/modal nature
+        # We DO NOT clear listWidget selection
+        if self._last_main_page_index is not None:
+            self.ui.listWidget.setCurrentRow(self._last_main_page_index)
+
         self._controller.handle_navigation(page_id)
 
     def select_menu_item(self, index: int) -> None:
@@ -418,6 +444,10 @@ class MainView(QMainWindow):
 
     def _on_device_clicked(self, device_id: str) -> None:
         self._store.dispatch(Action(type=UIActionType.DEVICE_SELECTED.value, payload={"id": device_id}))
+
+        # Explicitly check if we need to open the panel
+        # We assume if the user clicked, they want to see it.
+        # If the state is closed, toggle it.
         if not self._is_right_panel_open:
             self._controller.handle_right_panel_toggle()
 
@@ -434,11 +464,27 @@ class MainView(QMainWindow):
             self._is_menu_open = menu_expanded
             self._apply_theme(theme)
 
+        # Update local state
         self._is_right_panel_open = panel_expanded
 
+        # Page Navigation Logic
         target = self.ui.stackedWidget.findChild(QWidget, page)
         if target and self.ui.stackedWidget.currentWidget() != target:
             self.ui.stackedWidget.setCurrentWidget(target)
+
+        # Persistence Logic: If settings is active, keep main menu highlighted
+        if page == "settings_page":
+            if self._last_main_page_index is not None:
+                self.ui.listWidget.setCurrentRow(self._last_main_page_index)
+        else:
+            # Sync stored index if state changed externally
+            for i in range(self.ui.listWidget.count()):
+                item = self.ui.listWidget.item(i)
+                if item.data(Qt.UserRole) == page:
+                    self.ui.listWidget.setCurrentRow(i)
+                    self._last_main_page_index = i
+                    self.ui.listWidget_settings.clearSelection()
+                    break
 
         menu_w = UIConstants.MENU_EXPANDED_WIDTH if menu_expanded else UIConstants.MENU_COLLAPSED_WIDTH
         self.ui.left_slide_menu_frame.setFixedWidth(menu_w)
@@ -455,10 +501,21 @@ class MainView(QMainWindow):
         if hasattr(self, "canvas_orders"):
             self.canvas_orders.render_state(devices, is_dark)
 
-        if hasattr(self, "gantt_dashboard") and gantt_data:
-            self.gantt_dashboard.render_timeline(gantt_data)
-        if hasattr(self, "gantt_orders") and gantt_data:
-            self.gantt_orders.render_timeline(gantt_data)
+        # Central Gantt & Legend (System Wide)
+        now = datetime.now()
+        start_24h = now - timedelta(hours=24)
+
+        if gantt_data:
+            if hasattr(self, "gantt_dashboard"):
+                self.gantt_dashboard.render_timeline(gantt_data, start_24h, now)
+            if hasattr(self, "gantt_orders"):
+                self.gantt_orders.render_timeline(gantt_data, start_24h, now)
+
+            # Update Legend for BOTH pages
+            if hasattr(self, "legend_dashboard"):
+                self.legend_dashboard.render_stats(gantt_data, start_24h, now)
+            if hasattr(self, "legend_orders"):
+                self.legend_orders.render_stats(gantt_data, start_24h, now)
 
         self._update_right_panel(state)
         self._update_lcd_numbers(summary)
@@ -480,7 +537,7 @@ class MainView(QMainWindow):
         dev_id = selected_data.get("id", "Unknown")
         display_name = selected_data.get("display_name", dev_id)
         desc = selected_data.get("description", "")
-        status = selected_data.get("status_display", "Offline")  # Use display status
+        status = selected_data.get("status_display", "Offline")
         color = selected_data.get("status_color", "#888888")
 
         # Material & Metrics
@@ -496,7 +553,6 @@ class MainView(QMainWindow):
 
         self.rp_title.setText(display_name)
 
-        # Update description if available
         if desc:
             self.rp_desc.setText(desc)
             self.rp_desc.setVisible(True)
@@ -514,7 +570,6 @@ class MainView(QMainWindow):
             f"background-color: {color}; color: white; font-weight: bold; " f"padding: 4px 10px; border-radius: 12px; font-size: 11px;"
         )
 
-        # Update Material
         self.rp_material_batch.setText(f"Batch: {batch}")
         self.rp_feeding_time.setText(f"Fed: {fed_time}")
 
@@ -530,6 +585,18 @@ class MainView(QMainWindow):
         self.rp_inputs.setText(f"📥 Inputs: <b>{inputs:,}</b>")
         self.rp_outputs.setText(f"📦 Outputs: <b>{outputs:,}</b>")
         self.rp_cycletime.setText(f"⏱️ Cycle Time: <b>{cycle_time}s</b>")
+
+        # --- Update Right Panel Gantt (Specific Device) ---
+        gantt_data = select_gantt_timeline(state)
+        dev_id_raw = selected_data.get("id")
+        if gantt_data and dev_id_raw in gantt_data:
+            now = datetime.now()
+            start = now - timedelta(hours=24)
+            # Render ONLY the selected device
+            self.rp_gantt.render_timeline({dev_id_raw: gantt_data[dev_id_raw]}, start, now)
+        elif hasattr(self, "rp_gantt"):
+            self.rp_gantt.render_timeline({})  # Clear if no data
+        # --------------------------------------------------
 
         self.rp_error.setText(f"⚠️ Alert: {error}")
         has_error = error not in ("None", "No recent errors", None, "")
@@ -588,9 +655,7 @@ class MainView(QMainWindow):
             self.lbl_app_mode.setStyleSheet(f"color: {COLOR_ERROR_BORDER}; font-weight: 900;")
 
         if message:
-            import datetime
-
-            time_str = datetime.datetime.now().strftime("%H:%M:%S")
+            time_str = datetime.now().strftime("%H:%M:%S")
             self.lbl_system_message.setText(f"[{time_str}] {message}")
 
     def _update_menu_icons(self, mode: str) -> None:

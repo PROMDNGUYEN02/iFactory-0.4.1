@@ -1,6 +1,7 @@
 """
 Professional Gantt Chart Canvas Widget.
 Displays device status timeline for 24 hours with clear colors.
+Supports Compact Mode for sidebar/summary views.
 """
 
 from __future__ import annotations
@@ -29,7 +30,11 @@ class GanttRowWidget(QWidget):
         self._end_time = end_time
         self._label_width = label_width
         self._row_index = 0
-        self.setFixedHeight(self.ROW_HEIGHT)
+
+        # Adjust height based on whether we have a label (Compact mode check)
+        self._is_compact = label_width == 0
+        height = 20 if self._is_compact else self.ROW_HEIGHT
+        self.setFixedHeight(height)
         self.setMouseTracking(True)
 
     def set_row_index(self, index: int):
@@ -42,28 +47,37 @@ class GanttRowWidget(QWidget):
 
         # [THEME] Dynamic background
         bg_base = theme_manager.get_qcolor("chart.bg")
-        if self._row_index % 2 == 0:
-            bg_color = bg_base.lighter(105) if theme_manager.is_dark else bg_base.darker(105)
+        # In compact mode, we might want a transparent or flat background
+        if not self._is_compact:
+            if self._row_index % 2 == 0:
+                bg_color = bg_base.lighter(105) if theme_manager.is_dark else bg_base.darker(105)
+            else:
+                bg_color = bg_base
+            painter.fillRect(rect, bg_color)
         else:
-            bg_color = bg_base
-        painter.fillRect(rect, bg_color)
+            painter.fillRect(rect, Qt.transparent)
 
-        # Grid line
-        painter.setPen(QPen(theme_manager.get_qcolor("chart.grid"), 1))
-        painter.drawLine(self._label_width, rect.height() - 1, rect.width(), rect.height() - 1)
+        # Draw Label and Grid only if not compact
+        if self._label_width > 0:
+            painter.setPen(QPen(theme_manager.get_qcolor("chart.grid"), 1))
+            painter.drawLine(self._label_width, rect.height() - 1, rect.width(), rect.height() - 1)
 
-        # Label
-        painter.setPen(theme_manager.get_qcolor("chart.text"))
-        painter.setFont(QFont("Consolas", 9, QFont.Bold))
-        label_rect = QRectF(5, 0, self._label_width - 10, rect.height())
-        painter.drawText(label_rect, Qt.AlignVCenter | Qt.AlignLeft, self._equip_code)
+            painter.setPen(theme_manager.get_qcolor("chart.text"))
+            painter.setFont(QFont("Consolas", 9, QFont.Bold))
+            label_rect = QRectF(5, 0, self._label_width - 10, rect.height())
+            painter.drawText(label_rect, Qt.AlignVCenter | Qt.AlignLeft, self._equip_code)
 
         # Draw segments
         chart_width = rect.width() - self._label_width - 10
         total_seconds = (self._end_time - self._start_time).total_seconds()
+
+        # Adjust vertical drawing metrics for compact mode
+        y_pos = 0 if self._is_compact else 3
+        bar_height = rect.height() if self._is_compact else (rect.height() - 6)
+
         if total_seconds > 0:
             for seg in self._segments:
-                self._draw_segment(painter, seg, chart_width, total_seconds, 3, rect.height() - 6)
+                self._draw_segment(painter, seg, chart_width, total_seconds, y_pos, bar_height)
 
     def _draw_segment(self, painter, seg, chart_width, total_seconds, y, height):
         seg_start = seg.get("start_time")
@@ -71,36 +85,47 @@ class GanttRowWidget(QWidget):
         if not isinstance(seg_start, datetime) or not isinstance(seg_end, datetime):
             return
 
+        # Clamp segment to window
+        if seg_end < self._start_time or seg_start > self._end_time:
+            return
+
+        # Calculate offsets
         start_offset = max(0, (seg_start - self._start_time).total_seconds())
         end_offset = min(total_seconds, (seg_end - self._start_time).total_seconds())
+
         if end_offset <= start_offset:
             return
 
         x = self._label_width + (start_offset / total_seconds) * chart_width
-        width = max(((end_offset - start_offset) / total_seconds) * chart_width, 3)
+        width = max(((end_offset - start_offset) / total_seconds) * chart_width, 2)
 
         status_code = int(seg.get("status_code", 0))
-        base_color = QColor(StatusColors.get_color(status_code))  # Theme handled by StatusColors
+        base_color = QColor(StatusColors.get_color(status_code))
 
         rect = QRectF(x, y, width, height)
-        gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        gradient.setColorAt(0, base_color.lighter(120))
-        gradient.setColorAt(1, base_color)
 
-        path = QPainterPath()
-        path.addRoundedRect(rect, 4, 4)
-        painter.fillPath(path, QBrush(gradient))
-        painter.setPen(QPen(base_color.darker(120), 1))
-        painter.drawPath(path)
+        if self._is_compact:
+            # Flat color for compact mode to be clearer at small sizes
+            painter.fillRect(rect, base_color)
+        else:
+            # Gradient for full mode
+            gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            gradient.setColorAt(0, base_color.lighter(120))
+            gradient.setColorAt(1, base_color)
+            path = QPainterPath()
+            path.addRoundedRect(rect, 4, 4)
+            painter.fillPath(path, QBrush(gradient))
 
 
 class TimeRulerWidget(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, is_compact=False):
         super().__init__(parent)
-        self._start_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        self._end_time = self._start_time + timedelta(hours=24)
-        self._label_width = 90
-        self.setFixedHeight(28)
+        now = datetime.now()
+        self._start_time = now - timedelta(hours=24)
+        self._end_time = now
+        self._label_width = 0 if is_compact else 90
+        self._is_compact = is_compact
+        self.setFixedHeight(16 if is_compact else 28)
 
     def set_time_range(self, start, end, label_width=90):
         self._start_time = start
@@ -117,85 +142,119 @@ class TimeRulerWidget(QWidget):
         if total_seconds <= 0:
             return
 
-        painter.setFont(QFont("Consolas", 8))
+        painter.setFont(QFont("Consolas", 7 if self._is_compact else 8))
         grid_color = theme_manager.get_qcolor("chart.grid")
         text_color = theme_manager.get_qcolor("chart.text")
-        chart_width = rect.width() - self._label_width - 10
 
-        for hour in range(0, 25, 2):
-            x = self._label_width + (hour * 3600 / total_seconds) * chart_width
-            painter.setPen(QPen(grid_color, 1))
-            painter.drawLine(int(x), rect.height() - 6, int(x), rect.height())
-            painter.setPen(text_color)
-            painter.drawText(int(x) - 18, 2, 36, 18, Qt.AlignCenter, f"{hour:02d}:00")
+        # Right margin padding
+        right_pad = 0 if self._is_compact else 10
+        chart_width = rect.width() - self._label_width - right_pad
+
+        # Draw hours dynamically based on time window
+        current_time = self._start_time.replace(minute=0, second=0, microsecond=0)
+        if current_time < self._start_time:
+            current_time += timedelta(hours=1)
+
+        step_hours = 4 if self._is_compact else 2
+
+        while current_time <= self._end_time:
+            seconds_from_start = (current_time - self._start_time).total_seconds()
+            x = self._label_width + (seconds_from_start / total_seconds) * chart_width
+
+            # Draw only if within bounds
+            if self._label_width <= x <= rect.width():
+                painter.setPen(QPen(grid_color, 1))
+                line_height = 4 if self._is_compact else 6
+                painter.drawLine(int(x), rect.height() - line_height, int(x), rect.height())
+
+                # Draw text
+                if current_time.hour % step_hours == 0:
+                    painter.setPen(text_color)
+                    time_str = current_time.strftime("%H") if self._is_compact else current_time.strftime("%H:%M")
+                    painter.drawText(int(x) - 15, 0, 30, rect.height(), Qt.AlignCenter, time_str)
+
+            current_time += timedelta(hours=1)
 
 
 class GanttCanvasWidget(QWidget):
     segment_clicked = Signal(str, dict)
-    LABEL_WIDTH = 90
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, is_compact: bool = False):
         super().__init__(parent)
         self._timeline_data = {}
-        self._rows = []
+        self._is_compact = is_compact
+        self.LABEL_WIDTH = 0 if is_compact else 90
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Header (Gradient hardcoded for style, or move to theme)
-        header = QFrame()
-        header.setFixedHeight(36)
-        header.setStyleSheet(
-            "QFrame { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e2d45, stop:1 #152238); border-bottom: 1px solid #2a4066; }"
-        )
-        h_layout = QHBoxLayout(header)
-        title = QLabel("📊 Production Timeline (24h)")
-        title.setStyleSheet("color: #e0e0e0; font-weight: bold;")
-        h_layout.addWidget(title)
-        h_layout.addStretch()
+        # Header (Only show in full mode)
+        if not self._is_compact:
+            header = QFrame()
+            header.setFixedHeight(36)
+            header.setStyleSheet(
+                "QFrame { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e2d45, stop:1 #152238); border-bottom: 1px solid #2a4066; }"
+            )
+            h_layout = QHBoxLayout(header)
+            h_layout.setContentsMargins(10, 0, 10, 0)
 
-        # Legend
-        for code in [1, 3, 4, 5, 0]:
-            l = QLabel(f"■ {StatusColors.get_name(code)}")
-            l.setStyleSheet(f"color: {StatusColors.get_color(code)}; margin-left: 8px;")
-            h_layout.addWidget(l)
-        layout.addWidget(header)
+            title = QLabel("📊 Production Timeline (Last 24h)")
+            title.setStyleSheet("color: #e0e0e0; font-weight: bold; font-size: 12px;")
+            h_layout.addWidget(title)
+            h_layout.addStretch()
+            layout.addWidget(header)
 
-        self._time_ruler = TimeRulerWidget()
+        self._time_ruler = TimeRulerWidget(is_compact=self._is_compact)
         layout.addWidget(self._time_ruler)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setStyleSheet("border: none; background: transparent;")
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff if self._is_compact else Qt.ScrollBarAsNeeded)
+
         self._content = QWidget()
         self._content_layout = QVBoxLayout(self._content)
         self._content_layout.setContentsMargins(0, 0, 0, 0)
-        self._content_layout.setSpacing(0)
+        self._content_layout.setSpacing(1)
         self._scroll.setWidget(self._content)
         layout.addWidget(self._scroll)
 
-    def render_timeline(self, data, start=None, end=None):
+    def render_timeline(self, data: Dict[str, Any], start: datetime = None, end: datetime = None):
+        """
+        Render timeline for provided data.
+        Defaults to exactly last 24 hours if start/end not provided.
+        """
         self._timeline_data = data
-        start = start or datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        end = end or (start + timedelta(hours=24))
+
+        # Default to exact last 24h window
+        if not end:
+            end = datetime.now()
+        if not start:
+            start = end - timedelta(hours=24)
+
         self._time_ruler.set_time_range(start, end, self.LABEL_WIDTH)
 
-        # Clear rows
+        # Clear existing rows
         while self._content_layout.count():
             item = self._content_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
+        # Create rows
         for i, (code, segs) in enumerate(data.items()):
             row = GanttRowWidget(code, segs, start, end, self.LABEL_WIDTH)
             row.set_row_index(i)
             self._content_layout.addWidget(row)
+
         self._content_layout.addStretch()
 
-        # Update bg color from theme
-        self._content.setStyleSheet(f"background: {theme_manager.get_color('chart.bg')};")
+        # Apply theme bg
+        bg = theme_manager.get_color("chart.bg") if not self._is_compact else "transparent"
+        self._content.setStyleSheet(f"background: {bg};")
 
 
 __all__ = ["GanttCanvasWidget"]
