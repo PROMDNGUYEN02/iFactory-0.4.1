@@ -52,6 +52,7 @@ class DeviceIconItem(QGraphicsObject):
         self.equip_code = device_data["id"]
         self._parent_canvas = parent_canvas
 
+        # Kích thước khởi tạo (sẽ được điều chỉnh lại trong _load_icon nếu ảnh khác tỉ lệ)
         self.w = device_data.get("width", 40)
         self.h = device_data.get("height", 40)
         self._padding = 2
@@ -70,19 +71,21 @@ class DeviceIconItem(QGraphicsObject):
 
         self._pixmap: Optional[QPixmap] = None
         self._is_dark = False
-        self._load_icon()
 
-        # Dùng SimpleTextItem để render text nhanh hơn
+        # Init label trước khi load icon vì _load_icon có thể gọi _position_label
         lbl_text = device_data.get("label_text", self.equip_code)
         self.label = QGraphicsSimpleTextItem(lbl_text, self)
         self.label.setFont(QFont("Segoe UI", 7))
         self.label.setBrush(QBrush(QColor("#2c3e50")))
-        self._position_label()
 
         self.output_badge = QGraphicsSimpleTextItem("", self)
         self.output_badge.setFont(QFont("Segoe UI", 6, QFont.Bold))
         self.output_badge.setBrush(QBrush(QColor("#2c3e50")))
         self.output_badge.setVisible(False)
+
+        # Load icon và điều chỉnh kích thước khung theo ảnh
+        self._load_icon()
+        self._position_label()
 
         # [CRITICAL FIX]
         # 1. Khởi tạo Effect
@@ -91,11 +94,10 @@ class DeviceIconItem(QGraphicsObject):
         self._glow.setOffset(0, 0)
         self._glow.setColor(self._status_color)
 
-        # 2. Tắt mặc định (Performance Optimization: Qt sẽ bỏ qua render khi enabled=False)
+        # 2. Tắt mặc định (Performance Optimization)
         self._glow.setEnabled(False)
 
-        # 3. Cài đặt vào Item MỘT LẦN DUY NHẤT. Qt sẽ quản lý vòng đời của _glow.
-        # Không bao giờ gọi setGraphicsEffect(None) sau dòng này.
+        # 3. Cài đặt vào Item MỘT LẦN DUY NHẤT.
         self.setGraphicsEffect(self._glow)
 
     def boundingRect(self) -> QRectF:
@@ -109,6 +111,7 @@ class DeviceIconItem(QGraphicsObject):
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget=None) -> None:
         painter.setRenderHint(QPainter.Antialiasing)
 
+        # Vẽ background box theo kích thước thực tế (self.w, self.h đã được update theo ảnh)
         bg_rect = QRectF(0, 0, self.w, self.h)
         corner_radius = 6
         base_color = self._status_color
@@ -140,9 +143,35 @@ class DeviceIconItem(QGraphicsObject):
 
         pm = QPixmap(icon_path)
         if not pm.isNull():
-            self._pixmap = pm.scaled(self.w, self.h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            # [LOGIC MỚI]
+            # 1. Lấy kích thước giới hạn (bounding box) từ config
+            target_w = self.device_data.get("width", 40)
+            target_h = self.device_data.get("height", 40)
+
+            # 2. Scale ảnh giữ nguyên tỉ lệ (KeepAspectRatio) để ảnh KHÔNG bị méo/mờ
+            scaled_pm = pm.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+            # 3. Cập nhật kích thước item (self.w, self.h) để bằng đúng kích thước ảnh thật
+            # Việc này đảm bảo khung nền ôm sát ảnh
+            if self.w != scaled_pm.width() or self.h != scaled_pm.height():
+                self.prepareGeometryChange()  # Báo cho Qt biết kích thước thay đổi
+                self.w = scaled_pm.width()
+                self.h = scaled_pm.height()
+                self._pixmap = scaled_pm
+
+                # Cập nhật lại vị trí các thành phần con
+                self._position_label()
+                if self.output_badge.isVisible():
+                    br = self.output_badge.boundingRect()
+                    self.output_badge.setPos(self.w - br.width() + 4, -4)
+            else:
+                self._pixmap = scaled_pm
 
     def _position_label(self) -> None:
+        # Kiểm tra label tồn tại (vì method này có thể được gọi trong quá trình init)
+        if not hasattr(self, "label"):
+            return
+
         lbl_rect = self.label.boundingRect()
         spacing = self.device_data.get("label_spacing", 3)
         lbl_pos = self.device_data.get("label_position", "bottom")
@@ -184,7 +213,6 @@ class DeviceIconItem(QGraphicsObject):
         new_color = QColor(status_color_str)
         if new_color != self._status_color:
             self._status_color = new_color
-            # Cập nhật màu cho effect (an toàn vì object luôn tồn tại)
             self._glow.setColor(new_color)
             self.update()
 
@@ -216,14 +244,12 @@ class DeviceIconItem(QGraphicsObject):
 
     def hoverEnterEvent(self, event) -> None:
         self._is_hovered = True
-        # [FIX] Chỉ bật cờ enabled, KHÔNG setGraphicsEffect lại
         self._glow.setEnabled(True)
         self.update()
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
         self._is_hovered = False
-        # [FIX] Chỉ tắt cờ enabled (siêu nhẹ), KHÔNG setGraphicsEffect(None) -> Tránh delete object
         self._glow.setEnabled(False)
         self.update()
         super().hoverLeaveEvent(event)
@@ -266,10 +292,7 @@ class DeviceCanvasWidget(QWidget):
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         # [CRITICAL OPTIMIZATION]
-        # Sử dụng BoundingRectViewportUpdate: Chỉ vẽ lại vùng chữ nhật bị thay đổi.
-        # Đây là chìa khóa để chạy mượt 1000+ item.
         self.view.setViewportUpdateMode(QGraphicsView.BoundingRectViewportUpdate)
-
         self.view.setCacheMode(QGraphicsView.CacheBackground)
 
         layout.addWidget(self.view)
