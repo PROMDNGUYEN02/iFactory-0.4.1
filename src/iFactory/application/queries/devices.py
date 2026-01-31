@@ -68,7 +68,7 @@ class GetLatestDeviceStatusQuery:
         self._uow_factory = uow_factory
         self._cache = cache
 
-    async def execute(self, equip_code: str, theme: str = "light") -> Optional[DeviceStatusDTO]:
+    async def execute(self, equip_code: str) -> Optional[DeviceStatusDTO]:
         cache_key = f"device_status_{equip_code}"
         cached = await self._cache.get(cache_key)
         if cached:

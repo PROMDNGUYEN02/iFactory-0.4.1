@@ -4,7 +4,7 @@ Interface for fetching data from external systems (PLCs, APIs, Legacy DBs).
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
 
 class IRemoteDataSource(ABC):
@@ -19,6 +19,6 @@ class IRemoteDataSource(ABC):
         pass
 
     @abstractmethod
-    async def fetch_device_status(self, equip_code: str) -> Optional[Dict[str, Any]]:
+    async def fetch_device_status(self, equip_code: str, days: int = 30) -> Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]:
         """Fetch status for a single device."""
         pass

@@ -6,7 +6,7 @@ Read-only operations for historical data and Gantt charts.
 from datetime import datetime, timedelta
 from typing import List, Callable, Optional, Dict
 
-from iFactory.application.common.dtos import DeviceHistoryDTO
+from iFactory.application.common.dtos import DeviceHistoryDTO, GanttSegmentDTO
 from iFactory.application.ports.cache import ICacheProvider
 from iFactory.application.ports.uow import AbstractUnitOfWork
 
@@ -57,7 +57,7 @@ class GenerateProductionTimelineQuery:
         self._uow_factory = uow_factory
         self._cache = cache
 
-    async def execute(self, equip_code: str, start_time: datetime, end_time: datetime, fill_gaps: bool = True) -> List[Dict]:
+    async def execute(self, equip_code: str, start_time: datetime, end_time: datetime, fill_gaps: bool = True) -> List[GanttSegmentDTO]:
 
         cache_key = f"timeline_{equip_code}_{start_time.isoformat()}_{end_time.isoformat()}"
         cached = await self._cache.get(cache_key)
@@ -74,14 +74,17 @@ class GenerateProductionTimelineQuery:
             valid_end = min(seg_end, end_time)
 
             if valid_start < valid_end:
+                duration = (valid_end - valid_start).total_seconds()
                 segments.append(
-                    {
-                        "equip_code": h.device_code,
-                        "status_code": str(h.status_code),
-                        "status_name": h.status_name,
-                        "start_time": valid_start,
-                        "end_time": valid_end,
-                    }
+                    GanttSegmentDTO(
+                        equip_code=h.device_code,
+                        status_code=str(h.status_code),
+                        status_name=h.status_name,
+                        start_time=valid_start,
+                        end_time=valid_end,
+                        duration_seconds=duration,
+                        percent=0.0,  # Placeholder for future utilization logic
+                    )
                 )
 
         await self._cache.set(cache_key, segments, ttl=30)
