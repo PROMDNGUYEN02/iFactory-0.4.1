@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'mainMWoFIF.ui'
+## Form generated from reading UI file 'mainaLJjlp.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.10.1
 ##
@@ -119,6 +119,299 @@ class Ui_MainWindow(object):
         self.stackedWidget.setObjectName(u"stackedWidget")
         self.stackedWidget.setEnabled(True)
         self.stackedWidget.setLineWidth(0)
+        self.daboard_page = QWidget()
+        self.daboard_page.setObjectName(u"daboard_page")
+        self.verticalLayout_3 = QVBoxLayout(self.daboard_page)
+        self.verticalLayout_3.setSpacing(0)
+        self.verticalLayout_3.setObjectName(u"verticalLayout_3")
+        self.verticalLayout_3.setContentsMargins(0, 0, 0, 0)
+        self.daboard_top_frame = QFrame(self.daboard_page)
+        self.daboard_top_frame.setObjectName(u"daboard_top_frame")
+        self.daboard_top_frame.setMinimumSize(QSize(0, 100))
+        self.daboard_top_frame.setMaximumSize(QSize(16777215, 110))
+        self.daboard_top_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self.daboard_top_frame.setFrameShadow(QFrame.Shadow.Raised)
+        self.gridLayout_4 = QGridLayout(self.daboard_top_frame)
+        self.gridLayout_4.setSpacing(0)
+        self.gridLayout_4.setObjectName(u"gridLayout_4")
+        self.gridLayout_4.setContentsMargins(0, 0, 0, 0)
+        self.label_18 = QLabel(self.daboard_top_frame)
+        self.label_18.setObjectName(u"label_18")
+        self.label_18.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.gridLayout_4.addWidget(self.label_18, 0, 3, 3, 3)
+
+        self.lcdNumber_31 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_31.setObjectName(u"lcdNumber_31")
+        self.lcdNumber_31.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_31, 10, 13, 1, 1)
+
+        self.label_64 = QLabel(self.daboard_top_frame)
+        self.label_64.setObjectName(u"label_64")
+
+        self.gridLayout_4.addWidget(self.label_64, 4, 12, 1, 1)
+
+        self.lcdNumber_36 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_36.setObjectName(u"lcdNumber_36")
+        self.lcdNumber_36.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_36, 7, 15, 1, 1)
+
+        self.lcdNumber_22 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_22.setObjectName(u"lcdNumber_22")
+        self.lcdNumber_22.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_22, 3, 7, 2, 1)
+
+        self.label_20 = QLabel(self.daboard_top_frame)
+        self.label_20.setObjectName(u"label_20")
+
+        self.gridLayout_4.addWidget(self.label_20, 8, 6, 3, 2)
+
+        self.label_52 = QLabel(self.daboard_top_frame)
+        self.label_52.setObjectName(u"label_52")
+
+        self.gridLayout_4.addWidget(self.label_52, 5, 6, 3, 2)
+
+        self.lcdNumber_29 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_29.setObjectName(u"lcdNumber_29")
+        self.lcdNumber_29.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_29, 6, 5, 2, 1)
+
+        self.lcdNumber_27 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_27.setObjectName(u"lcdNumber_27")
+        self.lcdNumber_27.setFrameShape(QFrame.Shape.NoFrame)
+        self.lcdNumber_27.setLineWidth(1)
+        self.lcdNumber_27.setSmallDecimalPoint(False)
+        self.lcdNumber_27.setSegmentStyle(QLCDNumber.SegmentStyle.Filled)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_27, 3, 4, 2, 1)
+
+        self.lcdNumber_20 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_20.setObjectName(u"lcdNumber_20")
+        self.lcdNumber_20.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_20, 3, 8, 2, 2)
+
+        self.label_61 = QLabel(self.daboard_top_frame)
+        self.label_61.setObjectName(u"label_61")
+
+        self.gridLayout_4.addWidget(self.label_61, 3, 3, 2, 1)
+
+        self.label_56 = QLabel(self.daboard_top_frame)
+        self.label_56.setObjectName(u"label_56")
+        self.label_56.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.gridLayout_4.addWidget(self.label_56, 1, 0, 1, 3)
+
+        self.lcdNumber_16 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_16.setObjectName(u"lcdNumber_16")
+        self.lcdNumber_16.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_16, 3, 2, 2, 1)
+
+        self.label_54 = QLabel(self.daboard_top_frame)
+        self.label_54.setObjectName(u"label_54")
+        self.label_54.setMinimumSize(QSize(60, 0))
+
+        self.gridLayout_4.addWidget(self.label_54, 7, 0, 1, 1)
+
+        self.lcdNumber_26 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_26.setObjectName(u"lcdNumber_26")
+        self.lcdNumber_26.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_26, 9, 5, 2, 1)
+
+        self.label_19 = QLabel(self.daboard_top_frame)
+        self.label_19.setObjectName(u"label_19")
+        self.label_19.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.gridLayout_4.addWidget(self.label_19, 0, 6, 2, 4)
+
+        self.label_59 = QLabel(self.daboard_top_frame)
+        self.label_59.setObjectName(u"label_59")
+
+        self.gridLayout_4.addWidget(self.label_59, 6, 3, 2, 1)
+
+        self.label_46 = QLabel(self.daboard_top_frame)
+        self.label_46.setObjectName(u"label_46")
+        self.label_46.setMinimumSize(QSize(60, 0))
+
+        self.gridLayout_4.addWidget(self.label_46, 10, 0, 1, 1)
+
+        self.label_49 = QLabel(self.daboard_top_frame)
+        self.label_49.setObjectName(u"label_49")
+
+        self.gridLayout_4.addWidget(self.label_49, 2, 6, 3, 2)
+
+        self.label_62 = QLabel(self.daboard_top_frame)
+        self.label_62.setObjectName(u"label_62")
+
+        self.gridLayout_4.addWidget(self.label_62, 9, 3, 2, 1)
+
+        self.label_51 = QLabel(self.daboard_top_frame)
+        self.label_51.setObjectName(u"label_51")
+        self.label_51.setMinimumSize(QSize(60, 0))
+
+        self.gridLayout_4.addWidget(self.label_51, 4, 0, 1, 1)
+
+        self.lcdNumber_23 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_23.setObjectName(u"lcdNumber_23")
+        self.lcdNumber_23.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_23, 6, 8, 2, 2)
+
+        self.lcdNumber_35 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_35.setObjectName(u"lcdNumber_35")
+        self.lcdNumber_35.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_35, 4, 13, 1, 1)
+
+        self.lcdNumber_18 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_18.setObjectName(u"lcdNumber_18")
+        self.lcdNumber_18.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_18, 6, 2, 2, 1)
+
+        self.lcdNumber_19 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_19.setObjectName(u"lcdNumber_19")
+        self.lcdNumber_19.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_19, 6, 7, 2, 1)
+
+        self.lcdNumber_24 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_24.setObjectName(u"lcdNumber_24")
+        self.lcdNumber_24.setFrameShape(QFrame.Shape.NoFrame)
+        self.lcdNumber_24.setLineWidth(1)
+        self.lcdNumber_24.setSmallDecimalPoint(False)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_24, 6, 1, 3, 1)
+
+        self.lcdNumber_14 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_14.setObjectName(u"lcdNumber_14")
+        self.lcdNumber_14.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_14, 9, 7, 2, 1)
+
+        self.lcdNumber_30 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_30.setObjectName(u"lcdNumber_30")
+        self.lcdNumber_30.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_30, 3, 5, 2, 1)
+
+        self.lcdNumber_21 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_21.setObjectName(u"lcdNumber_21")
+        self.lcdNumber_21.setFrameShape(QFrame.Shape.NoFrame)
+        self.lcdNumber_21.setLineWidth(1)
+        self.lcdNumber_21.setSmallDecimalPoint(False)
+        self.lcdNumber_21.setSegmentStyle(QLCDNumber.SegmentStyle.Filled)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_21, 4, 1, 2, 1)
+
+        self.lcdNumber_34 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_34.setObjectName(u"lcdNumber_34")
+        self.lcdNumber_34.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_34, 10, 15, 1, 1)
+
+        self.lcdNumber_32 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_32.setObjectName(u"lcdNumber_32")
+        self.lcdNumber_32.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_32, 7, 13, 1, 1)
+
+        self.lcdNumber_15 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_15.setObjectName(u"lcdNumber_15")
+        self.lcdNumber_15.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_15, 9, 8, 2, 2)
+
+        self.lcdNumber_13 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_13.setObjectName(u"lcdNumber_13")
+        self.lcdNumber_13.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_13, 9, 2, 2, 1)
+
+        self.lcdNumber_33 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_33.setObjectName(u"lcdNumber_33")
+        self.lcdNumber_33.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_33, 4, 15, 1, 1)
+
+        self.lcdNumber_17 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_17.setObjectName(u"lcdNumber_17")
+        self.lcdNumber_17.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_17, 9, 1, 2, 1)
+
+        self.label_67 = QLabel(self.daboard_top_frame)
+        self.label_67.setObjectName(u"label_67")
+
+        self.gridLayout_4.addWidget(self.label_67, 7, 12, 1, 1)
+
+        self.lcdNumber_28 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_28.setObjectName(u"lcdNumber_28")
+        self.lcdNumber_28.setFrameShape(QFrame.Shape.NoFrame)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_28, 9, 4, 2, 1)
+
+        self.label_14 = QLabel(self.daboard_top_frame)
+        self.label_14.setObjectName(u"label_14")
+        self.label_14.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.gridLayout_4.addWidget(self.label_14, 1, 9, 2, 5)
+
+        self.lcdNumber_25 = QLCDNumber(self.daboard_top_frame)
+        self.lcdNumber_25.setObjectName(u"lcdNumber_25")
+        self.lcdNumber_25.setFrameShape(QFrame.Shape.NoFrame)
+        self.lcdNumber_25.setLineWidth(1)
+        self.lcdNumber_25.setSmallDecimalPoint(False)
+
+        self.gridLayout_4.addWidget(self.lcdNumber_25, 6, 4, 2, 1)
+
+        self.label_63 = QLabel(self.daboard_top_frame)
+        self.label_63.setObjectName(u"label_63")
+
+        self.gridLayout_4.addWidget(self.label_63, 10, 12, 1, 1)
+
+
+        self.verticalLayout_3.addWidget(self.daboard_top_frame)
+
+        self.daboard_midle_frame_1 = QFrame(self.daboard_page)
+        self.daboard_midle_frame_1.setObjectName(u"daboard_midle_frame_1")
+        self.daboard_midle_frame_1.setStyleSheet(u"")
+        self.daboard_midle_frame_1.setFrameShape(QFrame.Shape.StyledPanel)
+        self.daboard_midle_frame_1.setFrameShadow(QFrame.Shadow.Raised)
+
+        self.verticalLayout_3.addWidget(self.daboard_midle_frame_1)
+
+        self.daboard_midle_frame_2 = QFrame(self.daboard_page)
+        self.daboard_midle_frame_2.setObjectName(u"daboard_midle_frame_2")
+        self.daboard_midle_frame_2.setMaximumSize(QSize(16777215, 50))
+        self.daboard_midle_frame_2.setFrameShape(QFrame.Shape.StyledPanel)
+        self.daboard_midle_frame_2.setFrameShadow(QFrame.Shadow.Raised)
+        self.verticalLayout_5 = QVBoxLayout(self.daboard_midle_frame_2)
+        self.verticalLayout_5.setObjectName(u"verticalLayout_5")
+        self.verticalLayout_5.setContentsMargins(0, 0, 0, 0)
+
+        self.verticalLayout_3.addWidget(self.daboard_midle_frame_2)
+
+        self.daboard_bottom_frame = QFrame(self.daboard_page)
+        self.daboard_bottom_frame.setObjectName(u"daboard_bottom_frame")
+        self.daboard_bottom_frame.setMaximumSize(QSize(16777215, 40))
+        self.daboard_bottom_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self.daboard_bottom_frame.setFrameShadow(QFrame.Shadow.Raised)
+        self.gridLayout_5 = QGridLayout(self.daboard_bottom_frame)
+        self.gridLayout_5.setObjectName(u"gridLayout_5")
+        self.gridLayout_5.setHorizontalSpacing(5)
+        self.gridLayout_5.setVerticalSpacing(0)
+        self.gridLayout_5.setContentsMargins(0, 0, 0, 0)
+
+        self.verticalLayout_3.addWidget(self.daboard_bottom_frame)
+
+        self.stackedWidget.addWidget(self.daboard_page)
         self.orders_page = QWidget()
         self.orders_page.setObjectName(u"orders_page")
         self.verticalLayout_2 = QVBoxLayout(self.orders_page)
@@ -415,299 +708,6 @@ class Ui_MainWindow(object):
         self.verticalLayout_2.addWidget(self.orders_bottom_frame)
 
         self.stackedWidget.addWidget(self.orders_page)
-        self.daboard_page = QWidget()
-        self.daboard_page.setObjectName(u"daboard_page")
-        self.verticalLayout_3 = QVBoxLayout(self.daboard_page)
-        self.verticalLayout_3.setSpacing(0)
-        self.verticalLayout_3.setObjectName(u"verticalLayout_3")
-        self.verticalLayout_3.setContentsMargins(0, 0, 0, 0)
-        self.daboard_top_frame = QFrame(self.daboard_page)
-        self.daboard_top_frame.setObjectName(u"daboard_top_frame")
-        self.daboard_top_frame.setMinimumSize(QSize(0, 100))
-        self.daboard_top_frame.setMaximumSize(QSize(16777215, 110))
-        self.daboard_top_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        self.daboard_top_frame.setFrameShadow(QFrame.Shadow.Raised)
-        self.gridLayout_4 = QGridLayout(self.daboard_top_frame)
-        self.gridLayout_4.setSpacing(0)
-        self.gridLayout_4.setObjectName(u"gridLayout_4")
-        self.gridLayout_4.setContentsMargins(0, 0, 0, 0)
-        self.label_18 = QLabel(self.daboard_top_frame)
-        self.label_18.setObjectName(u"label_18")
-        self.label_18.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.gridLayout_4.addWidget(self.label_18, 0, 3, 3, 3)
-
-        self.lcdNumber_31 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_31.setObjectName(u"lcdNumber_31")
-        self.lcdNumber_31.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_31, 10, 13, 1, 1)
-
-        self.label_64 = QLabel(self.daboard_top_frame)
-        self.label_64.setObjectName(u"label_64")
-
-        self.gridLayout_4.addWidget(self.label_64, 4, 12, 1, 1)
-
-        self.lcdNumber_36 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_36.setObjectName(u"lcdNumber_36")
-        self.lcdNumber_36.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_36, 7, 15, 1, 1)
-
-        self.lcdNumber_22 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_22.setObjectName(u"lcdNumber_22")
-        self.lcdNumber_22.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_22, 3, 7, 2, 1)
-
-        self.label_20 = QLabel(self.daboard_top_frame)
-        self.label_20.setObjectName(u"label_20")
-
-        self.gridLayout_4.addWidget(self.label_20, 8, 6, 3, 2)
-
-        self.label_52 = QLabel(self.daboard_top_frame)
-        self.label_52.setObjectName(u"label_52")
-
-        self.gridLayout_4.addWidget(self.label_52, 5, 6, 3, 2)
-
-        self.lcdNumber_29 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_29.setObjectName(u"lcdNumber_29")
-        self.lcdNumber_29.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_29, 6, 5, 2, 1)
-
-        self.lcdNumber_27 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_27.setObjectName(u"lcdNumber_27")
-        self.lcdNumber_27.setFrameShape(QFrame.Shape.NoFrame)
-        self.lcdNumber_27.setLineWidth(1)
-        self.lcdNumber_27.setSmallDecimalPoint(False)
-        self.lcdNumber_27.setSegmentStyle(QLCDNumber.SegmentStyle.Filled)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_27, 3, 4, 2, 1)
-
-        self.lcdNumber_20 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_20.setObjectName(u"lcdNumber_20")
-        self.lcdNumber_20.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_20, 3, 8, 2, 2)
-
-        self.label_61 = QLabel(self.daboard_top_frame)
-        self.label_61.setObjectName(u"label_61")
-
-        self.gridLayout_4.addWidget(self.label_61, 3, 3, 2, 1)
-
-        self.label_56 = QLabel(self.daboard_top_frame)
-        self.label_56.setObjectName(u"label_56")
-        self.label_56.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.gridLayout_4.addWidget(self.label_56, 1, 0, 1, 3)
-
-        self.lcdNumber_16 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_16.setObjectName(u"lcdNumber_16")
-        self.lcdNumber_16.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_16, 3, 2, 2, 1)
-
-        self.label_54 = QLabel(self.daboard_top_frame)
-        self.label_54.setObjectName(u"label_54")
-        self.label_54.setMinimumSize(QSize(60, 0))
-
-        self.gridLayout_4.addWidget(self.label_54, 7, 0, 1, 1)
-
-        self.lcdNumber_26 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_26.setObjectName(u"lcdNumber_26")
-        self.lcdNumber_26.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_26, 9, 5, 2, 1)
-
-        self.label_19 = QLabel(self.daboard_top_frame)
-        self.label_19.setObjectName(u"label_19")
-        self.label_19.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.gridLayout_4.addWidget(self.label_19, 0, 6, 2, 4)
-
-        self.label_59 = QLabel(self.daboard_top_frame)
-        self.label_59.setObjectName(u"label_59")
-
-        self.gridLayout_4.addWidget(self.label_59, 6, 3, 2, 1)
-
-        self.label_46 = QLabel(self.daboard_top_frame)
-        self.label_46.setObjectName(u"label_46")
-        self.label_46.setMinimumSize(QSize(60, 0))
-
-        self.gridLayout_4.addWidget(self.label_46, 10, 0, 1, 1)
-
-        self.label_49 = QLabel(self.daboard_top_frame)
-        self.label_49.setObjectName(u"label_49")
-
-        self.gridLayout_4.addWidget(self.label_49, 2, 6, 3, 2)
-
-        self.label_62 = QLabel(self.daboard_top_frame)
-        self.label_62.setObjectName(u"label_62")
-
-        self.gridLayout_4.addWidget(self.label_62, 9, 3, 2, 1)
-
-        self.label_51 = QLabel(self.daboard_top_frame)
-        self.label_51.setObjectName(u"label_51")
-        self.label_51.setMinimumSize(QSize(60, 0))
-
-        self.gridLayout_4.addWidget(self.label_51, 4, 0, 1, 1)
-
-        self.lcdNumber_23 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_23.setObjectName(u"lcdNumber_23")
-        self.lcdNumber_23.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_23, 6, 8, 2, 2)
-
-        self.lcdNumber_35 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_35.setObjectName(u"lcdNumber_35")
-        self.lcdNumber_35.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_35, 4, 13, 1, 1)
-
-        self.lcdNumber_18 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_18.setObjectName(u"lcdNumber_18")
-        self.lcdNumber_18.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_18, 6, 2, 2, 1)
-
-        self.lcdNumber_19 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_19.setObjectName(u"lcdNumber_19")
-        self.lcdNumber_19.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_19, 6, 7, 2, 1)
-
-        self.lcdNumber_24 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_24.setObjectName(u"lcdNumber_24")
-        self.lcdNumber_24.setFrameShape(QFrame.Shape.NoFrame)
-        self.lcdNumber_24.setLineWidth(1)
-        self.lcdNumber_24.setSmallDecimalPoint(False)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_24, 6, 1, 3, 1)
-
-        self.lcdNumber_14 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_14.setObjectName(u"lcdNumber_14")
-        self.lcdNumber_14.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_14, 9, 7, 2, 1)
-
-        self.lcdNumber_30 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_30.setObjectName(u"lcdNumber_30")
-        self.lcdNumber_30.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_30, 3, 5, 2, 1)
-
-        self.lcdNumber_21 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_21.setObjectName(u"lcdNumber_21")
-        self.lcdNumber_21.setFrameShape(QFrame.Shape.NoFrame)
-        self.lcdNumber_21.setLineWidth(1)
-        self.lcdNumber_21.setSmallDecimalPoint(False)
-        self.lcdNumber_21.setSegmentStyle(QLCDNumber.SegmentStyle.Filled)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_21, 4, 1, 2, 1)
-
-        self.lcdNumber_34 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_34.setObjectName(u"lcdNumber_34")
-        self.lcdNumber_34.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_34, 10, 15, 1, 1)
-
-        self.lcdNumber_32 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_32.setObjectName(u"lcdNumber_32")
-        self.lcdNumber_32.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_32, 7, 13, 1, 1)
-
-        self.lcdNumber_15 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_15.setObjectName(u"lcdNumber_15")
-        self.lcdNumber_15.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_15, 9, 8, 2, 2)
-
-        self.lcdNumber_13 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_13.setObjectName(u"lcdNumber_13")
-        self.lcdNumber_13.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_13, 9, 2, 2, 1)
-
-        self.lcdNumber_33 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_33.setObjectName(u"lcdNumber_33")
-        self.lcdNumber_33.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_33, 4, 15, 1, 1)
-
-        self.lcdNumber_17 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_17.setObjectName(u"lcdNumber_17")
-        self.lcdNumber_17.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_17, 9, 1, 2, 1)
-
-        self.label_67 = QLabel(self.daboard_top_frame)
-        self.label_67.setObjectName(u"label_67")
-
-        self.gridLayout_4.addWidget(self.label_67, 7, 12, 1, 1)
-
-        self.lcdNumber_28 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_28.setObjectName(u"lcdNumber_28")
-        self.lcdNumber_28.setFrameShape(QFrame.Shape.NoFrame)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_28, 9, 4, 2, 1)
-
-        self.label_14 = QLabel(self.daboard_top_frame)
-        self.label_14.setObjectName(u"label_14")
-        self.label_14.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.gridLayout_4.addWidget(self.label_14, 1, 9, 2, 5)
-
-        self.lcdNumber_25 = QLCDNumber(self.daboard_top_frame)
-        self.lcdNumber_25.setObjectName(u"lcdNumber_25")
-        self.lcdNumber_25.setFrameShape(QFrame.Shape.NoFrame)
-        self.lcdNumber_25.setLineWidth(1)
-        self.lcdNumber_25.setSmallDecimalPoint(False)
-
-        self.gridLayout_4.addWidget(self.lcdNumber_25, 6, 4, 2, 1)
-
-        self.label_63 = QLabel(self.daboard_top_frame)
-        self.label_63.setObjectName(u"label_63")
-
-        self.gridLayout_4.addWidget(self.label_63, 10, 12, 1, 1)
-
-
-        self.verticalLayout_3.addWidget(self.daboard_top_frame)
-
-        self.daboard_midle_frame_1 = QFrame(self.daboard_page)
-        self.daboard_midle_frame_1.setObjectName(u"daboard_midle_frame_1")
-        self.daboard_midle_frame_1.setStyleSheet(u"")
-        self.daboard_midle_frame_1.setFrameShape(QFrame.Shape.StyledPanel)
-        self.daboard_midle_frame_1.setFrameShadow(QFrame.Shadow.Raised)
-
-        self.verticalLayout_3.addWidget(self.daboard_midle_frame_1)
-
-        self.daboard_midle_frame_2 = QFrame(self.daboard_page)
-        self.daboard_midle_frame_2.setObjectName(u"daboard_midle_frame_2")
-        self.daboard_midle_frame_2.setMaximumSize(QSize(16777215, 50))
-        self.daboard_midle_frame_2.setFrameShape(QFrame.Shape.StyledPanel)
-        self.daboard_midle_frame_2.setFrameShadow(QFrame.Shadow.Raised)
-        self.verticalLayout_5 = QVBoxLayout(self.daboard_midle_frame_2)
-        self.verticalLayout_5.setObjectName(u"verticalLayout_5")
-        self.verticalLayout_5.setContentsMargins(0, 0, 0, 0)
-
-        self.verticalLayout_3.addWidget(self.daboard_midle_frame_2)
-
-        self.daboard_bottom_frame = QFrame(self.daboard_page)
-        self.daboard_bottom_frame.setObjectName(u"daboard_bottom_frame")
-        self.daboard_bottom_frame.setMaximumSize(QSize(16777215, 40))
-        self.daboard_bottom_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        self.daboard_bottom_frame.setFrameShadow(QFrame.Shadow.Raised)
-        self.gridLayout_5 = QGridLayout(self.daboard_bottom_frame)
-        self.gridLayout_5.setObjectName(u"gridLayout_5")
-        self.gridLayout_5.setHorizontalSpacing(5)
-        self.gridLayout_5.setVerticalSpacing(0)
-        self.gridLayout_5.setContentsMargins(0, 0, 0, 0)
-
-        self.verticalLayout_3.addWidget(self.daboard_bottom_frame)
-
-        self.stackedWidget.addWidget(self.daboard_page)
 
         self.gridLayout.addWidget(self.stackedWidget, 0, 1, 2, 1)
 
@@ -722,7 +722,7 @@ class Ui_MainWindow(object):
 
         self.retranslateUi(MainWindow)
 
-        self.stackedWidget.setCurrentIndex(1)
+        self.stackedWidget.setCurrentIndex(0)
 
 
         QMetaObject.connectSlotsByName(MainWindow)
@@ -733,22 +733,6 @@ class Ui_MainWindow(object):
         self.title_icon.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
         self.title_label.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
         self.pushButton.setText(QCoreApplication.translate("MainWindow", u"PushButton", None))
-        self.label_9.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_6.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_8.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_15.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_7.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_10.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_3.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_12.setText(QCoreApplication.translate("MainWindow", u"LOST", None))
-        self.label_2.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_11.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_4.setText(QCoreApplication.translate("MainWindow", u"OUTPUT", None))
-        self.label_5.setText(QCoreApplication.translate("MainWindow", u"PRODUCTIVITY", None))
-        self.label_17.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_16.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
-        self.label_13.setText(QCoreApplication.translate("MainWindow", u"YIELD", None))
         self.label_18.setText(QCoreApplication.translate("MainWindow", u"PRODUCTIVITY", None))
         self.label_64.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
         self.label_20.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
@@ -765,5 +749,21 @@ class Ui_MainWindow(object):
         self.label_67.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
         self.label_14.setText(QCoreApplication.translate("MainWindow", u"YIELD", None))
         self.label_63.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_9.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_6.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_8.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_15.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_7.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_10.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_3.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_12.setText(QCoreApplication.translate("MainWindow", u"LOST", None))
+        self.label_2.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_11.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_4.setText(QCoreApplication.translate("MainWindow", u"OUTPUT", None))
+        self.label_5.setText(QCoreApplication.translate("MainWindow", u"PRODUCTIVITY", None))
+        self.label_17.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_16.setText(QCoreApplication.translate("MainWindow", u"TextLabel", None))
+        self.label_13.setText(QCoreApplication.translate("MainWindow", u"YIELD", None))
     # retranslateUi
 
