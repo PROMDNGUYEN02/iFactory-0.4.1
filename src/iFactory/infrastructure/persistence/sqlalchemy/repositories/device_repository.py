@@ -55,17 +55,7 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
             device_entity = SQLAlchemyMapper.to_device_entity(dev_model)
             material_vo = None
             if input_model:
-                try:
-                    material_vo = SQLAlchemyMapper.to_material_input(input_model)
-                except Exception:
-                    from iFactory.domain.value_objects.material_input import MaterialInput
-                    from iFactory.domain.value_objects.material_batch import MaterialBatch
-
-                    material_vo = MaterialInput(
-                        equipment_code=EquipmentCode(input_model.equipment_code),
-                        material_batch=MaterialBatch(input_model.material_batch),
-                        feeding_time=input_model.feeding_time,
-                    )
+                material_vo = SQLAlchemyMapper.to_material_input(input_model)
 
             if device_entity:
                 snapshot.append((device_entity, material_vo))

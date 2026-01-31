@@ -13,6 +13,7 @@ from iFactory.domain.entities.device import Device
 from iFactory.domain.enums.machine_status import MachineStatus
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
 from iFactory.domain.value_objects.material_input import MaterialInput
+from iFactory.domain.value_objects.material_batch import MaterialBatch
 from iFactory.domain.value_objects.status_period import StatusPeriod
 from iFactory.domain.value_objects.time_range import TimeRange
 
@@ -99,7 +100,9 @@ class SQLAlchemyMapper:
         if not model:
             return None
 
-        return MaterialInput(code=EquipmentCode(model.equipment_code), batch_id=model.material_batch, timestamp=model.feeding_time)
+        return MaterialInput(
+            equipment_code=EquipmentCode(model.equipment_code), material_batch=MaterialBatch(model.material_batch), feeding_time=model.feeding_time
+        )
 
     @staticmethod
     def to_material_history_model(vo: MaterialInput) -> MaterialInputHistoryModel:
