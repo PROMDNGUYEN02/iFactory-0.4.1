@@ -19,6 +19,7 @@ class ActionType(Enum):
     CLEAR_ERROR = auto()
     LOAD_DEVICES = auto()
     LOAD_GANTT = auto()
+    SET_SELECTED_DEVICE_GANTT = auto()
     UPDATE_SYSTEM_STATUS = auto()
 
 
@@ -81,6 +82,11 @@ def load_gantt(gantt_data: Dict[str, Any]) -> Action:
     return create_action(ActionType.LOAD_GANTT, gantt_data)
 
 
+def set_selected_device_gantt(gantt_view_model: Any) -> Action:
+    """Set the Gantt chart ViewModel for the selected device."""
+    return create_action(ActionType.SET_SELECTED_DEVICE_GANTT, gantt_view_model)
+
+
 def update_system_status(mssql: bool, sqlite: bool, message: str = "") -> Action:
     return create_action(
         ActionType.UPDATE_SYSTEM_STATUS,
@@ -104,5 +110,6 @@ __all__ = [
     "clear_error",
     "load_devices",
     "load_gantt",
+    "set_selected_device_gantt",
     "update_system_status",
 ]

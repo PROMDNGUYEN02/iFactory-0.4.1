@@ -149,6 +149,10 @@ class MainWindow(QMainWindow):
             self.canvas_dashboard.device_clicked.connect(self._controller.select_device)
             self.canvas_orders.device_clicked.connect(self._controller.select_device)
 
+            # Connect gantt click to device selection
+            self.gantt_dashboard.device_clicked.connect(self._controller.select_device)
+            self.gantt_orders.device_clicked.connect(self._controller.select_device)
+
             self.ui.daboard_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
             self.ui.orders_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
 
@@ -167,6 +171,7 @@ class MainWindow(QMainWindow):
         if not layout:
             layout = QVBoxLayout(parent)
             layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
         layout.addWidget(widget)
         return widget
 
@@ -258,6 +263,7 @@ class MainWindow(QMainWindow):
 
         gantt = select_gantt_data(state)
         if gantt != self._prev_state.get("gantt_data"):
+            logger.info(f"Gantt data updated: {len(gantt)} devices")
             now = datetime.now()
             start = now - timedelta(hours=24)
             self.gantt_dashboard.render_timeline(gantt, start, now)

@@ -29,7 +29,6 @@ class MssqlAdapter(IRemoteDataSource):
             return val
         if isinstance(val, str):
             try:
-                # Handle SQL Server high-precision strings (datetime2)
                 clean_val = val[:23] if len(val) > 23 else val
                 return datetime.strptime(clean_val, "%Y-%m-%d %H:%M:%S.%f")
             except ValueError:
@@ -37,12 +36,10 @@ class MssqlAdapter(IRemoteDataSource):
                     return datetime.strptime(val.split(".")[0], "%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     return datetime.now()
-        # Fallback if parsing fails or None
         return datetime.now()
 
     def _map_row(self, row: Any) -> Dict[str, Any]:
         """Maps raw SQL tuple to dictionary. Centralizes index mapping."""
-        # Query Order: EQUIP_CODE (0), EQUIP_STATUS (1), START_TIME (2), END_TIME (3), REASON_CODE (4), EQUIP_NAME (5)
         equip_code = str(row[0]).strip() if row[0] else "UNKNOWN"
         equip_status = str(row[1]) if row[1] else "0"
         start_time = self._parse_datetime(row[2])
@@ -50,7 +47,6 @@ class MssqlAdapter(IRemoteDataSource):
         reason_code = str(row[4]).strip() if row[4] else None
         equip_name = str(row[5]).strip() if row[5] else None
 
-        # Logic tính last_update
         if end_time_val:
             last_update = self._parse_datetime(end_time_val)
         else:
@@ -82,7 +78,6 @@ class MssqlAdapter(IRemoteDataSource):
             filter_clause = "AND S.EQUIP_CODE IN :codes"
             params["codes"] = list(equipment_codes)
 
-        # Updated Query: Join with TT_EQ_EQUIPMENT to get EQUIP_NAME
         query_str = f"""
         WITH RankedStatus AS (
             SELECT 
@@ -124,11 +119,8 @@ class MssqlAdapter(IRemoteDataSource):
         if not self._engine:
             return []
 
-        # Calculate Cutoff Date
         cutoff_date = datetime.now() - timedelta(days=days)
 
-        # Query: Fetch all records starting after cutoff
-        # ORDER BY ASC ensures we process history linearly
         query = """
         SELECT 
             S.EQUIP_CODE, S.EQUIP_STATUS, S.START_TIME, S.END_TIME, S.REASON_CODE,

@@ -15,11 +15,11 @@ class StatusCode(IntEnum):
 class Status:
     COLORS: Final[Dict[int, str]] = {
         StatusCode.UNKNOWN: "#9E9E9E",
-        StatusCode.RUNNING: "#3bb806",
-        StatusCode.SHUTDOWN: "#555555",
-        StatusCode.STOPPED: "#FFC107",
-        StatusCode.MAINTENANCE: "#38c0bf",
-        StatusCode.ALARM: "#bd1e15",
+        StatusCode.RUNNING: "#2E7D32",
+        StatusCode.SHUTDOWN: "#616161",
+        StatusCode.STOPPED: "#C62828",
+        StatusCode.MAINTENANCE: "#0288D1",
+        StatusCode.ALARM: "#F9A825",
     }
 
     NAMES: Final[Dict[int, str]] = {

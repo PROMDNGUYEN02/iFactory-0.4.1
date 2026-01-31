@@ -9,6 +9,7 @@ INITIAL_STATE: Dict[str, Any] = {
     "sidebar_expanded": False,
     "right_panel_expanded": False,
     "selected_device_id": None,
+    "selected_device_gantt": None,
     "data_range_days": 1,
     "is_loading": False,
     "error": None,
@@ -42,6 +43,7 @@ def root_reducer(state: Dict[str, Any], action: Action) -> Dict[str, Any]:
         ActionType.CLEAR_ERROR: _handle_clear_error,
         ActionType.LOAD_DEVICES: _handle_load_devices,
         ActionType.LOAD_GANTT: _handle_load_gantt,
+        ActionType.SET_SELECTED_DEVICE_GANTT: _handle_set_selected_device_gantt,
         ActionType.UPDATE_SYSTEM_STATUS: _handle_update_system_status,
     }
 
@@ -71,15 +73,23 @@ def _handle_toggle_right_panel(state: Dict[str, Any], _: Any) -> Dict[str, Any]:
 
 
 def _handle_select_device(state: Dict[str, Any], payload: str) -> Dict[str, Any]:
-    return {
+    new_state = {
         **state,
         "selected_device_id": payload,
         "right_panel_expanded": True,
     }
+    # Clear gantt when device changes
+    if payload != state.get("selected_device_id"):
+        new_state["selected_device_gantt"] = None
+    return new_state
 
 
 def _handle_deselect_device(state: Dict[str, Any], _: Any) -> Dict[str, Any]:
-    return {**state, "selected_device_id": None}
+    return {
+        **state,
+        "selected_device_id": None,
+        "selected_device_gantt": None,
+    }
 
 
 def _handle_set_data_range(state: Dict[str, Any], payload: int) -> Dict[str, Any]:
@@ -104,6 +114,10 @@ def _handle_load_devices(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]
 
 def _handle_load_gantt(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]:
     return {**state, "gantt_data": payload}
+
+
+def _handle_set_selected_device_gantt(state: Dict[str, Any], payload: Any) -> Dict[str, Any]:
+    return {**state, "selected_device_gantt": payload}
 
 
 def _handle_update_system_status(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]:

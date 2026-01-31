@@ -2,15 +2,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout
 
 from ...constants.layout import Layout
 from ...resources.themes import get_theme_manager
-from ...state.selectors import select_gantt_data, select_right_panel_expanded, select_selected_device, select_theme
-from ..widgets.gantt_canvas import GanttCanvasWidget
+from ...state.selectors import (
+    select_gantt_data,
+    select_right_panel_expanded,
+    select_selected_device,
+    select_selected_device_id,
+    select_theme,
+)
+from ..widgets.gantt_canvas import DeviceGanttWidget
 
 if TYPE_CHECKING:
     from ...controllers.shell_controller import ShellController
@@ -18,6 +24,8 @@ if TYPE_CHECKING:
 
 
 class RightPanelView:
+    """Right panel showing device details and Gantt chart."""
+
     def __init__(
         self,
         container: QFrame,
@@ -46,6 +54,7 @@ class RightPanelView:
         self._layout.setContentsMargins(16, 20, 16, 20)
         self._layout.setSpacing(12)
 
+        # Header row
         header_layout = QHBoxLayout()
         self._title = QLabel("SELECT DEVICE")
         self._status_badge = QLabel("N/A")
@@ -55,13 +64,16 @@ class RightPanelView:
         header_layout.addWidget(self._status_badge)
         self._layout.addLayout(header_layout)
 
+        # Description
         self._desc = QLabel("")
         self._desc.setWordWrap(True)
         self._layout.addWidget(self._desc)
 
+        # Last update
         self._last_update = QLabel("Last Update: --")
         self._layout.addWidget(self._last_update)
 
+        # Material info frame
         self._mat_frame = QFrame()
         self._mat_frame.setObjectName("mat_frame")
         mat_layout = QVBoxLayout(self._mat_frame)
@@ -73,6 +85,7 @@ class RightPanelView:
         mat_layout.addWidget(self._fed_time)
         self._layout.addWidget(self._mat_frame)
 
+        # OEE progress
         self._lbl_oee = QLabel("OEE: 0%")
         self._bar_oee = QProgressBar()
         self._bar_oee.setTextVisible(False)
@@ -80,6 +93,7 @@ class RightPanelView:
         self._layout.addWidget(self._lbl_oee)
         self._layout.addWidget(self._bar_oee)
 
+        # Yield progress
         self._lbl_yield = QLabel("Yield Rate: 0%")
         self._bar_yield = QProgressBar()
         self._bar_yield.setTextVisible(False)
@@ -87,6 +101,7 @@ class RightPanelView:
         self._layout.addWidget(self._lbl_yield)
         self._layout.addWidget(self._bar_yield)
 
+        # Details frame
         self._details_frame = QFrame()
         self._details_frame.setObjectName("details_frame")
         details_layout = QVBoxLayout(self._details_frame)
@@ -100,13 +115,15 @@ class RightPanelView:
         details_layout.addWidget(self._cycle)
         self._layout.addWidget(self._details_frame)
 
+        # Gantt section label
         self._lbl_gantt = QLabel("Timeline (Last 24h)")
         self._layout.addWidget(self._lbl_gantt)
 
-        self._gantt = GanttCanvasWidget(self._container.window(), is_compact=True)
-        self._gantt.setFixedHeight(50)
+        # Device Gantt Widget
+        self._gantt = DeviceGanttWidget()
         self._layout.addWidget(self._gantt)
 
+        # Error label
         self._error = QLabel("Last Error: None")
         self._error.setWordWrap(True)
         self._layout.addWidget(self._error)
@@ -189,7 +206,7 @@ class RightPanelView:
         self._outputs.setStyleSheet(f"color: {text_primary};")
         self._cycle.setStyleSheet(f"color: {text_primary};")
 
-    def render(self, state: dict) -> None:
+    def render(self, state: Dict[str, Any]) -> None:
         is_expanded = select_right_panel_expanded(state)
         theme = select_theme(state)
 
@@ -204,26 +221,41 @@ class RightPanelView:
             return
 
         device = select_selected_device(state)
+        device_id = select_selected_device_id(state)
+
         if not device:
             self._title.setText("SELECT DEVICE")
             self._status_badge.setText("N/A")
-            self._status_badge.setStyleSheet("background-color: #64748B; color: white; padding: 4px 10px; border-radius: 10px; font-size: 10px;")
+            self._status_badge.setStyleSheet("background-color: #64748B; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;")
             return
 
-        device_id = getattr(device, "device_id", None) or (device.get("device_id") if isinstance(device, dict) else "Unknown")
-        display_name = getattr(device, "display_name", None) or (device.get("display_name") if isinstance(device, dict) else device_id)
-        status_name = getattr(device, "status_name", None) or (device.get("status_name") if isinstance(device, dict) else "Unknown")
-        status_color = getattr(device, "status_color", None) or (device.get("status_color") if isinstance(device, dict) else "#64748B")
-        description = getattr(device, "description", None) or (device.get("description") if isinstance(device, dict) else "")
-        last_update = getattr(device, "last_update", None) or (device.get("last_update") if isinstance(device, dict) else None)
-        material_batch = getattr(device, "material_batch", None) or (device.get("material_batch") if isinstance(device, dict) else "--")
-        feeding_time = getattr(device, "feeding_time", None) or (device.get("feeding_time") if isinstance(device, dict) else "--")
-        oee = getattr(device, "oee", None) or (device.get("oee") if isinstance(device, dict) else 0)
-        yield_rate = getattr(device, "yield_rate", None) or (device.get("yield_rate") if isinstance(device, dict) else 0)
-        input_count = getattr(device, "input_count", None) or (device.get("input_count") if isinstance(device, dict) else 0)
-        output_count = getattr(device, "output_count", None) or (device.get("output_count") if isinstance(device, dict) else 0)
-        cycle_time = getattr(device, "cycle_time", None) or (device.get("cycle_time") if isinstance(device, dict) else 0)
-        last_error = getattr(device, "last_error", None) or (device.get("last_error") if isinstance(device, dict) else None)
+        # Extract device properties
+        self._render_device_info(device, device_id)
+
+        # Render Gantt chart
+        self._render_gantt(state, device_id)
+
+    def _render_device_info(self, device: Any, device_id: str) -> None:
+        """Render device information section."""
+
+        def get_val(key: str, default: Any = None) -> Any:
+            if isinstance(device, dict):
+                return device.get(key, default)
+            return getattr(device, key, default)
+
+        display_name = get_val("display_name") or device_id
+        status_name = get_val("status_name") or "Unknown"
+        status_color = get_val("status_color") or "#64748B"
+        description = get_val("description") or ""
+        last_update = get_val("last_update")
+        material_batch = get_val("material_batch") or "--"
+        feeding_time = get_val("feeding_time") or "--"
+        oee = get_val("oee") or 0
+        yield_rate = get_val("yield_rate") or 0
+        input_count = get_val("input_count") or 0
+        output_count = get_val("output_count") or 0
+        cycle_time = get_val("cycle_time") or 0
+        last_error = get_val("last_error")
 
         self._title.setText(str(display_name))
         self._desc.setText(str(description) if description else "")
@@ -247,8 +279,9 @@ class RightPanelView:
         self._lbl_oee.setText(f"OEE: {oee_val:.1f}%")
         self._bar_oee.setValue(int(oee_val))
         bar_color = "#10B981" if oee_val > 85 else ("#F59E0B" if oee_val > 60 else "#EF4444")
+        bar_bg = "#334155" if self._current_theme == "dark" else "#E2E8F0"
         self._bar_oee.setStyleSheet(
-            f"QProgressBar {{ background-color: {'#334155' if self._current_theme == 'dark' else '#E2E8F0'}; border: none; border-radius: 4px; }} "
+            f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }} "
             f"QProgressBar::chunk {{ background-color: {bar_color}; border-radius: 4px; }}"
         )
 
@@ -256,7 +289,7 @@ class RightPanelView:
         self._lbl_yield.setText(f"Yield: {yield_val:.1f}%")
         self._bar_yield.setValue(int(yield_val))
         self._bar_yield.setStyleSheet(
-            f"QProgressBar {{ background-color: {'#334155' if self._current_theme == 'dark' else '#E2E8F0'}; border: none; border-radius: 4px; }} "
+            f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }} "
             f"QProgressBar::chunk {{ background-color: #3B82F6; border-radius: 4px; }}"
         )
 
@@ -271,13 +304,27 @@ class RightPanelView:
             self._error.setText("✅ Healthy")
             self._error.setStyleSheet("color: #10B981;")
 
+    def _render_gantt(self, state: Dict[str, Any], device_id: str) -> None:
+        """Render Gantt chart for the selected device."""
         gantt_data = select_gantt_data(state)
-        if gantt_data and device_id in gantt_data:
+
+        if gantt_data and device_id and device_id in gantt_data:
             now = datetime.now()
             start = now - timedelta(hours=24)
-            self._gantt.render_timeline({device_id: gantt_data[device_id]}, start, now)
+            segments = gantt_data[device_id]
+
+            self._gantt.render_from_segments(
+                device_code=device_id,
+                segments=segments,
+                start_time=start,
+                end_time=now,
+            )
         else:
-            self._gantt.render_timeline({})
+            # Show empty state
+            from ...viewmodels.gantt import GanttChartViewModel
+
+            empty_vm = GanttChartViewModel.empty(device_id or "N/A")
+            self._gantt.render(empty_vm)
 
 
 __all__ = ["RightPanelView"]
