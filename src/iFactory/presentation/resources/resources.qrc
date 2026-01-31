@@ -17,9 +17,7 @@
     <file>icon/expand.svg</file>
     <file>icon/expand-white.svg</file>
     <file>icon/logo.png</file>
-    <file>icon/open.svg</file>
     <file>icon/icon.ico</file>
-    <file>icon/open-white.svg</file>
     <file>icon/orders.svg</file>
     <file>icon/orders_layout.svg</file>
     <file>icon/orders_layout-white.svg</file>
@@ -98,5 +96,9 @@
     <file>icon/info.svg</file>
     <file>icon/moon.svg</file>
     <file>icon/sun.svg</file>
+    <file>icon/left_panel_close.svg</file>
+    <file>icon/left_panel_close-white.svg</file>
+    <file>icon/left_panel_open.svg</file>
+    <file>icon/left_panel_open-white.svg</file>
   </qresource>
 </RCC>

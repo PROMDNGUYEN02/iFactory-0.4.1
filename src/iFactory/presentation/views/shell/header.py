@@ -40,7 +40,6 @@ class HeaderView:
         if not self._container:
             return
 
-        # Set fixed height for header
         self._container.setFixedHeight(Layout.HEADER_HEIGHT)
         self._container.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
 
@@ -143,7 +142,7 @@ class HeaderView:
     def _update_toggle_icon(self) -> None:
         if not self._ui_toggle_btn:
             return
-        icon_name = "arrow_menu_open" if self._is_expanded else "arrow_menu_close"
+        icon_name = "left_panel_close" if self._is_expanded else "left_panel_open"
         icon_path = self._theme_manager.get_icon_path(f":/icon/{icon_name}.svg")
         self._ui_toggle_btn.setIcon(QIcon(icon_path))
 

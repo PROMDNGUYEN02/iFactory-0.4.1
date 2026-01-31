@@ -3,3 +3,5 @@ Get-ChildItem -Path . -Include __pycache__ -Recurse | Remove-Item -Recurse -Forc
 tree /F > structure.txt
 python -m iFactory
 .\venv\Scripts\activate
+pyside6-rcc "C:\python\iFactory 0.4.1\src\iFactory\presentation\resources\resources.qrc" -o "C:\python\iFactory 0.4.1\src\iFactory\presentation\resources\resources_rc.py"
+ls src\iFactory\presentation\resources\resources_rc.py
