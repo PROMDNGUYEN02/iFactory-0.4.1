@@ -1,84 +1,94 @@
-"""Pure Reducers for UI State."""
+"""
+Redux Reducers.
+Pure functions that take the current state and an action, returning a new state.
+"""
 
 from typing import Any, Dict
-from .actions import UIActionType, Action
+from .actions import UIActionType
 
-initial_state = {
-    "theme": "light",
-    "current_page": "daboard_page",
-    "selected_menu_index": 0,
-    "left_menu_expanded": False,
+# --- INITIAL STATE DEFINITION ---
+INITIAL_STATE = {
+    # Navigation
+    "current_page": "daboard_page",  # FORCE DEFAULT DASHBOARD
+    "left_menu_expanded": True,
     "right_panel_expanded": False,
+    "theme": "light",
+    # Selection
+    "selected_device_id": None,
+    "data_range_days": 1,
+    # Data
     "devices": {},
     "gantt_timeline": {},
-    "selected_device_id": None,
+    "factory_summary": {"output": 0, "yield_rate": 0, "lost": 0},
+    # System
     "is_loading": False,
     "last_error": None,
     "system_status": {"mssql": False, "sqlite": False},
-    "last_log_message": "Initializing...",
-    "data_range_days": 1,  # Default: 1 Day
+    "last_log_message": "System Ready",
 }
 
 
-def root_reducer(state: Dict[str, Any] = None, action: Action = None) -> Dict[str, Any]:
-    """Handles global UI state transitions."""
+def root_reducer(state: Dict[str, Any] = None, action: Any = None) -> Dict[str, Any]:
+    """
+    Main reducer combining all sub-reducers.
+    """
     if state is None:
-        state = initial_state
+        return INITIAL_STATE
 
-    new_state = state.copy()
-    action_type = action.type if hasattr(action, "type") else str(action)
-    payload = action.payload if hasattr(action, "payload") else {}
+    # Copy state to ensure immutability
+    next_state = state.copy()
+    payload = action.payload if action else None
+    type_ = action.type if action else None
 
-    if payload is None:
-        payload = {}
+    # --- UI Interactions ---
+    if type_ == UIActionType.THEME_CHANGED.value:
+        next_state["theme"] = payload["mode"]
 
-    if action_type == UIActionType.THEME_CHANGED.value:
-        new_state["theme"] = payload.get("mode", "light")
+    elif type_ == UIActionType.PAGE_NAVIGATED.value:
+        next_state["current_page"] = payload["page"]
+        # Note: menu_index logic is handled in View, state only stores page ID
 
-    elif action_type == UIActionType.PAGE_NAVIGATED.value:
-        new_state["current_page"] = payload.get("page", "daboard_page")
-        if "menu_index" in payload:
-            new_state["selected_menu_index"] = payload["menu_index"]
+    elif type_ == UIActionType.LEFT_MENU_TOGGLED.value:
+        next_state["left_menu_expanded"] = not next_state["left_menu_expanded"]
 
-    elif action_type == UIActionType.MENU_ITEM_SELECTED.value:
-        new_state["selected_menu_index"] = payload.get("menu_index", 0)
+    elif type_ == UIActionType.RIGHT_PANEL_TOGGLED.value:
+        next_state["right_panel_expanded"] = not next_state["right_panel_expanded"]
 
-    elif action_type == UIActionType.DEVICES_LOADED.value:
-        new_state["devices"] = payload
+    elif type_ == UIActionType.DEVICE_SELECTED.value:
+        next_state["selected_device_id"] = payload["id"]
+        next_state["right_panel_expanded"] = True  # Auto-open panel
 
-    elif action_type == UIActionType.GANTT_LOADED.value:
-        new_state["gantt_timeline"] = payload
+    elif type_ == UIActionType.SET_DATA_RANGE.value:
+        next_state["data_range_days"] = payload
 
-    elif action_type == UIActionType.LEFT_MENU_TOGGLED.value:
-        new_state["left_menu_expanded"] = not state.get("left_menu_expanded", True)
+    # --- Data Loading ---
+    elif type_ == UIActionType.DEVICES_LOADED.value:
+        # payload is expected to be a Dict of DeviceViewModels
+        next_state["devices"] = payload
+        next_state["is_loading"] = False
 
-    elif action_type == UIActionType.RIGHT_PANEL_TOGGLED.value:
-        new_state["right_panel_expanded"] = not state.get("right_panel_expanded", False)
+    elif type_ == UIActionType.GANTT_LOADED.value:
+        next_state["gantt_timeline"] = payload
 
-    elif action_type == UIActionType.SYSTEM_STATUS_UPDATED.value:
-        return {
-            **state,
-            "system_status": {"mssql": payload.get("mssql", False), "sqlite": payload.get("sqlite", False)},
-            "last_log_message": payload.get("message", state.get("last_log_message")),
-        }
+    elif type_ == UIActionType.LOADING_STARTED.value:
+        next_state["is_loading"] = True
 
-    elif action_type == UIActionType.DEVICE_SELECTED.value:
-        new_state["selected_device_id"] = payload.get("id")
+    elif type_ == UIActionType.LOADING_FINISHED.value:
+        next_state["is_loading"] = False
 
-    elif action_type == UIActionType.LOADING_STARTED.value:
-        new_state["is_loading"] = True
+    elif type_ == UIActionType.ERROR_OCCURRED.value:
+        next_state["last_error"] = payload["message"]
+        next_state["is_loading"] = False
 
-    elif action_type == UIActionType.LOADING_FINISHED.value:
-        new_state["is_loading"] = False
+    # --- System ---
+    elif type_ == UIActionType.SYSTEM_STATUS_UPDATED.value:
+        current_status = next_state.get("system_status", {})
+        new_status = current_status.copy()
+        new_status["mssql"] = payload.get("mssql", new_status.get("mssql"))
+        new_status["sqlite"] = payload.get("sqlite", new_status.get("sqlite"))
+        next_state["system_status"] = new_status
 
-    elif action_type == UIActionType.ERROR_OCCURRED.value:
-        new_state["last_error"] = payload.get("message")
+        if payload.get("message"):
+            next_state["last_log_message"] = payload["message"]
 
-    elif action_type == UIActionType.SET_DATA_RANGE.value:
-        # Payload is integer days (1, 7, 30, 90)
-        new_state["data_range_days"] = payload
-
-    return new_state
-
-
-__all__ = ["root_reducer"]
+    return next_state

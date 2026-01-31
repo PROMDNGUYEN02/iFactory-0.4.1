@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'main.ui'
+## Form generated from reading UI file 'mainMWoFIF.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.10.1
 ##
@@ -69,6 +69,51 @@ class Ui_MainWindow(object):
 
 
         self.gridLayout.addWidget(self.title_frame, 0, 0, 1, 1)
+
+        self.right_slide_menu_frame = QFrame(self.centralwidget)
+        self.right_slide_menu_frame.setObjectName(u"right_slide_menu_frame")
+        self.right_slide_menu_frame.setMaximumSize(QSize(16777215, 16777215))
+        self.right_slide_menu_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self.right_slide_menu_frame.setFrameShadow(QFrame.Shadow.Raised)
+        self.verticalLayout = QVBoxLayout(self.right_slide_menu_frame)
+        self.verticalLayout.setSpacing(0)
+        self.verticalLayout.setObjectName(u"verticalLayout")
+        self.verticalLayout.setContentsMargins(0, 0, 0, 0)
+
+        self.gridLayout.addWidget(self.right_slide_menu_frame, 0, 2, 2, 1)
+
+        self.left_slide_menu_frame = QFrame(self.centralwidget)
+        self.left_slide_menu_frame.setObjectName(u"left_slide_menu_frame")
+        self.left_slide_menu_frame.setEnabled(True)
+        sizePolicy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.left_slide_menu_frame.sizePolicy().hasHeightForWidth())
+        self.left_slide_menu_frame.setSizePolicy(sizePolicy)
+        self.left_slide_menu_frame.setMinimumSize(QSize(0, 0))
+        self.left_slide_menu_frame.setMaximumSize(QSize(16777215, 16777215))
+        self.left_slide_menu_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self.left_slide_menu_frame.setFrameShadow(QFrame.Shadow.Raised)
+        self.left_slide_menu_frame.setLineWidth(1)
+        self.verticalLayout_6 = QVBoxLayout(self.left_slide_menu_frame)
+        self.verticalLayout_6.setSpacing(0)
+        self.verticalLayout_6.setObjectName(u"verticalLayout_6")
+        self.verticalLayout_6.setContentsMargins(0, 0, 0, 0)
+        self.listWidget = QListWidget(self.left_slide_menu_frame)
+        self.listWidget.setObjectName(u"listWidget")
+        self.listWidget.setMaximumSize(QSize(16777215, 16777215))
+
+        self.verticalLayout_6.addWidget(self.listWidget)
+
+        self.listWidget_settings = QListWidget(self.left_slide_menu_frame)
+        self.listWidget_settings.setObjectName(u"listWidget_settings")
+        self.listWidget_settings.setMinimumSize(QSize(0, 0))
+        self.listWidget_settings.setMaximumSize(QSize(16777215, 40))
+
+        self.verticalLayout_6.addWidget(self.listWidget_settings)
+
+
+        self.gridLayout.addWidget(self.left_slide_menu_frame, 1, 0, 1, 1)
 
         self.stackedWidget = QStackedWidget(self.centralwidget)
         self.stackedWidget.setObjectName(u"stackedWidget")
@@ -666,51 +711,6 @@ class Ui_MainWindow(object):
 
         self.gridLayout.addWidget(self.stackedWidget, 0, 1, 2, 1)
 
-        self.right_slide_menu_frame = QFrame(self.centralwidget)
-        self.right_slide_menu_frame.setObjectName(u"right_slide_menu_frame")
-        self.right_slide_menu_frame.setMaximumSize(QSize(16777215, 16777215))
-        self.right_slide_menu_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        self.right_slide_menu_frame.setFrameShadow(QFrame.Shadow.Raised)
-        self.verticalLayout = QVBoxLayout(self.right_slide_menu_frame)
-        self.verticalLayout.setSpacing(0)
-        self.verticalLayout.setObjectName(u"verticalLayout")
-        self.verticalLayout.setContentsMargins(0, 0, 0, 0)
-
-        self.gridLayout.addWidget(self.right_slide_menu_frame, 0, 2, 2, 1)
-
-        self.left_slide_menu_frame = QFrame(self.centralwidget)
-        self.left_slide_menu_frame.setObjectName(u"left_slide_menu_frame")
-        self.left_slide_menu_frame.setEnabled(True)
-        sizePolicy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        sizePolicy.setHorizontalStretch(0)
-        sizePolicy.setVerticalStretch(0)
-        sizePolicy.setHeightForWidth(self.left_slide_menu_frame.sizePolicy().hasHeightForWidth())
-        self.left_slide_menu_frame.setSizePolicy(sizePolicy)
-        self.left_slide_menu_frame.setMinimumSize(QSize(0, 0))
-        self.left_slide_menu_frame.setMaximumSize(QSize(16777215, 16777215))
-        self.left_slide_menu_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        self.left_slide_menu_frame.setFrameShadow(QFrame.Shadow.Raised)
-        self.left_slide_menu_frame.setLineWidth(1)
-        self.verticalLayout_6 = QVBoxLayout(self.left_slide_menu_frame)
-        self.verticalLayout_6.setSpacing(0)
-        self.verticalLayout_6.setObjectName(u"verticalLayout_6")
-        self.verticalLayout_6.setContentsMargins(0, 0, 0, 0)
-        self.listWidget = QListWidget(self.left_slide_menu_frame)
-        self.listWidget.setObjectName(u"listWidget")
-        self.listWidget.setMaximumSize(QSize(16777215, 16777215))
-
-        self.verticalLayout_6.addWidget(self.listWidget)
-
-        self.listWidget_settings = QListWidget(self.left_slide_menu_frame)
-        self.listWidget_settings.setObjectName(u"listWidget_settings")
-        self.listWidget_settings.setMinimumSize(QSize(0, 0))
-        self.listWidget_settings.setMaximumSize(QSize(16777215, 40))
-
-        self.verticalLayout_6.addWidget(self.listWidget_settings)
-
-
-        self.gridLayout.addWidget(self.left_slide_menu_frame, 1, 0, 1, 1)
-
         MainWindow.setCentralWidget(self.centralwidget)
         self.right_slide_menu_frame.raise_()
         self.stackedWidget.raise_()
@@ -722,7 +722,7 @@ class Ui_MainWindow(object):
 
         self.retranslateUi(MainWindow)
 
-        self.stackedWidget.setCurrentIndex(0)
+        self.stackedWidget.setCurrentIndex(1)
 
 
         QMetaObject.connectSlotsByName(MainWindow)

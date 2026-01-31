@@ -1,6 +1,11 @@
-"""Selectors for querying the Redux Store."""
+"""
+Selectors for querying the Redux Store.
+Centralized access points for state to decouple structure from usage.
+"""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+# --- Primitives ---
 
 
 def select_theme(state: Dict[str, Any]) -> str:
@@ -15,7 +20,7 @@ def select_all_devices(state: Dict[str, Any]) -> Dict[str, Any]:
     return state.get("devices", {})
 
 
-def select_gantt_timeline(state: Dict[str, Any]) -> Dict[str, list]:
+def select_gantt_timeline(state: Dict[str, Any]) -> Dict[str, List[Any]]:
     return state.get("gantt_timeline", {})
 
 
@@ -25,6 +30,9 @@ def select_is_loading(state: Dict[str, Any]) -> bool:
 
 def select_last_error(state: Dict[str, Any]) -> Optional[str]:
     return state.get("last_error")
+
+
+# --- UI State ---
 
 
 def select_left_menu_expanded(state: Dict[str, Any]) -> bool:
@@ -43,8 +51,19 @@ def select_data_range_days(state: Dict[str, Any]) -> int:
     return state.get("data_range_days", 1)
 
 
+def select_system_status(state: Dict[str, Any]) -> Dict[str, Any]:
+    return state.get("system_status", {"mssql": False, "sqlite": False})
+
+
+def select_last_log_message(state: Dict[str, Any]) -> str:
+    return state.get("last_log_message", "System Ready")
+
+
+# --- Derived / Computed Selectors ---
+
+
 def select_factory_summary(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Calculate factory statistics from device data."""
+    """Calculate aggregated factory statistics from device data."""
     devices = state.get("devices", {})
 
     total_in = sum(getattr(d, "input_count", 0) for d in devices.values())
@@ -61,34 +80,47 @@ def select_factory_summary(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def select_selected_device_data(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Get detailed data for selected device."""
+    """Get fully resolved presentation data for the selected device."""
     selected_id = state.get("selected_device_id")
     if not selected_id:
         return None
 
     device = state.get("devices", {}).get(selected_id)
     if not device:
+        # Fallback for loading state or invalid ID
         return {
             "id": selected_id,
-            "status": "Loading...",
-            "color": "#888888",
-            "inputs": 0,
-            "outputs": 0,
-            "error": "...",
+            "display_name": selected_id,
+            "status_display": "Loading...",
+            "status_color": "#888888",
+            "input_count": 0,
+            "output_count": 0,
+            "last_error": None,
+            "oee": 0.0,
+            "yield_rate": 0.0,
+            "cycle_time": 0.0,
             "last_update": None,
+            "material_batch": "--",
+            "feeding_time": "--",
+            "description": "",
         }
 
+    # Extract all necessary fields safely
     return {
         "id": selected_id,
-        "status": getattr(device, "status_display", "Unknown"),
-        "color": getattr(device, "status_color", "#888888"),
-        "inputs": getattr(device, "input_count", 0),
-        "outputs": getattr(device, "output_count", 0),
-        "error": getattr(device, "last_error", "None"),
-        "oee": getattr(device, "oee", 0),
-        "yield_rate": getattr(device, "yield_rate", 0),
+        "display_name": getattr(device, "display_name", selected_id),
+        "status_display": getattr(device, "status_display", "Unknown"),
+        "status_color": getattr(device, "status_color", "#888888"),
+        "input_count": getattr(device, "input_count", 0),
+        "output_count": getattr(device, "output_count", 0),
+        "last_error": getattr(device, "last_error", None),
+        "oee": getattr(device, "oee", 0.0),
+        "yield_rate": getattr(device, "yield_rate", 0.0),
         "cycle_time": getattr(device, "cycle_time", 0.0),
         "last_update": getattr(device, "last_update", None),
+        "material_batch": getattr(device, "material_batch", "--"),
+        "feeding_time": getattr(device, "feeding_time", "--"),
+        "description": getattr(device, "description", ""),
     }
 
 
@@ -102,7 +134,9 @@ __all__ = [
     "select_left_menu_expanded",
     "select_right_panel_expanded",
     "select_selected_device_id",
+    "select_data_range_days",
+    "select_system_status",
+    "select_last_log_message",
     "select_factory_summary",
     "select_selected_device_data",
-    "select_data_range_days",
 ]
