@@ -1,5 +1,6 @@
 """
 Right Panel Component - Detailed Device View.
+Refactored for Dynamic Theming and Maintainability.
 """
 
 from datetime import datetime, timedelta
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QProgres
 from ...constants.ui_constants import UIConstants
 from ...ui_state.selectors import select_right_panel_expanded, select_selected_device_data, select_gantt_timeline
 from ..widgets.gantt_canvas import GanttCanvasWidget
+from ...resources.themes.theme_manager import theme_manager
 
 
 class RightPanelView:
@@ -18,11 +20,11 @@ class RightPanelView:
     Manages the right-side details panel.
     """
 
-    def __init__(self, container_frame: QFrame, main_window, controller):  # Passed for parenting widgets
+    def __init__(self, container_frame: QFrame, main_window, controller):
         self._frame = container_frame
         self._controller = controller
+        self._current_theme_mode = "light"
 
-        # Create Layout if missing
         if not self._frame.layout():
             QVBoxLayout(self._frame)
         self._layout = self._frame.layout()
@@ -30,7 +32,6 @@ class RightPanelView:
         self._setup_ui(main_window)
 
     def _setup_ui(self, main_window):
-        # Clear existing
         self._clear_layout()
 
         self._layout.setContentsMargins(15, 20, 15, 20)
@@ -49,29 +50,26 @@ class RightPanelView:
 
         # Description
         self._desc = QLabel("")
-        self._desc.setStyleSheet("font-size: 12px; font-style: italic; color: #555;")
         self._desc.setWordWrap(True)
         self._layout.addWidget(self._desc)
 
         # Last Update
         self._last_update = QLabel("Last Update: --")
-        self._last_update.setStyleSheet("font-size: 11px; margin-bottom: 5px; color: #808080;")
         self._layout.addWidget(self._last_update)
 
         # Material Info
-        mat_frame = QFrame()
-        mat_frame.setStyleSheet("background-color: #f5f5f5; border-radius: 6px; padding: 6px;")
-        mat_layout = QVBoxLayout(mat_frame)
+        self._mat_frame = QFrame()
+        mat_layout = QVBoxLayout(self._mat_frame)
         mat_layout.setContentsMargins(5, 5, 5, 5)
 
         self._batch = QLabel("Batch: --")
-        self._batch.setStyleSheet("font-weight: bold; color: #34495e;")
+        self._batch.setStyleSheet("font-weight: bold;")
         self._fed_time = QLabel("Fed: --")
-        self._fed_time.setStyleSheet("font-size: 10px; color: #7f8c8d;")
+        self._fed_time.setStyleSheet("font-size: 10px;")
 
         mat_layout.addWidget(self._batch)
         mat_layout.addWidget(self._fed_time)
-        self._layout.addWidget(mat_frame)
+        self._layout.addWidget(self._mat_frame)
 
         # OEE & Yield
         self._lbl_oee = QLabel("OEE: 0%")
@@ -91,9 +89,9 @@ class RightPanelView:
         self._layout.addWidget(self._bar_yield)
 
         # Details Box
-        details_frame = QFrame()
-        details_frame.setObjectName("frame_details")
-        details_layout = QVBoxLayout(details_frame)
+        self._details_frame = QFrame()
+        self._details_frame.setObjectName("frame_details")
+        details_layout = QVBoxLayout(self._details_frame)
         details_layout.setContentsMargins(10, 10, 10, 10)
 
         self._inputs = QLabel("Inputs: 0")
@@ -103,12 +101,12 @@ class RightPanelView:
         details_layout.addWidget(self._inputs)
         details_layout.addWidget(self._outputs)
         details_layout.addWidget(self._cycle)
-        self._layout.addWidget(details_frame)
+        self._layout.addWidget(self._details_frame)
 
         # Gantt
-        lbl_gantt = QLabel("Timeline (Last 24h)")
-        lbl_gantt.setStyleSheet("font-weight: bold; margin-top: 10px; color: #555;")
-        self._layout.addWidget(lbl_gantt)
+        self._lbl_gantt = QLabel("Timeline (Last 24h)")
+        self._lbl_gantt.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        self._layout.addWidget(self._lbl_gantt)
 
         self._gantt = GanttCanvasWidget(main_window, is_compact=True)
         self._gantt.setFixedHeight(60)
@@ -121,6 +119,9 @@ class RightPanelView:
 
         self._layout.addStretch()
 
+        # Apply initial styles
+        self._apply_theme_styles("light")
+
     def _clear_layout(self):
         while self._layout.count():
             item = self._layout.takeAt(0)
@@ -128,15 +129,42 @@ class RightPanelView:
             if widget:
                 widget.deleteLater()
 
+    def _apply_theme_styles(self, mode: str):
+        """Dynamic stylesheet application for Dark/Light mode."""
+        is_dark = mode == "dark"
+        text_primary = "#FFFFFF" if is_dark else "#000000"
+        text_secondary = "#B0B0B0" if is_dark else "#555555"
+        text_tertiary = "#808080" if is_dark else "#808080"
+        bg_card = "#2d2d2d" if is_dark else "#f5f5f5"
+
+        # Labels
+        self._title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {text_primary};")
+        self._desc.setStyleSheet(f"font-size: 12px; font-style: italic; color: {text_secondary};")
+        self._last_update.setStyleSheet(f"font-size: 11px; margin-bottom: 5px; color: {text_tertiary};")
+        self._lbl_gantt.setStyleSheet(f"font-weight: bold; margin-top: 10px; color: {text_secondary};")
+
+        # Material Box
+        self._mat_frame.setStyleSheet(f"background-color: {bg_card}; border-radius: 6px; padding: 6px;")
+        self._batch.setStyleSheet(f"font-weight: bold; color: {text_primary};")
+        self._fed_time.setStyleSheet(f"font-size: 10px; color: {text_tertiary};")
+
+        # Details Box (relying on object name styling from main.qss usually, but enforced here for safety)
+        # self._details_frame styling is handled by global stylesheet via object name "frame_details"
+
     def render(self, state: dict):
         """Update right panel content."""
         is_expanded = select_right_panel_expanded(state)
+
+        # Check theme change
+        new_theme = state.get("theme", "light")
+        if new_theme != self._current_theme_mode:
+            self._current_theme_mode = new_theme
+            self._apply_theme_styles(new_theme)
 
         # Animate/Set Width
         width = UIConstants.RIGHT_PANEL_WIDTH_EXPANDED if is_expanded else UIConstants.RIGHT_PANEL_WIDTH_COLLAPSED
         self._frame.setFixedWidth(width)
 
-        # Don't update content if collapsed (Optimization)
         if not is_expanded:
             return
 

@@ -1,210 +1,144 @@
-/* ===== BASE ===== */
-QMainWindow, QWidget#centralwidget {
-    background: ${app.bg};
-    color: ${app.fg};
+/* ===== BASE & FRAMES ===== */
+QMainWindow, QWidget#centralwidget { background: ${app.bg}; color: ${app.fg}; }
+
+QStackedWidget#stackedWidget, QWidget#orders_page, QWidget#daboard_page {
+    background: ${stack.bg}; border: none;
 }
 
-/* ===== STACKED WIDGET & PAGES ===== */
-QStackedWidget#stackedWidget,
-QWidget#orders_page,
-QWidget#daboard_page {
-    background: ${stack.bg};
-    border: none;
-}
-
-/* ===== PAGE FRAMES ===== */
-QFrame#daboard_top_frame,
-QFrame#daboard_midle_frame_1,
-QFrame#daboard_midle_frame_2,
-QFrame#daboard_bottom_frame,
-QFrame#orders_top_frame,
-QFrame#orders_midle_frame_1,
-QFrame#orders_midle_frame_2,
-QFrame#orders_bottom_frame {
-    background: ${frame.bg};
-    border: none;
-    border-bottom: 1px solid ${border};
-    margin: 0;
-}
-
-/* ===== SLIDE MENUS ===== */
-QFrame#title_frame,
-QFrame#left_slide_menu_frame,
-QStatusBar#statusbar {
-    background: ${slide.bg};
-    border: none;
+/* Khung viền các trang */
+QFrame#daboard_top_frame, QFrame#daboard_midle_frame_1, QFrame#daboard_midle_frame_2,
+QFrame#daboard_bottom_frame, QFrame#orders_top_frame, QFrame#orders_midle_frame_1,
+QFrame#orders_midle_frame_2, QFrame#orders_bottom_frame {
+    background: ${frame.bg}; border: none; border-bottom: 1px solid ${border}; margin: 0;
 }
 
 QFrame#daboard_midle_frame_1 {
-    background: ${frame.bg};
-    background-repeat: no-repeat;
-    background-position: center;
-    border: none;
-    margin: 0;
+    background: ${frame.bg}; background-repeat: no-repeat; background-position: center;
 }
 
-/* ===== LABELS ===== */
-QLabel#title_label,
-QLabel#title_icon,
-QLabel#pageTitle {
-    background: transparent;
-    color: ${app.fg};
-    font-family: ${font.family};
+/* ===== SLIDE MENUS & HEADER ===== */
+QFrame#title_frame, QFrame#left_slide_menu_frame, QStatusBar#statusbar {
+    background: ${slide.bg}; border: none;
 }
 
-QLabel#pageTitle { font-size: 20px; }
+QFrame#left_slide_menu_frame { border-right: 1px solid ${border}; }
+QFrame#title_frame { border-bottom: 1px solid ${border}; }
 
-/* ===== LIST WIDGETS (MENU) ===== */
-QListWidget,
-QListWidget::viewport,
-QListView#listView {
-    background: transparent;
-    border: none;
+/* ===== LABELS & LOGO ===== */
+QLabel#title_label, QLabel#pageTitle {
+    background: transparent; color: ${app.fg}; font-family: ${font.family};
+}
+QLabel#pageTitle { font-size: 20px; font-weight: 600; }
+
+/* [FIX 2] LOGO QUÁ NHỎ -> Tăng kích thước tối thiểu */
+QLabel#title_icon {
+    min-width: 32px;
+    min-height: 32px;
+    padding-left: 10px; /* Căn trái cho đẹp với layout */
+}
+
+/* ======================================================= */
+/* [FIX 3] ĐỒNG BỘ HÓA HOÀN TOÀN (ALIGNMENT)              */
+/* Nguyên tắc: Menu Collapsed Width = 60px                */
+/* Icon Box = 40px. Margin Left = 10px.                   */
+/* ======================================================= */
+
+/* --- 1. SIDEBAR LIST --- */
+QListWidget, QListView#listView {
+    background: transparent; border: none; color: ${app.fg}; outline: none; margin-top: 5px;
+}
+
+/* Trạng thái MỞ RỘNG (Expanded) */
+QListWidget::item {
+    height: 40px; /* Chiều cao chuẩn */
+    margin: 4px 10px; /* Margin trái phải 10px */
+    border-radius: 8px;
+    padding-left: 10px; /* Icon cách lề trái của Box */
     color: ${app.fg};
     font: ${menu.fontSize} ${font.family};
-    outline: none;
 }
 
-/* --- LOGIC CHỐNG NHẢY ICON (BÙ TRỪ 10PX) --- */
-
-/* 1. TRẠNG THÁI MẶC ĐỊNH (KHÔNG CHỌN) */
-QListWidget::item,
-QListView#listView::item {
-    height: ${menu.itemH};
-    margin: 2px 0px; 
-    
-    /* Border 0 + Padding 10 = Tổng 10px */
-    border: none;       
-    padding-left: 10px; 
-}
-
-/* 2. TRẠNG THÁI ĐANG CHỌN (SELECTED) */
-QListWidget::item:selected,
-QListView#listView::item:selected {
-    background: transparent;  
-    color: #3498db;           
-    font-weight: bold;
-
-    /* Border 5 + Padding 5 = Tổng 10px */
-    border-left: 5px solid #3498db; 
-    padding-left: 5px; 
-}
-
-/* 3. HIỆU ỨNG HOVER */
-QListWidget::item:hover,
-QListView#listView::item:hover {
-    background: ${hover};
-    color: #3498db;
-}
-
-/* --- XỬ LÝ KHI MENU THU NHỎ (COLLAPSED) --- */
-QListWidget[collapsed="true"] {
-    width: ${menu.widthCollapsed};
-}
+/* Trạng thái THU NHỎ (Collapsed) */
+QListWidget[collapsed="true"] { width: ${menu.widthCollapsed}; }
 
 QListWidget[collapsed="true"]::item {
-    margin: 0;
-    padding: 8px 0;
-    border-radius: ${radius};
-    text-align: center;
-    /* Khi thu nhỏ, ta dùng border trong suốt để giữ chỗ, tránh nhảy khi hover/select */
-    border-left: 5px solid transparent; 
-    padding-left: 0;
+    padding-left: 0px; /* Bỏ padding để text-align center hoạt động chuẩn */
+    text-align: center; /* Căn giữa Icon */
+    margin: 4px 10px; /* [QUAN TRỌNG] Giữ margin 10px để thẳng hàng với Header */
+    
+    /* Ẩn Text */
+    color: transparent;
+    font-size: 1px;
 }
 
-QListWidget[collapsed="true"]::item:selected {
-    border-left: 5px solid #3498db;
+/* States */
+QListWidget::item:hover { background-color: ${hover}; }
+QListWidget::item:selected {
+    background-color: ${selected}; color: ${selected.text}; font-weight: 600;
 }
-
-QListWidget[collapsed="true"]::item:hover {
-    background: ${icon.hover};
-    border: 1px solid ${icon.border};
-    /* Giữ lại border-left để không bị ghi đè */
-    border-left: 5px solid transparent; 
-}
+QListWidget[collapsed="true"]::item:selected { color: transparent; }
 
 
-/* ===== TOGGLE BUTTONS (OPEN/CLOSE) ===== */
-
+/* --- 2. HEADER TOGGLE BUTTON (Nút 3 gạch/Mũi tên) --- */
+/* [FIX 1] Box chứa icon quá to -> Ép cứng kích thước 40x40 */
 QPushButton#menu_toggle_btn {
     background: transparent;
     border: none;
+    border-radius: 8px;
     color: ${app.fg};
-    font-family: ${font.family};
+    
+    /* Kích thước Box chuẩn 40x40 */
+    min-width: 40px;
+    max-width: 40px;
+    min-height: 40px;
+    max-height: 40px;
+    
+    /* [QUAN TRỌNG] Căn lề 10px để thẳng tắp với Sidebar dưới */
+    margin-left: 10px; 
+    margin-right: 10px; 
+    margin-top: 5px;
+    margin-bottom: 5px;
+    
+    /* Icon nằm giữa Box */
+    qproperty-iconSize: 24px 24px; 
+    text-align: center;
 }
 
-/* Nút OPEN (Khi menu đang đóng) */
-QPushButton#menu_open_btn {
-    background: transparent;
-    border: none;
-    qproperty-iconSize: 20px 20px;
-}
+QPushButton#menu_toggle_btn:hover { background-color: ${hover}; }
 
-QPushButton#menu_open_btn:hover {
-    background: ${hover};
-    border-radius: ${radius};
-}
 
-/* Nút CLOSE (Khi menu đang mở) - MÀU NHẸ DỊU */
-QPushButton#menu_close_btn {
-    /* Đỏ rất nhạt (Alpha 0.1) */
-    background-color: rgba(231, 76, 60, 0.1); 
-    border: 1px solid transparent;
-    border-radius: 4px;
-    margin: 4px; 
-    qproperty-iconSize: 20px 20px;
+/* --- WINDOW CONTROLS (Nút góc phải trên cùng) --- */
+QPushButton#minimize_window_button, QPushButton#restore_window_button, QPushButton#close_window_button {
+    background: transparent; border: none; border-radius: 4px;
+    min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px;
+    margin: 2px;
 }
+QPushButton#minimize_window_button:hover, QPushButton#restore_window_button:hover { background-color: ${hover}; }
+QPushButton#close_window_button:hover { background-color: #E81123; color: white; }
 
-QPushButton#menu_close_btn:hover {
-    /* Đậm hơn xíu khi hover */
-    background-color: rgba(231, 76, 60, 0.2); 
-    border: 1px solid rgba(231, 76, 60, 0.3); 
-}
-
-/* ===== TOOLTIP ===== */
+/* ===== SETTINGS & EXTRAS ===== */
 QToolTip {
-    background-color: #333333;
-    color: #ffffff;
-    border: 1px solid #555555;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 11px;
+    background-color: ${tooltip.bg}; color: ${tooltip.text}; border: 1px solid ${tooltip.border};
+    padding: 5px; border-radius: 4px;
 }
 
-/* ===== RIGHT PANEL & DASHBOARD ===== */
-QFrame#right_slide_menu_frame {
-    background: ${slide.bg};
-    border-left: 1px solid ${border};
-    border-radius: 12px 0 0 12px;
+/* [FIX 4] Settings bị che -> Đảm bảo list Settings không có nền thừa */
+QListWidget#listWidget_settings {
+    margin-bottom: 10px; /* Cách đáy 1 chút */
 }
 
 QFrame#frame_details {
-    background: ${stack.bg};
-    border: 1px solid ${border};
-    border-radius: 8px;
-    padding: 10px;
+    background: ${stack.bg}; border: 1px solid ${border}; border-radius: 8px; padding: 10px;
 }
-
 QProgressBar {
-    background-color: ${stack.bg};
-    border: none;
-    border-radius: 4px;
-    height: 12px;
+    background-color: ${hover}; border: none; border-radius: 4px; height: 8px; text-align: center;
 }
-QProgressBar::chunk {
-    border-radius: 4px;
+QProgressBar::chunk { background-color: ${status.running}; border-radius: 4px; }
+QTableView {
+    background: ${stack.bg}; border: 1px solid ${border}; gridline-color: ${border};
+    selection-background-color: ${selected}; selection-color: ${selected.text};
 }
-
-QTableView#tableView {
-    background: ${stack.bg};
-    border: none;
-    color: ${app.fg};
-    gridline-color: ${border};
-}
-
-QTableView#tableView QHeaderView::section {
-    background: ${frame.bg};
-    color: ${app.fg};
-    border: 1px solid ${border};
-    padding: 4px;
+QHeaderView::section {
+    background: ${frame.bg}; border: none; border-bottom: 1px solid ${border};
+    border-right: 1px solid ${border}; padding: 6px; font-weight: bold;
 }

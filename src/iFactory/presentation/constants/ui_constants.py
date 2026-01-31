@@ -1,75 +1,91 @@
 """
-Presentation: UI Metrics and Theme configuration.
-Now uses ThemeManager for centralized color resolution.
+UI Constants - Single Source of Truth for Layout, Timing, and Styling.
 """
 
 from typing import Dict, Final
-from ..resources.themes.theme_manager import theme_manager
 
 
 class UIConstants:
-    """UI dimension and layout constants."""
+    """Global layout dimensions and timing constants."""
 
-    MENU_EXPANDED_WIDTH: Final[int] = 240
-    MENU_COLLAPSED_WIDTH: Final[int] = 50
-    RIGHT_PANEL_WIDTH_EXPANDED: Final[int] = 320
+    # Navigation & Shell
+    MENU_COLLAPSED_WIDTH: Final[int] = 60
+    MENU_EXPANDED_WIDTH: Final[int] = 200
     RIGHT_PANEL_WIDTH_COLLAPSED: Final[int] = 0
-    DEFAULT_FONT_SIZE: Final[int] = 12
-    ANIMATION_DURATION_MS: Final[int] = 300
-    FAST_REFRESH_MS: Final[int] = 3000
-    SLOW_REFRESH_MS: Final[int] = 5000
+    RIGHT_PANEL_WIDTH_EXPANDED: Final[int] = 350
+
+    # Animation Durations (ms)
+    ANIMATION_DURATION: Final[int] = 300
+
+    # Polling Intervals (ms)
+    POLL_INTERVAL_DEVICE: Final[int] = 3000
+    POLL_INTERVAL_GANTT: Final[int] = 10000
+
+    # Legacy alias for backward compatibility
+    FAST_REFRESH_MS = POLL_INTERVAL_DEVICE
 
 
 class StatusColors:
     """
-    Status mappings.
-    Colors are now retrieved dynamically from ThemeManager.
+    Centralized Status Color Definitions.
+    Ensures consistency between Legend, Canvas, and Gantt charts.
     """
 
-    UNKNOWN: Final[int] = 0
-    RUNNING: Final[int] = 1
-    SHUTDOWN: Final[int] = 2
-    STOPPED: Final[int] = 3
-    MAINTENANCE: Final[int] = 4
-    ALARM: Final[int] = 5
+    # Status Codes (Integer Constants)
+    # Required for Presenter logic relying on class attributes
+    UNKNOWN_CODE: Final[int] = 0
+    RUNNING_CODE: Final[int] = 1
+    SHUTDOWN_CODE: Final[int] = 2
+    STOPPED_CODE: Final[int] = 3
+    MAINTENANCE_CODE: Final[int] = 4
+    ALARM_CODE: Final[int] = 5
 
-    STATUS_NAMES: Final[Dict[int, str]] = {
-        0: "Unknown",
-        1: "Running",
-        2: "Shutdown",
-        3: "Stopped",
-        4: "Maintenance",
-        5: "Alarm",
+    # Hex Color Codes (Visual Representation)
+    UNKNOWN: Final[str] = "#9E9E9E"  # Gray
+    RUNNING: Final[str] = "#3bb806"  # Green
+    SHUTDOWN: Final[str] = "#555555"  # Dark Gray
+    STOPPED: Final[str] = "#FFC107"  # Amber/Yellow (Warning)
+    MAINTENANCE: Final[str] = "#38c0bf"  # Cyan/Teal
+    ALARM: Final[str] = "#bd1e15"  # Red
+
+    # Aliases for different naming conventions
+    IDLE: Final[str] = STOPPED
+    TEST: Final[str] = MAINTENANCE
+    ERROR: Final[str] = ALARM
+    OFFLINE: Final[str] = UNKNOWN
+
+    # Mapping for integer status codes (Domain Enum -> Color)
+    _CODE_MAP: Final[Dict[int, str]] = {
+        RUNNING_CODE: RUNNING,
+        SHUTDOWN_CODE: SHUTDOWN,
+        STOPPED_CODE: STOPPED,
+        MAINTENANCE_CODE: MAINTENANCE,
+        ALARM_CODE: ALARM,
+        UNKNOWN_CODE: UNKNOWN,
     }
 
-    # Mapping to keys in variables.json
-    _KEYS: Final[Dict[int, str]] = {
-        0: "status.unknown",
-        1: "status.running",
-        2: "status.shutdown",
-        3: "status.stopped",
-        4: "status.maintenance",
-        5: "status.alarm",
+    # Mapping for integer status codes (Domain Enum -> Name)
+    _NAME_MAP: Final[Dict[int, str]] = {
+        RUNNING_CODE: "Running",
+        SHUTDOWN_CODE: "Shutdown",
+        STOPPED_CODE: "Stopped",
+        MAINTENANCE_CODE: "Maintenance",
+        ALARM_CODE: "Alarm",
+        UNKNOWN_CODE: "Unknown",
     }
 
     @classmethod
     def get_color(cls, status_code: int) -> str:
         """
-        Get dynamic color from ThemeManager based on current app state.
-        NO THEME ARGUMENT NEEDED HERE.
+        Returns the hex color string for a given integer status code.
+        Defaults to OFFLINE color if code is unknown.
         """
-        key = cls._KEYS.get(status_code, "status.unknown")
-        return theme_manager.get_color(key)
+        return cls._CODE_MAP.get(int(status_code), cls.OFFLINE)
 
     @classmethod
     def get_name(cls, status_code: int) -> str:
-        return cls.STATUS_NAMES.get(status_code, "Unknown")
-
-
-# Wrapper functions for backward compatibility if needed
-def get_ui_color(status_code: int) -> str:
-    return StatusColors.get_color(status_code)
-
-
-def get_status_display_name(status_code: int) -> str:
-    return StatusColors.get_name(status_code)
+        """
+        Returns the display name for a given integer status code.
+        Defaults to 'Unknown' if code is missing.
+        """
+        return cls._NAME_MAP.get(int(status_code), "Unknown")

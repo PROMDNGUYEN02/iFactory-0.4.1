@@ -1,16 +1,19 @@
 """
 UI Dependency Injection Container.
-Responsible for wiring the Presentation Layer graph.
+Composition Root for the Presentation Layer.
+Handles Async Lifecycle, Dependency Wiring, and Graceful Shutdown.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from threading import Thread
+from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import QObject, QTimer
 
+# Architecture Components
 from ..ui_state.store import Store
 from ..ui_state.reducers import root_reducer
 from ..presenters.device_presenter import DevicePresenter
@@ -28,27 +31,59 @@ logger = logging.getLogger(__name__)
 
 class UIContainer(QObject):
     """
-    Composition Root for the Presentation Layer.
+    Orchestrates the creation and destruction of UI components.
+    Ensures Presentation Layer is decoupled from Infrastructure at runtime.
     """
 
     def __init__(self, app_container: "AppContainer"):
         super().__init__()
         self._app_container = app_container
 
-        # State
-        self._store: Store | None = None
+        # Lifecycle Flags
+        self._is_initialized = False
+        self._initial_load_triggered = False
 
-        # Views & Controllers
-        self._main_view: MainView | None = None
-        self._main_controller: MainController | None = None
-        self._device_controller: DeviceController | None = None
-        self._gantt_controller: GanttController | None = None
+        # Component Registry
+        self._store: Optional[Store] = None
+        self._main_view: Optional[MainView] = None
+
+        # Controllers
+        self._main_controller: Optional[MainController] = None
+        self._device_controller: Optional[DeviceController] = None
+        self._gantt_controller: Optional[GanttController] = None
+
+        # Background Tasks
+        self._init_task: Optional[asyncio.Task] = None
 
     def initialize(self) -> None:
-        """Initialize and wire components."""
-        logger.info("[UIContainer] Initializing Presentation Layer...")
+        """
+        Bootstraps the UI layer.
+        Idempotent: Safe to call multiple times (subsequent calls are ignored).
+        """
+        if self._is_initialized:
+            logger.debug("[UIContainer] Already initialized. Skipping.")
+            return
 
-        # 1. Setup State Store
+        logger.info("[UIContainer] Bootstrapping Presentation Layer...")
+
+        try:
+            self._init_state_store()
+            self._init_controllers()
+            self._init_main_view()
+
+            self._is_initialized = True
+
+            # Fail-safe: Schedule data load if ApplicationRunner doesn't trigger it explicitly
+            QTimer.singleShot(100, self._schedule_initial_data_load)
+
+            logger.info("[UIContainer] Initialization successful.")
+
+        except Exception as e:
+            logger.critical(f"[UIContainer] Initialization FAILED: {e}", exc_info=True)
+            raise
+
+    def _init_state_store(self):
+        """Setup Redux-style State Store with initial defaults."""
         initial_state = {
             "theme": "light",
             "current_page": "daboard_page",
@@ -60,14 +95,18 @@ class UIContainer(QObject):
             "selected_menu_index": 0,
             "is_loading": False,
             "last_error": None,
+            "data_range_days": 1,
+            "factory_summary": {"output": 0, "yield_rate": 0.0},
         }
         self._store = Store(initial_state, {"root": root_reducer})
 
-        # 2. Setup Presenters (Pure Transformers)
+    def _init_controllers(self):
+        """Wire Controllers with Presenters and Use Cases (via AppFacade)."""
+        # Pure Logic Transformers
         device_presenter = DevicePresenter()
         gantt_presenter = GanttPresenter()
 
-        # 3. Setup Controllers (Orchestrators)
+        # Business Logic Coordinators
         self._main_controller = MainController(store=self._store)
 
         self._device_controller = DeviceController(
@@ -82,67 +121,96 @@ class UIContainer(QObject):
             store=self._store,
         )
 
-        # 4. Setup Main View
+    def _init_main_view(self):
+        """Instantiate the Main Window Shell."""
         self._main_view = MainView(
             store=self._store,
             controller=self._main_controller,
         )
 
-        # 5. Kickoff Lifecycle
-        QTimer.singleShot(100, self._setup_initial_view)
+    def schedule_deferred_data_load(self) -> None:
+        """Public method to trigger data loading from external runners."""
+        self._schedule_initial_data_load()
 
-        logger.info("[UIContainer] Presentation Layer initialized.")
-
-    def _setup_initial_view(self) -> None:
-        """Finalize view configuration after loop start."""
-        if self._main_view is None:
+    def _schedule_initial_data_load(self) -> None:
+        """
+        Bridge method to trigger async data loading.
+        Smartly chooses between existing Event Loop or Background Thread.
+        Idempotent: Guarantees only one execution per session.
+        """
+        if self._initial_load_triggered:
+            # Prevents race condition between QTimer and ApplicationRunner
             return
 
+        self._initial_load_triggered = True
+
         try:
-            # Defensive coding against specific UI implementation details
-            if hasattr(self._main_view, "ui"):
-                if hasattr(self._main_view.ui, "listWidget"):
-                    self._main_view.ui.listWidget.setCurrentRow(0)
-                if hasattr(self._main_view.ui, "stackedWidget"):
-                    self._main_view.ui.stackedWidget.setCurrentIndex(0)
+            # 1. Try to find a running asyncio loop (e.g. qasync)
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
 
-            # Schedule initial data fetch
-            QTimer.singleShot(500, self._trigger_data_load)
-
-        except Exception as e:
-            logger.warning(f"Could not set initial view state: {e}")
-
-    def _trigger_data_load(self) -> None:
-        """Bridge sync timer to async loader."""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self._load_all_data())
+            if loop and loop.is_running():
+                # Best Case: We are integrated with Qt Loop (qasync)
+                self._init_task = asyncio.ensure_future(self._load_initial_data())
             else:
-                loop.run_until_complete(self._load_all_data())
-        except Exception as e:
-            logger.debug(f"Data load scheduling failed: {e}")
+                # Fallback Case: No async loop found.
+                # CRITICAL: Do NOT block the UI thread. Spawn a background thread.
+                logger.info("[UIContainer] Using background thread for data loading (AsyncIO loop not detected).")
 
-    async def _load_all_data(self) -> None:
-        """Execute initial data loading use cases."""
+                def _background_loader():
+                    try:
+                        asyncio.run(self._load_initial_data())
+                    except Exception as ex:
+                        logger.error(f"[UIContainer] Background worker failed: {ex}")
+
+                worker_thread = Thread(target=_background_loader, daemon=True)
+                worker_thread.start()
+
+        except Exception as e:
+            logger.error(f"[UIContainer] Failed to schedule data load: {e}")
+            # Reset flag to allow retry on error if needed
+            self._initial_load_triggered = False
+
+    async def _load_initial_data(self) -> None:
+        """Execute the initial data fetch sequence."""
+        logger.info("[UIContainer] Starting initial data fetch...")
         try:
+            tasks = []
             if self._device_controller:
-                await self._device_controller.refresh_all_devices()
+                tasks.append(self._device_controller.refresh_all_devices())
 
             if self._gantt_controller:
-                await self._gantt_controller.load_timeline(days=1)
+                tasks.append(self._gantt_controller.load_timeline(days=1))
+
+            if tasks:
+                await asyncio.gather(*tasks)
+                logger.info("[UIContainer] Initial data fetch complete.")
 
         except Exception as e:
-            logger.error(f"Failed to load initial data: {e}")
+            logger.error(f"[UIContainer] Error during data fetch: {e}", exc_info=True)
 
     def get_main_window(self) -> MainView | None:
         return self._main_view
 
     def shutdown(self) -> None:
-        """Clean shutdown of presentation layer."""
+        """Graceful teardown of UI components and background tasks."""
+        if not self._is_initialized:
+            return
+
+        logger.info("[UIContainer] Shutting down...")
+
+        # Cancel pending tasks
+        if self._init_task and not self._init_task.done():
+            self._init_task.cancel()
+
+        # Stop controllers
         if self._device_controller:
             self._device_controller.stop_polling()
 
+        # Close View
         if self._main_view:
             self._main_view.close()
+
         logger.info("[UIContainer] Shutdown complete.")

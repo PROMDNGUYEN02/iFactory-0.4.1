@@ -1,6 +1,7 @@
 """
 Device Controller - Handles device data fetching use case.
 Single Responsibility: Orchestrate data flow (Service -> Presenter -> Store).
+Refactored to use standard UIConstants.
 """
 
 from __future__ import annotations
@@ -40,12 +41,12 @@ class DeviceController(QObject):
         self._store = store
         self._is_active = False
 
-        # [FIX] Initialize AsyncExecutor to handle async tasks from Qt thread
+        # Initialize AsyncExecutor to handle async tasks from Qt thread
         self._executor = AsyncExecutor(parent=self)
 
         # Internal Polling Mechanism
         self._timer = QTimer(self)
-        self._timer.setInterval(UIConstants.FAST_REFRESH_MS)
+        self._timer.setInterval(UIConstants.POLL_INTERVAL_DEVICE)
         self._timer.timeout.connect(self._on_timer_tick)
 
         self.start_polling()
@@ -54,7 +55,7 @@ class DeviceController(QObject):
         if not self._is_active:
             self._is_active = True
             self._timer.start()
-            logger.info(f"[DeviceController] Polling started ({UIConstants.FAST_REFRESH_MS}ms)")
+            logger.info(f"[DeviceController] Polling started ({UIConstants.POLL_INTERVAL_DEVICE}ms)")
             # Trigger immediately
             self._on_timer_tick()
 
@@ -65,7 +66,6 @@ class DeviceController(QObject):
 
     def _on_timer_tick(self) -> None:
         """Bridge Qt Signal to Async Task using AsyncExecutor."""
-        # [FIX] Use executor instead of asyncio.create_task to avoid 'no running event loop' error
         self._executor.run(self.refresh_all_devices())
 
     async def refresh_all_devices(self) -> int:

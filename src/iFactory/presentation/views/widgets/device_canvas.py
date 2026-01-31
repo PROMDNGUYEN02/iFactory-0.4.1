@@ -1,15 +1,13 @@
 """
 Device Canvas Widget - Factory Map Visualization.
+Refactored to be a PURE COMPONENT (No File I/O, No Infra Imports).
 STABLE & OPTIMIZED: Fixes C++ object deletion crash while maintaining high performance.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Dict, Any, Optional
-
-from iFactory.infrastructure.configuration.paths import PATHS
 
 from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import (
@@ -52,27 +50,27 @@ class DeviceIconItem(QGraphicsObject):
         self.equip_code = device_data["id"]
         self._parent_canvas = parent_canvas
 
-        # Kích thước khởi tạo (sẽ được điều chỉnh lại trong _load_icon nếu ảnh khác tỉ lệ)
+        # Dimensions (adjusted in _load_icon based on aspect ratio)
         self.w = device_data.get("width", 40)
         self.h = device_data.get("height", 40)
         self._padding = 2
 
+        # Relative Positioning
         x = (device_data.get("x_percent", 0) / 100) * ref_width
         y = (device_data.get("y_percent", 0) / 100) * ref_height
         self.setPos(x, y)
 
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.PointingHandCursor)
-        # Tắt Selectable để giảm overhead xử lý sự kiện ngầm của Qt
+        # Disable Selection to reduce Qt overhead
         self.setFlag(QGraphicsItem.ItemIsSelectable, False)
 
         self._status_color = QColor(Qt.transparent)
         self._is_hovered = False
-
         self._pixmap: Optional[QPixmap] = None
         self._is_dark = False
 
-        # Init label trước khi load icon vì _load_icon có thể gọi _position_label
+        # Text Initialization
         lbl_text = device_data.get("label_text", self.equip_code)
         self.label = QGraphicsSimpleTextItem(lbl_text, self)
         self.label.setFont(QFont("Segoe UI", 7))
@@ -83,21 +81,21 @@ class DeviceIconItem(QGraphicsObject):
         self.output_badge.setBrush(QBrush(QColor("#2c3e50")))
         self.output_badge.setVisible(False)
 
-        # Load icon và điều chỉnh kích thước khung theo ảnh
+        # Asset Loading
         self._load_icon()
         self._position_label()
 
-        # [CRITICAL FIX]
-        # 1. Khởi tạo Effect
+        # [CRITICAL STABILITY FIX]
+        # 1. Initialize Effect once
         self._glow = QGraphicsDropShadowEffect()
         self._glow.setBlurRadius(15)
         self._glow.setOffset(0, 0)
         self._glow.setColor(self._status_color)
 
-        # 2. Tắt mặc định (Performance Optimization)
+        # 2. Disable default (Performance)
         self._glow.setEnabled(False)
 
-        # 3. Cài đặt vào Item MỘT LẦN DUY NHẤT.
+        # 3. Assign to Item
         self.setGraphicsEffect(self._glow)
 
     def boundingRect(self) -> QRectF:
@@ -111,7 +109,6 @@ class DeviceIconItem(QGraphicsObject):
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget=None) -> None:
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Vẽ background box theo kích thước thực tế (self.w, self.h đã được update theo ảnh)
         bg_rect = QRectF(0, 0, self.w, self.h)
         corner_radius = 6
         base_color = self._status_color
@@ -143,23 +140,18 @@ class DeviceIconItem(QGraphicsObject):
 
         pm = QPixmap(icon_path)
         if not pm.isNull():
-            # [LOGIC MỚI]
-            # 1. Lấy kích thước giới hạn (bounding box) từ config
             target_w = self.device_data.get("width", 40)
             target_h = self.device_data.get("height", 40)
 
-            # 2. Scale ảnh giữ nguyên tỉ lệ (KeepAspectRatio) để ảnh KHÔNG bị méo/mờ
+            # Smooth Scaling
             scaled_pm = pm.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
-            # 3. Cập nhật kích thước item (self.w, self.h) để bằng đúng kích thước ảnh thật
-            # Việc này đảm bảo khung nền ôm sát ảnh
             if self.w != scaled_pm.width() or self.h != scaled_pm.height():
-                self.prepareGeometryChange()  # Báo cho Qt biết kích thước thay đổi
+                self.prepareGeometryChange()
                 self.w = scaled_pm.width()
                 self.h = scaled_pm.height()
                 self._pixmap = scaled_pm
 
-                # Cập nhật lại vị trí các thành phần con
                 self._position_label()
                 if self.output_badge.isVisible():
                     br = self.output_badge.boundingRect()
@@ -168,7 +160,6 @@ class DeviceIconItem(QGraphicsObject):
                 self._pixmap = scaled_pm
 
     def _position_label(self) -> None:
-        # Kiểm tra label tồn tại (vì method này có thể được gọi trong quá trình init)
         if not hasattr(self, "label"):
             return
 
@@ -176,7 +167,6 @@ class DeviceIconItem(QGraphicsObject):
         spacing = self.device_data.get("label_spacing", 3)
         lbl_pos = self.device_data.get("label_position", "bottom")
 
-        x, y = 0.0, 0.0
         if lbl_pos == "left":
             x = -lbl_rect.width() - spacing
             y = (self.h - lbl_rect.height()) / 2
@@ -193,12 +183,13 @@ class DeviceIconItem(QGraphicsObject):
         self.label.setPos(x, y)
 
     def update_live_data(self, device_vm) -> None:
-        """Update from ViewModel."""
+        """Update visual state from Immutable ViewModel."""
         status_color_str = "#9E9E9E"
         output_count = 0
         last_update = None
         status_display = "Unknown"
 
+        # Handle both Object and Dict (robustness)
         if hasattr(device_vm, "status_color"):
             status_color_str = device_vm.status_color
             output_count = getattr(device_vm, "output_count", 0) or 0
@@ -224,8 +215,7 @@ class DeviceIconItem(QGraphicsObject):
                 self.output_badge.setPos(self.w - br.width() + 4, -4)
                 self.output_badge.setVisible(True)
         else:
-            if self.output_badge.isVisible():
-                self.output_badge.setVisible(False)
+            self.output_badge.setVisible(False)
 
         tooltip_text = f"ID: {self.equip_code}\nStatus: {status_display}"
         if last_update:
@@ -262,13 +252,18 @@ class DeviceIconItem(QGraphicsObject):
 
 
 class DeviceCanvasWidget(QWidget):
-    """Canvas displaying factory device map with filled backgrounds."""
+    """
+    Canvas displaying factory device map.
+    Pure Component: Layout config must be injected via constructor.
+    """
 
     device_clicked = Signal(str)
 
-    def __init__(self, area_key: str, parent=None):
+    def __init__(self, area_key: str, layout_config: Dict[str, Any], parent=None):
         super().__init__(parent)
         self.area_key = area_key
+        self._layout_config = layout_config  # Injected Configuration
+
         self._is_dark = False
         self._device_items: Dict[str, DeviceIconItem] = {}
         self._bg_item = None
@@ -276,7 +271,7 @@ class DeviceCanvasWidget(QWidget):
         self._ref_height = 600
 
         self._setup_ui()
-        self._load_positions()
+        self._init_scene_items()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -291,26 +286,24 @@ class DeviceCanvasWidget(QWidget):
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        # [CRITICAL OPTIMIZATION]
+        # [OPTIMIZATION] High performance rendering flags
         self.view.setViewportUpdateMode(QGraphicsView.BoundingRectViewportUpdate)
         self.view.setCacheMode(QGraphicsView.CacheBackground)
 
         layout.addWidget(self.view)
 
-    def _load_positions(self) -> None:
+    def _init_scene_items(self) -> None:
+        """Initialize items from injected configuration."""
         try:
-            pos_file = PATHS.device_positions_path
-            if not pos_file.exists():
-                logger.warning(f"Device positions file not found: {pos_file}")
+            if not self._layout_config:
+                logger.warning(f"No layout config provided for {self.area_key}")
                 return
 
-            data = json.loads(pos_file.read_text(encoding="utf-8"))
-            area_data = data.get(self.area_key, {})
-
-            self._ref_width = area_data.get("ref_width", 1200)
-            self._ref_height = area_data.get("ref_height", 600)
+            self._ref_width = self._layout_config.get("ref_width", 1200)
+            self._ref_height = self._layout_config.get("ref_height", 600)
             self.scene.setSceneRect(0, 0, self._ref_width, self._ref_height)
 
+            # Background setup
             bg_img = self._get_background_image(False)
             bg_pixmap = QPixmap(bg_img)
             if not bg_pixmap.isNull():
@@ -325,21 +318,25 @@ class DeviceCanvasWidget(QWidget):
                 self._bg_item.setFlag(QGraphicsItem.ItemIsSelectable, False)
                 self._bg_item.setAcceptHoverEvents(False)
 
-            for dev in area_data.get("devices", []):
+            # Device Items setup
+            for dev in self._layout_config.get("devices", []):
                 item = DeviceIconItem(dev, self._ref_width, self._ref_height, self)
                 self.scene.addItem(item)
                 self._device_items[dev["id"]] = item
 
         except Exception as e:
-            logger.error(f"Failed to load canvas positions: {e}")
+            logger.error(f"Failed to init canvas items: {e}")
 
     def _get_background_image(self, is_dark: bool) -> str:
         suffix = "-white.svg" if is_dark else ".svg"
-        base = "dashboard_layout" if ("daboard" in self.area_key.lower() or "dashboard" in self.area_key.lower()) else "orders_layout"
+        # Robust check for layout type
+        key = self.area_key.lower()
+        base = "dashboard_layout" if ("daboard" in key or "dashboard" in key) else "orders_layout"
         return f":/icon/{base}{suffix}"
 
     def render_state(self, devices_state: Dict[str, Any], is_dark: bool) -> None:
         """Render devices from ViewModels."""
+        # 1. Update Theme (Global)
         if is_dark != self._is_dark:
             self._is_dark = is_dark
             if self._bg_item:
@@ -357,6 +354,7 @@ class DeviceCanvasWidget(QWidget):
             for item in self._device_items.values():
                 item.update_theme(is_dark)
 
+        # 2. Update Device Data (Local)
         for dev_id, vm in devices_state.items():
             item = self._device_items.get(dev_id)
             if item:
@@ -369,6 +367,3 @@ class DeviceCanvasWidget(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.view.fitInView(self.scene.sceneRect(), Qt.IgnoreAspectRatio)
-
-
-__all__ = ["DeviceCanvasWidget"]

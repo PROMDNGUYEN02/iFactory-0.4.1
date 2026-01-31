@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Dict, List, Any
+from typing import TYPE_CHECKING, Dict, Any
 
 from PySide6.QtCore import QObject
 
@@ -62,8 +62,7 @@ class GanttController(QObject):
             if not devices:
                 return {}
 
-            # Limit scope (Paginating/limiting logic belongs in App/Infra,
-            # but restricting UI requests is valid Controller logic)
+            # Limit scope to prevent UI overload
             target_codes = list(devices.keys())[:20]
 
             timeline_vms = {}
@@ -79,14 +78,11 @@ class GanttController(QObject):
                         continue
 
                     # Presenter Call (Pure Transformation)
-                    # Note: We pass raw DTOs + Context (start/end window)
                     vm = self._presenter.format_chart(device_code=code, segments_dto=segments_dto, window_start=start, window_end=end)
 
-                    # Store as raw dict or VM depending on Store requirements.
-                    # Assuming Store expects serializer-friendly dicts for segments based on legacy code,
-                    # but ideally it should store the VM.
-                    # We will store the VM object list representation to match legacy dict-of-list structure.
-                    # Adapting VM to legacy store structure:
+                    # Store Adapter: Convert VM to legacy Dict format if needed,
+                    # or store VM directly if Store supports it.
+                    # Mapping VM to list of dicts for serialization safety
                     timeline_vms[code] = [
                         {
                             "start_time": s.start_time,

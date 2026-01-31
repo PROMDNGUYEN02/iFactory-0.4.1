@@ -12,8 +12,8 @@ from PySide6.QtWidgets import QApplication
 import qasync
 from .app_container import AppContainer
 
+# Deferred import to avoid circular dependencies at module level
 if TYPE_CHECKING:
-    # UPDATED: Import path reflects the new clean architecture folder structure
     from iFactory.presentation.di.ui_container import UIContainer
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,8 @@ class ApplicationRunner:
                 self._show_window()
 
                 # Deferred load handled by Redux Controller triggers
-                if self._ui_container and hasattr(self._ui_container, "schedule_deferred_data_load"):
+                # We trigger it explicitly to ensure data flow starts after render
+                if self._ui_container:
                     self._ui_container.schedule_deferred_data_load()
 
                 self._log_startup_performance()
@@ -101,8 +102,19 @@ class ApplicationRunner:
             await self.container.initialize()
             logger.info("AppContainer initialized")
 
-            # 2. Extract UI Container
-            self._ui_container = self.container.get_ui_container()
+            # 2. Retrieve UI Container
+            # Logic: AppContainer might have already initialized UI.
+            # We try to get it first to avoid Double Initialization.
+            if hasattr(self.container, "get_ui_container"):
+                self._ui_container = self.container.get_ui_container()
+
+            # Fallback: If AppContainer didn't create it, we do.
+            if not self._ui_container:
+                logger.info("[ApplicationRunner] UIContainer not found in AppContainer. Creating manual instance.")
+                from iFactory.presentation.di.ui_container import UIContainer
+
+                self._ui_container = UIContainer(self.container)
+                self._ui_container.initialize()
 
             # 3. Retrieve the already-created main window
             self.main_window = self._ui_container.get_main_window()
@@ -118,11 +130,12 @@ class ApplicationRunner:
 
     def _show_window(self) -> None:
         """Show main window and process events."""
-        self.main_window.show()
-        self.qt_app.processEvents()
-        self.main_window.repaint()
-        self.qt_app.processEvents()
-        logger.info("Main window shown")
+        if self.main_window:
+            self.main_window.show()
+            self.qt_app.processEvents()
+            self.main_window.repaint()
+            self.qt_app.processEvents()
+            logger.info("Main window shown")
 
     def _log_startup_performance(self) -> None:
         """Log startup performance metrics."""
@@ -135,6 +148,9 @@ class ApplicationRunner:
     def _cleanup(self) -> None:
         """Cleanup resources."""
         logger.info("Cleaning up application...")
+        if hasattr(self, "_ui_container") and self._ui_container:
+            self._ui_container.shutdown()
+
         if not self.container or not self._loop or self._loop.is_closed():
             return
         try:
@@ -147,7 +163,6 @@ class ApplicationRunner:
 
     async def _async_cleanup(self) -> None:
         """Async cleanup operations."""
-        # Clean Architecture note: AppContainer now owns the Orchestrator/Scheduler lifecycle.
         if hasattr(self.container, "dispose"):
             await self.container.dispose()
 
