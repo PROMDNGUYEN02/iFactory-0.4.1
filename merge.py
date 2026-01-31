@@ -5,8 +5,8 @@ from pathlib import Path
 # ========================
 
 INPUT_DIRS = [
-    Path("data"),
-    Path("src/iFactory"),
+    Path("src/iFactory/shared"),
+    Path("src/iFactory/presentation"),
 ]
 
 TEXT_EXTENSIONS = {
@@ -125,11 +125,7 @@ for base, file in all_files:
         current_lines = 0
 
         out = Path(f"code_{file_index}.txt").open("w", encoding="utf-8")
-        out.write(
-            "PROJECT SOURCE SNAPSHOT (CONTINUED)\n"
-            f"PART: code_{file_index}.txt\n"
-            f"{BOUNDARY}"
-        )
+        out.write("PROJECT SOURCE SNAPSHOT (CONTINUED)\n" f"PART: code_{file_index}.txt\n" f"{BOUNDARY}")
 
     out.write(block)
     current_lines += block_lines

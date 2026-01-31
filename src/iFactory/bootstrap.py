@@ -40,6 +40,7 @@ async def init_database() -> None:
     """
     try:
         # 1. Ensure physical directories exist
+        # LƯU Ý: Đảm bảo class AppPaths hoặc biến PATHS đã được định nghĩa trong file này
         from iFactory.infrastructure.configuration.paths import PATHS
 
         PATHS.ensure_directories()
