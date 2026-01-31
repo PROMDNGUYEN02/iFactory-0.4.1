@@ -1,7 +1,9 @@
+# File: domain/repositories/production_repository.py
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional, Sequence, List
+from datetime import datetime
+from typing import Optional, Sequence, List, Any
 
 from ..value_objects.equipment_code import EquipmentCode
 from ..value_objects.material_input import MaterialInput
@@ -33,17 +35,27 @@ class ProductionRepository(ABC):
         pass
 
     @abstractmethod
+    async def get_history(
+        self,
+        equip_code: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> Sequence[Any]:
+        """
+        Get history records for a device within a time range.
+        Simplified interface that accepts primitive types.
+        Returns sequence of HistoryRecord objects.
+        """
+        pass
+
+    @abstractmethod
     async def save_status_period(self, period: StatusPeriod, equip_name: Optional[str] = None) -> None:
         """Record a single status period."""
         pass
 
-    # --- NEW: Hàm lưu hàng loạt để tăng tốc độ ---
     @abstractmethod
     async def bulk_save_status_history(self, periods: List[StatusPeriod], equip_name: Optional[str] = None) -> None:
-        """
-        Bulk save multiple status periods at once.
-        Significantly faster for syncing large datasets (e.g., 30 days history).
-        """
+        """Bulk save multiple status periods at once."""
         pass
 
     @abstractmethod
@@ -67,3 +79,6 @@ class ProductionRepository(ABC):
     async def save_material_input(self, record: MaterialInput) -> None:
         """Persist a material input record."""
         pass
+
+
+__all__ = ["ProductionRepository"]

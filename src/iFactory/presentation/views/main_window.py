@@ -4,9 +4,9 @@ from __future__ import annotations
 import logging
 import sys
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from PySide6.QtCore import QEvent, QRect, QTimer
+from PySide6.QtCore import QEvent, QRect, QTimer, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 
@@ -23,6 +23,7 @@ from ..state.selectors import (
     select_factory_summary,
     select_gantt_data,
     select_right_panel_expanded,
+    select_selected_device_id,
     select_sidebar_expanded,
     select_theme,
 )
@@ -32,10 +33,11 @@ from .shell.sidebar import SidebarView
 from .shell.status_bar import StatusBarView
 from .ui.generated.main_ui import Ui_MainWindow
 from .widgets.device_canvas import DeviceCanvasWidget
-from .widgets.gantt_canvas import GanttCanvasWidget
+from .widgets.device_gantt_widget import DeviceGanttDisplayWidget
 from .widgets.legend_widget import LegendWidget
 
 if TYPE_CHECKING:
+    from ..controllers.gantt_controller import GanttController
     from ..controllers.shell_controller import ShellController
     from ..state.store import Store
 
@@ -53,9 +55,12 @@ class MainWindow(QMainWindow):
         self._store = store
         self._controller = shell_controller
         self._theme_manager = get_theme_manager()
+        self._gantt_controller: Optional["GanttController"] = None
 
         self._prev_state: Dict[str, Any] = {}
         self._components_ready = False
+        self._selected_device_id: Optional[str] = None
+        self._last_gantt_segments_count: Dict[str, int] = {}
 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
@@ -73,6 +78,109 @@ class MainWindow(QMainWindow):
         QApplication.instance().installEventFilter(self)
 
         logger.info("MainWindow initialized")
+
+    def set_gantt_controller(self, controller: "GanttController") -> None:
+        """Set gantt controller and connect signals for direct updates."""
+        self._gantt_controller = controller
+
+        # Connect to gantt controller signals
+        controller.device_gantt_ready.connect(self._on_gantt_data_ready)
+        controller.loading_started.connect(self._on_gantt_loading_started)
+        controller.loading_finished.connect(self._on_gantt_loading_finished)
+        controller.fetch_error.connect(self._on_gantt_fetch_error)
+
+        logger.info("[MainWindow] Gantt controller connected")
+
+    @Slot(str, list)
+    def _on_gantt_data_ready(self, device_code: str, segments: List[Dict[str, Any]]) -> None:
+        """Handle gantt data ready signal from controller."""
+        if not self._components_ready:
+            logger.debug(f"[MainWindow] Components not ready, skipping gantt render for {device_code}")
+            return
+
+        # Only update if this is the currently selected device
+        if device_code != self._selected_device_id:
+            logger.debug(f"[MainWindow] Received data for {device_code} but selected is {self._selected_device_id}")
+            return
+
+        logger.info(f"[MainWindow] Gantt data ready: {device_code}, {len(segments)} segments")
+
+        # Get device info
+        state = self._store.get_state()
+        devices = select_devices(state)
+        device_info = devices.get(device_code, {})
+
+        if isinstance(device_info, dict):
+            device_name = device_info.get("display_name") or device_info.get("equip_name") or device_code
+        else:
+            device_name = getattr(device_info, "display_name", None) or getattr(device_info, "equip_name", None) or device_code
+
+        # Calculate time range
+        now = datetime.now()
+        start = now - timedelta(hours=24)
+
+        # Render on both widgets
+        self.device_gantt_dashboard.render_device_gantt(
+            device_code=device_code,
+            device_name=device_name,
+            segments=segments,
+            start_time=start,
+            end_time=now,
+        )
+        self.device_gantt_orders.render_device_gantt(
+            device_code=device_code,
+            device_name=device_name,
+            segments=segments,
+            start_time=start,
+            end_time=now,
+        )
+
+        # Update tracking
+        self._last_gantt_segments_count[device_code] = len(segments)
+
+        logger.info(f"[MainWindow] Gantt rendered for {device_code} with {len(segments)} segments")
+
+    @Slot(str)
+    def _on_gantt_loading_started(self, device_code: str) -> None:
+        """Handle loading started signal."""
+        if not self._components_ready:
+            return
+
+        # Only show loading if this is the selected device
+        if device_code == self._selected_device_id:
+            logger.debug(f"[MainWindow] Gantt loading started for {device_code}")
+
+    @Slot(str)
+    def _on_gantt_loading_finished(self, device_code: str) -> None:
+        """Handle loading finished signal."""
+        logger.debug(f"[MainWindow] Gantt loading finished for {device_code}")
+
+    @Slot(str, str)
+    def _on_gantt_fetch_error(self, device_code: str, error: str) -> None:
+        """Handle fetch error signal."""
+        logger.error(f"[MainWindow] Gantt fetch error for {device_code}: {error}")
+        if device_code == self._selected_device_id and self._components_ready:
+            self._show_error_gantt(device_code, error)
+
+    def _show_error_gantt(self, device_code: str, error: str) -> None:
+        """Show error state on gantt widgets."""
+        now = datetime.now()
+        start = now - timedelta(hours=24)
+
+        self.device_gantt_dashboard.render_device_gantt(
+            device_code=device_code,
+            device_name=f"{device_code} (Error: {error[:30]}...)" if len(error) > 30 else f"{device_code} (Error)",
+            segments=[],
+            start_time=start,
+            end_time=now,
+        )
+        self.device_gantt_orders.render_device_gantt(
+            device_code=device_code,
+            device_name=f"{device_code} (Error)",
+            segments=[],
+            start_time=start,
+            end_time=now,
+        )
 
     def _apply_initial_layout(self) -> None:
         self.ui.right_slide_menu_frame.setFixedWidth(Layout.RIGHT_PANEL_COLLAPSED_WIDTH)
@@ -124,10 +232,12 @@ class MainWindow(QMainWindow):
                 self.ui.daboard_midle_frame_1,
                 DeviceCanvasWidget("dashboard", dash_config, self),
             )
-            self.gantt_dashboard = self._embed(
+
+            self.device_gantt_dashboard = self._embed(
                 self.ui.daboard_midle_frame_2,
-                GanttCanvasWidget(self),
+                DeviceGanttDisplayWidget(self),
             )
+
             self.legend_dashboard = self._embed(
                 self.ui.daboard_bottom_frame,
                 LegendWidget(self),
@@ -137,21 +247,19 @@ class MainWindow(QMainWindow):
                 self.ui.orders_midle_frame_1,
                 DeviceCanvasWidget("orders", orders_config, self),
             )
-            self.gantt_orders = self._embed(
+
+            self.device_gantt_orders = self._embed(
                 self.ui.orders_midle_frame_2,
-                GanttCanvasWidget(self),
+                DeviceGanttDisplayWidget(self),
             )
+
             self.legend_orders = self._embed(
                 self.ui.orders_bottom_frame,
                 LegendWidget(self),
             )
 
-            self.canvas_dashboard.device_clicked.connect(self._controller.select_device)
-            self.canvas_orders.device_clicked.connect(self._controller.select_device)
-
-            # Connect gantt click to device selection
-            self.gantt_dashboard.device_clicked.connect(self._controller.select_device)
-            self.gantt_orders.device_clicked.connect(self._controller.select_device)
+            self.canvas_dashboard.device_clicked.connect(self._on_device_clicked)
+            self.canvas_orders.device_clicked.connect(self._on_device_clicked)
 
             self.ui.daboard_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
             self.ui.orders_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
@@ -160,6 +268,9 @@ class MainWindow(QMainWindow):
 
             state = self._store.get_state()
             self._on_state_changed(state)
+
+            self.device_gantt_dashboard.show_placeholder()
+            self.device_gantt_orders.show_placeholder()
 
             logger.info("Workspace initialized")
 
@@ -179,7 +290,14 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+T"), self).activated.connect(self._controller.toggle_theme)
         QShortcut(QKeySequence("Ctrl+M"), self).activated.connect(self._controller.toggle_sidebar_menu)
         QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(self._controller.toggle_details_panel)
-        QShortcut(QKeySequence("Escape"), self).activated.connect(self._controller.deselect_device)
+        QShortcut(QKeySequence("Escape"), self).activated.connect(self._on_escape_pressed)
+
+    def _on_escape_pressed(self) -> None:
+        self._controller.deselect_device()
+        self._selected_device_id = None
+        if self._components_ready:
+            self.device_gantt_dashboard.show_placeholder()
+            self.device_gantt_orders.show_placeholder()
 
     def _apply_theme(self, theme: str) -> None:
         self._theme_manager.set_theme(theme)
@@ -190,6 +308,11 @@ class MainWindow(QMainWindow):
             self.style().polish(self)
 
         self._apply_page_theme(theme)
+
+        if self._components_ready:
+            is_dark = theme == "dark"
+            self.device_gantt_dashboard.set_theme(is_dark)
+            self.device_gantt_orders.set_theme(is_dark)
 
     def _apply_page_theme(self, theme: str) -> None:
         is_dark = theme == "dark"
@@ -234,6 +357,60 @@ class MainWindow(QMainWindow):
                 """
                 )
 
+    def _on_device_clicked(self, device_id: str) -> None:
+        """Handle device click - use cache if available."""
+        logger.info(f"Device clicked: {device_id}")
+
+        # If clicking same device, check cache first
+        if device_id == self._selected_device_id:
+            # Try to get from cache
+            if self._gantt_controller:
+                cached = self._gantt_controller.get_cached_segments(device_id)
+                if cached:
+                    logger.info(f"[MainWindow] Using cached data for {device_id}")
+                    self._on_gantt_data_ready(device_id, cached)
+                    return
+
+        # Update selected device
+        self._selected_device_id = device_id
+
+        # Show loading state immediately
+        if self._components_ready:
+            self._show_loading_gantt(device_id, self._store.get_state())
+
+        # Tell controller to select device (will trigger fetch)
+        self._controller.select_device(device_id)
+
+    def _show_loading_gantt(self, device_id: str, state: Dict[str, Any]) -> None:
+        """Show loading state for gantt while data is being fetched."""
+        devices = select_devices(state)
+        device_info = devices.get(device_id, {})
+
+        if isinstance(device_info, dict):
+            device_name = device_info.get("display_name") or device_info.get("equip_name") or device_id
+        else:
+            device_name = getattr(device_info, "display_name", None) or getattr(device_info, "equip_name", None) or device_id
+
+        now = datetime.now()
+        start = now - timedelta(hours=24)
+
+        logger.info(f"[MainWindow] Showing loading for {device_id}")
+
+        self.device_gantt_dashboard.render_device_gantt(
+            device_code=device_id,
+            device_name=f"{device_name} (Loading...)",
+            segments=[],
+            start_time=start,
+            end_time=now,
+        )
+        self.device_gantt_orders.render_device_gantt(
+            device_code=device_id,
+            device_name=f"{device_name} (Loading...)",
+            segments=[],
+            start_time=start,
+            end_time=now,
+        )
+
     def _on_state_changed(self, state: Dict[str, Any]) -> None:
         theme = select_theme(state)
         if theme != self._prev_state.get("theme"):
@@ -261,15 +438,25 @@ class MainWindow(QMainWindow):
             self.canvas_dashboard.render_state(devices, is_dark)
             self.canvas_orders.render_state(devices, is_dark)
 
-        gantt = select_gantt_data(state)
-        if gantt != self._prev_state.get("gantt_data"):
-            logger.info(f"Gantt data updated: {len(gantt)} devices")
+        # Handle device deselection via state (e.g., from Escape key)
+        selected_device_id = select_selected_device_id(state)
+        prev_selected = self._prev_state.get("selected_device_id")
+
+        if selected_device_id != prev_selected:
+            if not selected_device_id and prev_selected:
+                # Device was deselected
+                self._selected_device_id = None
+                self.device_gantt_dashboard.show_placeholder()
+                self.device_gantt_orders.show_placeholder()
+
+        # Update legend from gantt data
+        gantt_data = select_gantt_data(state)
+        prev_gantt = self._prev_state.get("gantt_data", {})
+        if gantt_data != prev_gantt:
             now = datetime.now()
             start = now - timedelta(hours=24)
-            self.gantt_dashboard.render_timeline(gantt, start, now)
-            self.gantt_orders.render_timeline(gantt, start, now)
-            self.legend_dashboard.render_stats(gantt, start, now)
-            self.legend_orders.render_stats(gantt, start, now)
+            self.legend_dashboard.render_stats(gantt_data, start, now)
+            self.legend_orders.render_stats(gantt_data, start, now)
 
         self._update_lcd_displays(state)
         self._prev_state = state.copy()

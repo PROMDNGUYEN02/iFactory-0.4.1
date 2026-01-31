@@ -1,8 +1,7 @@
 # File: presentation/views/shell/right_panel.py
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout
@@ -10,13 +9,11 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLa
 from ...constants.layout import Layout
 from ...resources.themes import get_theme_manager
 from ...state.selectors import (
-    select_gantt_data,
     select_right_panel_expanded,
     select_selected_device,
     select_selected_device_id,
     select_theme,
 )
-from ..widgets.gantt_canvas import DeviceGanttWidget
 
 if TYPE_CHECKING:
     from ...controllers.shell_controller import ShellController
@@ -24,7 +21,7 @@ if TYPE_CHECKING:
 
 
 class RightPanelView:
-    """Right panel showing device details and Gantt chart."""
+    """Right panel showing device details only (Gantt moved to middle frame 2)."""
 
     def __init__(
         self,
@@ -115,14 +112,6 @@ class RightPanelView:
         details_layout.addWidget(self._cycle)
         self._layout.addWidget(self._details_frame)
 
-        # Gantt section label
-        self._lbl_gantt = QLabel("Timeline (Last 24h)")
-        self._layout.addWidget(self._lbl_gantt)
-
-        # Device Gantt Widget
-        self._gantt = DeviceGanttWidget()
-        self._layout.addWidget(self._gantt)
-
         # Error label
         self._error = QLabel("Last Error: None")
         self._error.setWordWrap(True)
@@ -172,7 +161,6 @@ class RightPanelView:
         self._title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {text_primary};")
         self._desc.setStyleSheet(f"font-size: 11px; color: {text_secondary};")
         self._last_update.setStyleSheet(f"font-size: 11px; color: {text_muted};")
-        self._lbl_gantt.setStyleSheet(f"font-weight: 600; margin-top: 8px; color: {text_secondary};")
 
         self._mat_frame.setStyleSheet(
             f"""
@@ -229,11 +217,7 @@ class RightPanelView:
             self._status_badge.setStyleSheet("background-color: #64748B; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;")
             return
 
-        # Extract device properties
         self._render_device_info(device, device_id)
-
-        # Render Gantt chart
-        self._render_gantt(state, device_id)
 
     def _render_device_info(self, device: Any, device_id: str) -> None:
         """Render device information section."""
@@ -298,33 +282,11 @@ class RightPanelView:
         self._cycle.setText(f"⏱️ Cycle: {cycle_time}s")
 
         if last_error:
-            self._error.setText(f"⚠️ {last_error}")
+            self._error.setText(f"���️ {last_error}")
             self._error.setStyleSheet("color: #EF4444; font-weight: 600;")
         else:
             self._error.setText("✅ Healthy")
             self._error.setStyleSheet("color: #10B981;")
-
-    def _render_gantt(self, state: Dict[str, Any], device_id: str) -> None:
-        """Render Gantt chart for the selected device."""
-        gantt_data = select_gantt_data(state)
-
-        if gantt_data and device_id and device_id in gantt_data:
-            now = datetime.now()
-            start = now - timedelta(hours=24)
-            segments = gantt_data[device_id]
-
-            self._gantt.render_from_segments(
-                device_code=device_id,
-                segments=segments,
-                start_time=start,
-                end_time=now,
-            )
-        else:
-            # Show empty state
-            from ...viewmodels.gantt import GanttChartViewModel
-
-            empty_vm = GanttChartViewModel.empty(device_id or "N/A")
-            self._gantt.render(empty_vm)
 
 
 __all__ = ["RightPanelView"]

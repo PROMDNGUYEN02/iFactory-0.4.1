@@ -1,3 +1,4 @@
+# File: application/commands/sync.py
 """
 Sync Devices Use Cases.
 Handles synchronization logic for single and multiple devices.
@@ -31,6 +32,8 @@ class SyncAllDevicesCommand:
     ):
         self._remote_source = remote_source
         self._uow_factory = dual_uow_factory
+        self._history_created = 0
+        self._history_updated = 0
 
     async def execute(self, equipment_codes: Optional[List[str]] = None) -> int:
         try:
@@ -43,7 +46,14 @@ class SyncAllDevicesCommand:
             return 0
 
         count = 0
+        self._history_created = 0
+        self._history_updated = 0
+
         async with self._uow_factory() as uow:
+            has_history = uow.history is not None
+            if not has_history:
+                logger.warning("DualUoW history repository is None! Check session factory.")
+
             for record in remote_records:
                 try:
                     await self._process_record(uow, record)
@@ -55,12 +65,12 @@ class SyncAllDevicesCommand:
             await uow.commit()
 
         if count > 0:
-            logger.info(f"[Sync] Synchronized {count} devices.")
+            logger.info(f"[Sync] Synchronized {count} devices. History: +{self._history_created} created, {self._history_updated} updated")
         return count
 
     async def _process_record(self, uow: AbstractUnitOfWork, record: Dict[str, Any]) -> None:
         raw_code = str(record.get("equip_code"))
-        raw_status = record.get("raw_status", "0")
+        raw_status = record.get("raw_status") or record.get("equip_status") or "0"
         timestamp = record.get("last_update") or datetime.now()
         reason_code = record.get("reason_code")
         equip_name = record.get("equip_name")
@@ -81,7 +91,9 @@ class SyncAllDevicesCommand:
             equip_name=equip_name,
             reason_code=reason_code,
         )
-        await uow.devices.save(device)
+
+        if uow.devices:
+            await uow.devices.save(device)
 
         # Update Cold Store (History Continuity)
         if uow.history:
@@ -106,24 +118,30 @@ class SyncAllDevicesCommand:
         equip_name: Optional[str] = None,
     ) -> None:
         """
-        Internal logic to maintain continuity of status periods based on snapshot updates.
-        Closes previous periods and creates new ones if status changes.
+        Maintain continuity of status periods based on snapshot updates.
+        Always ensures at least one history record exists per device.
         """
         latest_period: Optional[StatusPeriod] = await history_repo.get_latest_status(code)
+
+        # Use timestamp as start_time if not provided
         effective_start = start_time if start_time else timestamp
 
         if not latest_period:
+            # First record for this device - ALWAYS create one
             actual_end = end_time
             if actual_end and actual_end < effective_start:
                 actual_end = effective_start
+
             new_period = StatusPeriod(
                 equipment_code=code,
                 status=new_status,
                 time_range=TimeRange(start=effective_start, end=actual_end),
             )
             await history_repo.save_status_period(new_period, equip_name=equip_name)
+            self._history_created += 1
             return
 
+        # Check if status changed
         if latest_period.status != new_status:
             # Close previous period
             closing_time = effective_start
@@ -143,20 +161,23 @@ class SyncAllDevicesCommand:
                 time_range=TimeRange(start=new_period_start, end=actual_end),
             )
             await history_repo.save_status_period(new_period, equip_name=equip_name)
+            self._history_updated += 1
 
-        elif end_time and latest_period.time_range.end is None:
-            # Update end time of current period if known
-            closing_time = end_time
-            if closing_time < latest_period.time_range.start:
-                closing_time = latest_period.time_range.start
-            closed_period = latest_period.with_end_time(closing_time)
-            await history_repo.save_status_period(closed_period, equip_name=equip_name)
+        elif latest_period.time_range.end is None:
+            # Same status, period is open - update end time if we have one
+            if end_time:
+                closing_time = end_time
+                if closing_time < latest_period.time_range.start:
+                    closing_time = latest_period.time_range.start
+                closed_period = latest_period.with_end_time(closing_time)
+                await history_repo.save_status_period(closed_period, equip_name=equip_name)
+                self._history_updated += 1
 
 
 class SyncDeviceStatusCommand:
     """
     COMMAND: Syncs History for a specific device.
-    OPTIMIZED: Bulk processing and Data filling.
+    OPTIMIZED: Bulk processing.
     """
 
     def __init__(self, uow: AbstractUnitOfWork, remote_api: IRemoteDataSource):
@@ -165,7 +186,6 @@ class SyncDeviceStatusCommand:
 
     async def execute(self, equip_code: str, days: int = 30) -> bool:
         try:
-            # 1. Fetch Raw Data
             data = await self._remote_api.fetch_device_status(equip_code, days=days)
             if not data:
                 return False
@@ -174,10 +194,8 @@ class SyncDeviceStatusCommand:
             if not records:
                 return True
 
-            # 2. Identify Master Equipment Name
             master_equip_name = next((r.get("equip_name") for r in records if r.get("equip_name")), None)
 
-            # 3. Process Records into Batches
             batch_periods: List[StatusPeriod] = []
             latest_record = None
             latest_timestamp = datetime.min
@@ -187,12 +205,10 @@ class SyncDeviceStatusCommand:
                     raw_status = record.get("equip_status", "0")
                     timestamp = record.get("last_update") or datetime.now()
 
-                    # Track latest record for Hot Store update
                     if timestamp >= latest_timestamp:
                         latest_timestamp = timestamp
                         latest_record = record
 
-                    # Process History
                     start_time = record.get("start_time")
                     if start_time:
                         code_vo = EquipmentCode(record.get("equip_code"))
@@ -203,7 +219,6 @@ class SyncDeviceStatusCommand:
                         except (ValueError, TypeError):
                             status_enum = MachineStatus.UNKNOWN
 
-                        # Data Integrity: Fix invalid time ranges
                         actual_end = end_time if end_time else None
                         if actual_end and actual_end < start_time:
                             actual_end = start_time
@@ -215,12 +230,10 @@ class SyncDeviceStatusCommand:
                         )
                         batch_periods.append(period)
 
-                # 4. Bulk Persistence (Cold Store)
                 if uow.history and batch_periods:
                     await uow.history.bulk_save_status_history(batch_periods, equip_name=master_equip_name)
 
-                # 5. Snapshot Update (Hot Store)
-                if latest_record:
+                if latest_record and uow.devices:
                     raw_status = latest_record.get("equip_status", "0")
                     try:
                         status_enum = MachineStatus(int(raw_status))
@@ -238,9 +251,12 @@ class SyncDeviceStatusCommand:
 
                 await uow.commit()
 
-            logger.info(f"Synced {len(batch_periods)} history records for {equip_code} (Name: {master_equip_name})")
+            logger.info(f"Synced {len(batch_periods)} history records for {equip_code}")
             return True
 
         except Exception as e:
             logger.error(f"Failed to sync device {equip_code}: {e}")
             return False
+
+
+__all__ = ["SyncAllDevicesCommand", "SyncDeviceStatusCommand"]

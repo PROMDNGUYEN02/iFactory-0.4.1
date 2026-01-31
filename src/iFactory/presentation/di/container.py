@@ -48,6 +48,7 @@ class UIContainer(QObject):
         self._init_controllers()
         self._init_main_window()
         self._connect_signals()
+        self._wire_gantt_to_window()
 
         self._is_initialized = True
 
@@ -61,12 +62,22 @@ class UIContainer(QObject):
         gantt_presenter = GanttPresenter()
 
         config_path = None
+        mssql_url = None
+
         try:
             from iFactory.infrastructure.configuration.paths import PATHS
 
             config_path = PATHS.device_positions_path
         except ImportError:
             pass
+
+        # Get MSSQL URL from app container
+        try:
+            if hasattr(self._app, "_db_config") and self._app._db_config:
+                mssql_url = self._app._db_config.mssql_url
+                logger.info(f"[UIContainer] Got MSSQL URL from config")
+        except Exception as e:
+            logger.warning(f"[UIContainer] Could not get MSSQL URL: {e}")
 
         self._shell_controller = ShellController(
             store=self._store,
@@ -79,10 +90,12 @@ class UIContainer(QObject):
             store=self._store,
         )
 
+        # Pass MSSQL URL to gantt controller for direct sync fetching
         self._gantt_controller = GanttController(
             device_service=self._app.device_facade,
             presenter=gantt_presenter,
             store=self._store,
+            mssql_url=mssql_url,
         )
 
     def _init_main_window(self) -> None:
@@ -91,8 +104,14 @@ class UIContainer(QObject):
             shell_controller=self._shell_controller,
         )
 
+    def _wire_gantt_to_window(self) -> None:
+        """Wire gantt controller signals to main window."""
+        if self._main_window and self._gantt_controller:
+            self._main_window.set_gantt_controller(self._gantt_controller)
+            logger.info("Gantt controller wired to MainWindow")
+
     def _connect_signals(self) -> None:
-        """Connect store state changes to trigger gantt loading."""
+        """Connect store state changes."""
         if self._store:
             self._store.state_changed.connect(self._on_state_changed)
 
@@ -105,14 +124,8 @@ class UIContainer(QObject):
         if devices and len(devices) > 0:
             self._gantt_loaded = True
             logger.info(f"Devices loaded ({len(devices)}), now loading gantt...")
-
-            # Delay gantt load slightly to ensure state is stable
-            QTimer.singleShot(500, self._load_gantt)
-
-    def _load_gantt(self) -> None:
-        """Load gantt timeline data."""
-        if self._gantt_controller:
-            self._gantt_controller.load_timeline(days=1)
+            # Gantt is loaded on-demand when user clicks a device
+            # No need to preload here
 
     def schedule_deferred_data_load(self) -> None:
         QTimer.singleShot(Timing.DEFERRED_LOAD_DELAY_MS, self._start_data_loading)
@@ -126,9 +139,6 @@ class UIContainer(QObject):
 
         if self._device_controller:
             self._device_controller.start_polling()
-
-        # Don't load gantt here - wait for devices to be loaded first
-        # Gantt will be loaded in _on_state_changed when devices are available
 
         logger.info("Data controllers started")
 

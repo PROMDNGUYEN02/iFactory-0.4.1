@@ -1,14 +1,13 @@
 # File: shared/di/app_container.py
 """
 Main Application DI Container.
-Wires all layers together following Clean Architecture.
-Supports dual storage: Hot (latest) and Cold (history).
 """
 
 from __future__ import annotations
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, List, Dict, Any
 
 from iFactory.infrastructure.persistence.sqlalchemy.database import (
     get_hot_engine,
@@ -38,6 +37,21 @@ logger = logging.getLogger(__name__)
 
 
 class DeviceServiceAdapter:
+    """
+    Adapter that provides a unified interface to device operations.
+    Fetches from remote MSSQL directly for Gantt data.
+    """
+
+    # Status code to name mapping
+    STATUS_NAMES = {
+        0: "Unknown",
+        1: "Running",
+        2: "Shutdown",
+        3: "Stopped",
+        4: "Maintenance",
+        5: "Alarm",
+    }
+
     def __init__(
         self,
         sync_cmd: Optional[SyncAllDevicesCommand],
@@ -45,12 +59,14 @@ class DeviceServiceAdapter:
         get_all_qry: GetAllDevicesStatusQuery,
         get_history_qry: GetDeviceHistoryQuery,
         gantt_qry: GenerateProductionTimelineQuery,
+        remote_source: Optional[MssqlDataSource] = None,
     ):
         self._sync_cmd = sync_cmd
         self._get_latest_qry = get_latest_qry
         self._get_all_qry = get_all_qry
         self._get_history_qry = get_history_qry
         self._gantt_qry = gantt_qry
+        self._remote_source = remote_source
 
     async def sync_device_status(self, equipment_codes=None):
         if not self._sync_cmd:
@@ -58,44 +74,93 @@ class DeviceServiceAdapter:
             return None
         return await self._sync_cmd.execute(equipment_codes)
 
-    async def get_device_status(self, equipment_code, theme="light"):
-        return await self._get_latest_qry.execute(equipment_code, theme)
+    async def get_device_status(self, equipment_code: str):
+        return await self._get_latest_qry.execute(equipment_code)
 
     async def get_all_devices_status(self, equipment_codes=None):
         return await self._get_all_qry.execute(equipment_codes)
 
-    async def get_device_history(self, equipment_code, days=1):
+    async def get_device_history(self, equipment_code: str, days: int = 1):
         return await self._get_history_qry.execute(equipment_code, days=days)
-
-    async def get_gantt_segments(
-        self,
-        equipment_code,
-        start_time=None,
-        end_time=None,
-        fill_gaps=True,
-    ):
-        from datetime import datetime
-
-        if end_time is None:
-            end_time = datetime.now()
-        if start_time is None:
-            start_time = end_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        return await self._gantt_qry.execute(equipment_code, start_time, end_time, fill_gaps)
 
     async def get_all_latest_status(self, equipment_codes=None):
         return await self.get_all_devices_status(equipment_codes)
 
-    async def generate_gantt_segments(self, equipment_code, days=1, fill_gaps=True):
-        from datetime import datetime, timedelta
-
+    async def generate_gantt_segments(self, equipment_code: str, days: int = 1, fill_gaps: bool = True) -> Dict[str, Any]:
+        """
+        Generate Gantt chart segments for a device.
+        FETCHES DIRECTLY FROM MSSQL for real-time data.
+        Falls back to local cache if remote is unavailable.
+        """
         end_time = datetime.now()
         start_time = end_time - timedelta(days=days)
-        segments = await self.get_gantt_segments(equipment_code, start_time, end_time, fill_gaps)
-        return {"segments": segments, "start": start_time, "end": end_time}
+
+        segments = []
+
+        # Try to fetch directly from remote MSSQL first
+        if self._remote_source:
+            try:
+                remote_history = await self._remote_source.fetch_device_history_range(equipment_code, start_time, end_time)
+
+                if remote_history:
+                    logger.info(f"Fetched {len(remote_history)} records from MSSQL for {equipment_code}")
+
+                    for record in remote_history:
+                        rec_start = record.get("start_time")
+                        rec_end = record.get("end_time") or end_time
+                        status_code = int(record.get("equip_status", 0))
+
+                        # Clip to window
+                        valid_start = max(rec_start, start_time) if rec_start else start_time
+                        valid_end = min(rec_end, end_time)
+
+                        if valid_start < valid_end:
+                            duration = (valid_end - valid_start).total_seconds()
+                            segments.append(
+                                {
+                                    "start_time": valid_start,
+                                    "end_time": valid_end,
+                                    "status_code": status_code,
+                                    "status_name": self.STATUS_NAMES.get(status_code, "Unknown"),
+                                    "duration_seconds": duration,
+                                }
+                            )
+
+            except Exception as e:
+                logger.warning(f"Failed to fetch from MSSQL for {equipment_code}: {e}")
+
+        # Fallback to local cache if no remote data
+        if not segments:
+            try:
+                local_segments = await self._gantt_qry.execute(equipment_code, start_time, end_time, fill_gaps)
+
+                for dto in local_segments:
+                    segments.append(
+                        {
+                            "start_time": dto.start_time,
+                            "end_time": dto.end_time,
+                            "status_code": int(dto.status_code) if dto.status_code else 0,
+                            "status_name": dto.status_name,
+                            "duration_seconds": dto.duration_seconds,
+                        }
+                    )
+
+                if segments:
+                    logger.debug(f"Used {len(segments)} segments from local cache for {equipment_code}")
+
+            except Exception as e:
+                logger.error(f"Failed to get local segments for {equipment_code}: {e}")
+
+        return {
+            "segments": segments,
+            "device_code": equipment_code,
+            "start": start_time,
+            "end": end_time,
+        }
 
     @property
-    def is_online(self):
-        return self._sync_cmd is not None
+    def is_online(self) -> bool:
+        return self._remote_source is not None
 
 
 class AppContainer:
@@ -226,12 +291,14 @@ class AppContainer:
             if self._scheduler:
                 self._scheduler.start(lambda: sync_cmd.execute())
 
+        # Pass remote_source to adapter for direct Gantt fetching
         self._device_service_adapter = DeviceServiceAdapter(
             sync_cmd=sync_cmd,
             get_latest_qry=get_latest_qry,
             get_all_qry=get_all_qry,
             get_history_qry=get_history_qry,
             gantt_qry=gantt_qry,
+            remote_source=self._remote_data_source,  # NEW: Pass remote source
         )
 
     def _init_presentation(self) -> None:

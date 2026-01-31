@@ -1,8 +1,10 @@
+# File: infrastructure/adapters/mssql_adapter.py
 import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from sqlalchemy import text, bindparam
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
+from sqlalchemy.pool import NullPool
 
 from iFactory.application.ports.remote import IRemoteDataSource
 from iFactory.infrastructure.persistence.sqlalchemy.database import get_mssql_engine
@@ -13,12 +15,20 @@ logger = logging.getLogger(__name__)
 class MssqlAdapter(IRemoteDataSource):
     """
     Adapter for External MSSQL PLC/SCADA Database.
+    Uses NullPool to avoid connection issues with async event loops.
     """
 
     def __init__(self, connection_string: Optional[str] = None) -> None:
         self._engine: Optional[AsyncEngine] = None
+        self._connection_string = connection_string
+
         if connection_string:
-            self._engine = create_async_engine(connection_string, pool_pre_ping=True, echo=False)
+            # Use NullPool to avoid event loop issues
+            self._engine = create_async_engine(
+                connection_string,
+                poolclass=NullPool,  # Don't pool connections
+                echo=False,
+            )
         else:
             self._engine = get_mssql_engine()
 
@@ -38,7 +48,7 @@ class MssqlAdapter(IRemoteDataSource):
         return datetime.now()
 
     def _map_row(self, row: Any) -> Dict[str, Any]:
-        """Maps raw SQL tuple to dictionary. Centralizes index mapping."""
+        """Maps raw SQL tuple to dictionary."""
         equip_code = str(row[0]).strip() if row[0] else "UNKNOWN"
         equip_status = str(row[1]) if row[1] else "0"
         start_time = self._parse_datetime(row[2])
@@ -63,9 +73,7 @@ class MssqlAdapter(IRemoteDataSource):
         }
 
     async def fetch_latest_status(self, equipment_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """
-        Fetch the single LATEST status for multiple devices (Bulk Sync).
-        """
+        """Fetch the single LATEST status for multiple devices."""
         if not self._engine:
             logger.warning("MSSQL Engine not initialized.")
             return []
@@ -109,14 +117,13 @@ class MssqlAdapter(IRemoteDataSource):
             logger.error(f"[MssqlAdapter] Bulk fetch error: {e}")
             return []
 
-    async def fetch_device_status(self, equip_code: str, days: int = 30) -> List[Dict[str, Any]]:
-        """
-        Fetch HISTORY status for a single device within a time range.
-        """
+    async def fetch_device_status(self, equip_code: str, days: int = 1) -> List[Dict[str, Any]]:
+        """Fetch HISTORY status for a single device within a time range."""
         if not self._engine:
             return []
 
-        cutoff_date = datetime.now() - timedelta(days=days)
+        now = datetime.now()
+        start_of_range = now - timedelta(days=days)
 
         query = """
         SELECT 
@@ -125,18 +132,76 @@ class MssqlAdapter(IRemoteDataSource):
         FROM TT_EQ_STATUS S
         LEFT JOIN TT_EQ_EQUIPMENT E ON S.EQUIP_CODE = E.EQUIP_CODE
         WHERE S.EQUIP_CODE = :code 
-            AND S.START_TIME < TRUNC(SYSDATE) + 1
-            AND (S.END_TIME >= TRUNC(SYSDATE) OR S.END_TIME IS NULL)
+            AND (S.DEL_FLAG = '0' OR S.DEL_FLAG IS NULL)
+            AND S.START_TIME >= :start_time
+            AND (S.END_TIME IS NULL OR S.END_TIME <= :end_time)
         ORDER BY S.START_TIME ASC
         """
 
         try:
             async with self._engine.connect() as conn:
-                result = await conn.execute(text(query), {"code": equip_code, "cutoff": cutoff_date})
+                result = await conn.execute(
+                    text(query),
+                    {
+                        "code": equip_code,
+                        "start_time": start_of_range,
+                        "end_time": now,
+                    },
+                )
                 rows = result.fetchall()
 
+                logger.debug(f"[MssqlAdapter] Fetched {len(rows)} history records for {equip_code}")
                 return [self._map_row(row) for row in rows]
 
         except Exception as e:
             logger.error(f"[MssqlAdapter] History fetch error for {equip_code}: {e}")
             return []
+
+    async def fetch_device_history_range(self, equip_code: str, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
+        """Fetch history for a specific time range (for Gantt chart)."""
+        if not self._engine:
+            return []
+
+        query = """
+        SELECT 
+            S.EQUIP_CODE, S.EQUIP_STATUS, S.START_TIME, S.END_TIME, S.REASON_CODE,
+            E.EQUIP_NAME
+        FROM TT_EQ_STATUS S
+        LEFT JOIN TT_EQ_EQUIPMENT E ON S.EQUIP_CODE = E.EQUIP_CODE
+        WHERE S.EQUIP_CODE = :code 
+            AND (S.DEL_FLAG = '0' OR S.DEL_FLAG IS NULL)
+            AND S.START_TIME <= :end_time
+            AND (S.END_TIME >= :start_time OR S.END_TIME IS NULL)
+        ORDER BY S.START_TIME ASC
+        """
+
+        try:
+            async with self._engine.connect() as conn:
+                result = await conn.execute(
+                    text(query),
+                    {
+                        "code": equip_code,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                    },
+                )
+                rows = result.fetchall()
+
+                logger.info(f"[MssqlAdapter] Fetched {len(rows)} history records for {equip_code} ({start_time} to {end_time})")
+                return [self._map_row(row) for row in rows]
+
+        except Exception as e:
+            logger.error(f"[MssqlAdapter] History range fetch error for {equip_code}: {e}")
+            return []
+
+    async def dispose(self) -> None:
+        """Clean up engine."""
+        if self._engine:
+            try:
+                await self._engine.dispose()
+            except Exception as e:
+                logger.warning(f"Error disposing MSSQL engine: {e}")
+            self._engine = None
+
+
+__all__ = ["MssqlAdapter"]
