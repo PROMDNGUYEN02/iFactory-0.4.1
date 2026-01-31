@@ -37,7 +37,7 @@ EXCLUDE_DIRS = {
     "build",
 }
 
-MAX_LINES = 5000
+MAX_LINES = 1200
 BOUNDARY = "\n" + "=" * 80 + "\n"
 
 
@@ -107,13 +107,7 @@ current_lines = 0
 
 out = Path(f"code_{file_index}.txt").open("w", encoding="utf-8")
 
-out.write(
-    "PROJECT SOURCE SNAPSHOT\n"
-    "PURPOSE: AI analysis / refactor / production hardening\n"
-    f"MAX_LINES_PER_FILE: {MAX_LINES}\n"
-    f"SOURCE_ROOTS: {', '.join(str(p) for p in INPUT_DIRS)}\n"
-    f"{BOUNDARY}"
-)
+out.write("PROJECT SOURCE SNAPSHOT\n" f"MAX_LINES_PER_FILE: {MAX_LINES}\n" f"SOURCE_ROOTS: {', '.join(str(p) for p in INPUT_DIRS)}\n" f"{BOUNDARY}")
 
 for base, file in all_files:
     block = render_file_block(base, file)
