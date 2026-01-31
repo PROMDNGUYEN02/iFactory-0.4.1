@@ -90,5 +90,13 @@
     <file>icon/devices/CXI.svg</file>
     <file>icon/devices/CXI-white.svg</file>
     <file>icon/devices/COC.svg</file>
+    <file>icon/calendar_month.svg</file>
+    <file>icon/calendar_range.svg</file>
+    <file>icon/calendar_today.svg</file>
+    <file>icon/calendar_year.svg</file>
+    <file>icon/calendar_week.svg</file>
+    <file>icon/info.svg</file>
+    <file>icon/moon.svg</file>
+    <file>icon/sun.svg</file>
   </qresource>
 </RCC>

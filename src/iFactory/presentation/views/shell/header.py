@@ -1,4 +1,3 @@
-# File: presentation/views/shell/header.py
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional, Tuple
@@ -41,21 +40,37 @@ class HeaderView:
         if not self._container:
             return
 
+        # Set fixed height for header
+        self._container.setFixedHeight(Layout.HEADER_HEIGHT)
+        self._container.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
+
         if self._ui_title_icon:
             self._ui_title_icon.setText("")
-            self._ui_title_icon.setFixedSize(32, 32)
-            self._ui_title_icon.setScaledContents(True)
-            self._ui_title_icon.setPixmap(QPixmap(":/icon/logo.png"))
-            self._ui_title_icon.setStyleSheet("background: transparent; padding: 4px;")
+            icon_height = Layout.HEADER_HEIGHT - 12
+            self._ui_title_icon.setFixedHeight(icon_height)
+            self._ui_title_icon.setMinimumWidth(icon_height)
+            self._ui_title_icon.setMaximumWidth(int(icon_height * 2.5))
+            self._ui_title_icon.setScaledContents(False)
+            self._ui_title_icon.setAlignment(Qt.AlignCenter)
+
+            original_pixmap = QPixmap(":/icon/logo.png")
+            if not original_pixmap.isNull():
+                scaled_pixmap = original_pixmap.scaledToHeight(icon_height, Qt.SmoothTransformation)
+                self._ui_title_icon.setPixmap(scaled_pixmap)
+                self._ui_title_icon.setFixedWidth(scaled_pixmap.width())
+
+            self._ui_title_icon.setStyleSheet("background: transparent;")
+            self._ui_title_icon.setVisible(False)
 
         if self._ui_title_label:
             self._ui_title_label.setText("iFactory")
-            self._ui_title_label.setFont(QFont("Segoe UI", 12, QFont.DemiBold))
-            self._ui_title_label.setStyleSheet("background: transparent; padding-left: 4px;")
+            self._ui_title_label.setFont(QFont("Segoe UI", 13, QFont.DemiBold))
+            self._ui_title_label.setStyleSheet("background: transparent; padding-left: 8px;")
+            self._ui_title_label.setVisible(False)
 
         if self._ui_toggle_btn:
             self._ui_toggle_btn.setText("")
-            self._ui_toggle_btn.setFixedSize(40, 32)
+            self._ui_toggle_btn.setFixedSize(36, 36)
             self._ui_toggle_btn.setCursor(Qt.PointingHandCursor)
             self._ui_toggle_btn.setToolTip("Toggle Menu (Ctrl+M)")
             self._ui_toggle_btn.setIconSize(QSize(20, 20))
@@ -65,8 +80,10 @@ class HeaderView:
         if layout:
             layout.setContentsMargins(8, 4, 8, 4)
             layout.setSpacing(4)
+            layout.setDirection(QHBoxLayout.RightToLeft)
 
         self._apply_styles()
+        self._update_toggle_icon()
 
     def _apply_styles(self) -> None:
         is_dark = self._current_theme == "dark"
@@ -98,9 +115,9 @@ class HeaderView:
                 QLabel {{
                     color: {text_color};
                     background: transparent;
-                    font-size: 13px;
+                    font-size: 14px;
                     font-weight: 600;
-                    padding-left: 6px;
+                    padding-left: 8px;
                 }}
             """
             )
@@ -111,7 +128,7 @@ class HeaderView:
                 QPushButton {{
                     background-color: transparent;
                     border: none;
-                    border-radius: 6px;
+                    border-radius: 8px;
                     padding: 6px;
                 }}
                 QPushButton:hover {{
@@ -126,7 +143,7 @@ class HeaderView:
     def _update_toggle_icon(self) -> None:
         if not self._ui_toggle_btn:
             return
-        icon_name = "arrow_menu_close" if self._is_expanded else "arrow_menu_open"
+        icon_name = "arrow_menu_open" if self._is_expanded else "arrow_menu_close"
         icon_path = self._theme_manager.get_icon_path(f":/icon/{icon_name}.svg")
         self._ui_toggle_btn.setIcon(QIcon(icon_path))
 
@@ -165,9 +182,9 @@ class HeaderView:
         layout = self._container.layout()
         if layout:
             if is_expanded:
-                layout.setContentsMargins(10, 4, 6, 4)
+                layout.setContentsMargins(12, 4, 8, 4)
             else:
-                layout.setContentsMargins(5, 4, 5, 4)
+                layout.setContentsMargins(8, 4, 8, 4)
 
 
 __all__ = ["HeaderView"]
