@@ -79,10 +79,14 @@ class SQLAlchemyMapper:
         return StatusPeriod(equipment_code=EquipmentCode(model.equip_code), status=status, time_range=TimeRange(model.start_time, effective_end))
 
     @staticmethod
-    def to_status_period_model(vo: StatusPeriod) -> StatusHistoryModel:
+    def to_status_period_model(vo: StatusPeriod, equip_name: Optional[str] = None) -> StatusHistoryModel:
+        """
+        FIXED: Added equip_name to arguments to persist name in history table.
+        """
         return StatusHistoryModel(
             id=str(uuid4()),
             equip_code=vo.equipment_code.value,
+            equip_name=equip_name,  # --- Added Name ---
             equip_status=vo.status.value,
             start_time=vo.time_range.start,
             end_time=vo.time_range.end,

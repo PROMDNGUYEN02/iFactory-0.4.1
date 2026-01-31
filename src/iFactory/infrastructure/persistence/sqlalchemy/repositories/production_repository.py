@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional, Sequence, List
 from datetime import datetime
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +12,6 @@ from iFactory.domain.value_objects.status_period import StatusPeriod
 from iFactory.domain.value_objects.time_range import TimeRange
 from iFactory.infrastructure.persistence.sqlalchemy.models import StatusHistoryModel, MaterialInputHistoryModel
 
-# FIXED: Import from .mapper (singular) instead of .mappers
 from iFactory.infrastructure.persistence.sqlalchemy.mapper import SQLAlchemyMapper
 
 
@@ -26,25 +25,17 @@ class SqlAlchemyProductionRepository(ProductionRepository):
         self._session = session
 
     async def get_latest_status(self, code: EquipmentCode) -> Optional[StatusPeriod]:
-        """
-        Fetches the active status period (end_time is None) or the most recent one.
-        """
         stmt = select(StatusHistoryModel).where(StatusHistoryModel.equip_code == code.value).order_by(desc(StatusHistoryModel.start_time)).limit(1)
         result = await self._session.execute(stmt)
         model = result.scalar_one_or_none()
         return SQLAlchemyMapper.to_status_period(model)
 
     async def get_status_history(self, code: EquipmentCode, window: TimeRange) -> Sequence[StatusPeriod]:
-        """
-        Fetches status history overlapping with the given window.
-        """
         stmt = (
             select(StatusHistoryModel)
             .where(
                 StatusHistoryModel.equip_code == code.value,
-                # Start time must be before window end
                 StatusHistoryModel.start_time <= window.end,
-                # End time must be after window start, OR End time is NULL (active) AND Start time is before window end
                 (StatusHistoryModel.end_time == None) | (StatusHistoryModel.end_time >= window.start),
             )
             .order_by(StatusHistoryModel.start_time)
@@ -53,14 +44,25 @@ class SqlAlchemyProductionRepository(ProductionRepository):
         models = result.scalars().all()
         return [SQLAlchemyMapper.to_status_period(m) for m in models if m]
 
-    async def save_status_period(self, period: StatusPeriod) -> None:
-        model = SQLAlchemyMapper.to_status_period_model(period)
+    async def save_status_period(self, period: StatusPeriod, equip_name: Optional[str] = None) -> None:
+        model = SQLAlchemyMapper.to_status_period_model(period, equip_name=equip_name)
         await self._session.merge(model)
 
+    # --- NEW: Hiện thực Bulk Save ---
+    async def bulk_save_status_history(self, periods: List[StatusPeriod], equip_name: Optional[str] = None) -> None:
+        """
+        Chuyển đổi list Value Objects sang Models và lưu 1 lần.
+        """
+        if not periods:
+            return
+
+        # Map toàn bộ sang model SQLAlchemy
+        models = [SQLAlchemyMapper.to_status_period_model(p, equip_name=equip_name) for p in periods]
+
+        # Sử dụng add_all thay vì gọi merge/add trong vòng lặp
+        self._session.add_all(models)
+
     async def get_latest_input(self, code: EquipmentCode) -> Optional[MaterialInput]:
-        """
-        Fetches the most recent material input from history.
-        """
         stmt = (
             select(MaterialInputHistoryModel)
             .where(MaterialInputHistoryModel.equipment_code == code.value)

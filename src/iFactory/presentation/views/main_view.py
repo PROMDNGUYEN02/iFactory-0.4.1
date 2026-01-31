@@ -10,7 +10,8 @@ import sys
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Dict, Any, Optional
 
-from PySide6.QtCore import QEvent, QRect, QSize, Qt
+# --- FIX: Added QPoint import ---
+from PySide6.QtCore import QEvent, QRect, QSize, Qt, QPoint
 from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut, QAction, QCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -438,7 +439,7 @@ class MainView(QMainWindow):
 
     def _on_settings_clicked(self, item: QListWidgetItem) -> None:
         """
-        Thay vì chuyển trang, hiển thị Popup Menu để chọn Data Range ngay lập tức.
+        FIXED: Display Menu next to the button and use style.
         """
         # 1. Lấy giá trị hiện tại từ Store để đánh dấu (Check)
         current_days = select_data_range_days(self._store.get_state())
@@ -449,17 +450,23 @@ class MainView(QMainWindow):
             """
             QMenu {
                 background-color: #FFFFFF;
-                border: 1px solid #CCCCCC;
-                padding: 5px;
+                border: 1px solid #D3D3D3;
+                padding: 4px;
+                border-radius: 4px;
             }
             QMenu::item {
-                padding: 8px 25px;
+                padding: 6px 24px;
                 font-size: 13px;
-                color: #000000;
+                color: #333333;
+                border-radius: 4px;
             }
             QMenu::item:selected {
-                background-color: #E0E0E0;
+                background-color: #F0F0F0;
                 color: #000000;
+            }
+            QMenu::item:checked {
+                font-weight: bold;
+                color: #10B981;
             }
         """
         )
@@ -477,12 +484,18 @@ class MainView(QMainWindow):
                 action.setChecked(True)
 
             # Sử dụng lambda để bắt biến 'days'
-            action.triggered.connect(lambda chk, d=days: self._store.dispatch(set_data_range(d)))
+            # FIX: Trigger reload data immediately
+            action.triggered.connect(lambda chk, d=days: self._handle_range_change(d))
 
             menu.addAction(action)
 
-        # 5. Hiển thị Menu tại vị trí con trỏ chuột
-        menu.exec(QCursor.pos())
+        # 5. Tính toán vị trí hiển thị (Fix vấn đề vị trí và che khuất)
+        rect = self.ui.listWidget_settings.visualItemRect(item)
+        global_pos = self.ui.listWidget_settings.mapToGlobal(rect.topRight())
+        # Dịch menu sang phải 5px và lên một chút để căn chỉnh
+        menu_pos = global_pos + QPoint(5, -5)
+
+        menu.exec(menu_pos)
 
         # 6. Bỏ chọn item trong list widget để không bị "dính" màu selection
         self.ui.listWidget_settings.clearSelection()
@@ -490,6 +503,21 @@ class MainView(QMainWindow):
         # (Optional) Giữ focus ở trang chính, không chuyển sang trang Settings rỗng
         if self._last_main_page_index is not None:
             self.ui.listWidget.setCurrentRow(self._last_main_page_index)
+
+    def _handle_range_change(self, days: int):
+        """
+        Handle data range change: dispatch action and trigger data reload.
+        """
+        self._store.dispatch(set_data_range(days))
+        # Trigger data refresh if controller supports it, otherwise re-select device
+        if hasattr(self._controller, "handle_refresh_data"):
+            self._controller.handle_refresh_data()
+        else:
+            # Fallback: re-select current device to trigger refresh if valid
+            current_state = self._store.get_state()
+            selected_id = select_selected_device_id(current_state)
+            if selected_id:
+                self._controller.handle_device_selection(selected_id)
 
     def select_menu_item(self, index: int) -> None:
         if 0 <= index < self.ui.listWidget.count():

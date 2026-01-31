@@ -18,6 +18,7 @@ from iFactory.domain.value_objects.time_range import TimeRange
 logger = logging.getLogger(__name__)
 
 
+# ... (Giữ nguyên hàm _update_history_logic cho Realtime Sync) ...
 async def _update_history_logic(
     history_repo,
     code: EquipmentCode,
@@ -25,79 +26,42 @@ async def _update_history_logic(
     timestamp: datetime,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
+    equip_name: Optional[str] = None,
 ) -> None:
-    """
-    Core logic to update status history.
-    Handles continuity and fixes Time Travel (Future vs Present) conflicts.
-    """
     latest_period: Optional[StatusPeriod] = await history_repo.get_latest_status(code)
     effective_start = start_time if start_time else timestamp
 
-    # Case 1: No history -> Start new
     if not latest_period:
-        # Validate New Period (Start vs End)
         actual_end = end_time
         if actual_end and actual_end < effective_start:
-            logger.warning(f"Data error for {code.value}: End {actual_end} < Start {effective_start}. Clamping.")
             actual_end = effective_start
-
         new_period = StatusPeriod(equipment_code=code, status=new_status, time_range=TimeRange(start=effective_start, end=actual_end))
-        await history_repo.save_status_period(new_period)
+        await history_repo.save_status_period(new_period, equip_name=equip_name)
         return
 
-    # Case 2: Status Changed -> Close old, Open new
     if latest_period.status != new_status:
-        # Determine closing time for the old period
         closing_time = effective_start
-
-        # FIX 1: Time Travel Check (Closing time < Old Start time)
         if closing_time < latest_period.time_range.start:
-            logger.warning(
-                f"Timeline conflict for {code.value}: "
-                f"Closing ({closing_time}) < Old Start ({latest_period.time_range.start}). "
-                f"Clamping closing time."
-            )
             closing_time = latest_period.time_range.start
-
-        # Close old period
         closed_period = latest_period.with_end_time(closing_time)
-        await history_repo.save_status_period(closed_period)
-
-        # Open new period
-        # Ensure new period doesn't start before the old one closed
+        await history_repo.save_status_period(closed_period, equip_name=equip_name)
         new_period_start = max(effective_start, closing_time)
-
-        # FIX 2: Time Travel Check for New Period (End < New Start)
-        # This happens if 'end_time' is real (e.g. 18:26) but 'new_period_start' was forced to future (e.g. 18:28)
         actual_end = end_time
         if actual_end and actual_end < new_period_start:
-            logger.warning(
-                f"Timeline conflict for {code.value}: " f"New End ({actual_end}) < New Start ({new_period_start}). " f"Clamping End to Start."
-            )
             actual_end = new_period_start
-
         new_period = StatusPeriod(equipment_code=code, status=new_status, time_range=TimeRange(start=new_period_start, end=actual_end))
-        await history_repo.save_status_period(new_period)
+        await history_repo.save_status_period(new_period, equip_name=equip_name)
 
-    # Case 3: Same Status, but Ended? (Remote provided END_TIME)
     elif end_time and latest_period.time_range.end is None:
         closing_time = end_time
-
-        # FIX 3: Time Travel Check
         if closing_time < latest_period.time_range.start:
-            logger.warning(f"Timeline conflict for {code.value}: " f"End ({closing_time}) < Start ({latest_period.time_range.start}). " f"Clamping.")
             closing_time = latest_period.time_range.start
-
         closed_period = latest_period.with_end_time(closing_time)
-        await history_repo.save_status_period(closed_period)
+        await history_repo.save_status_period(closed_period, equip_name=equip_name)
 
 
 class SyncAllDevicesCommand:
-    """
-    COMMAND: Syncs all (or specific) devices from Remote Source.
-    Updates Hot Storage (Current State) and Cold Storage (History) via UoW.
-    """
-
+    # ... (Giữ nguyên Class này cho Dashboard/Realtime) ...
     def __init__(
         self,
         remote_source: IRemoteDataSource,
@@ -124,7 +88,6 @@ class SyncAllDevicesCommand:
                     count += 1
                 except Exception as e:
                     code = record.get("equip_code", "unknown")
-                    # Log warning to avoid crashing the whole sync loop
                     logger.warning(f"Error syncing device {code}: {e}")
 
             await uow.commit()
@@ -136,9 +99,7 @@ class SyncAllDevicesCommand:
     async def _process_record(self, uow: AbstractUnitOfWork, record: Dict[str, Any]) -> None:
         raw_code = str(record.get("equip_code"))
         raw_status = record.get("raw_status", "0")
-
         timestamp = record.get("last_update") or datetime.now()
-
         reason_code = record.get("reason_code")
         equip_name = record.get("equip_name")
         remote_start_time = record.get("start_time")
@@ -150,7 +111,6 @@ class SyncAllDevicesCommand:
         except (ValueError, TypeError):
             status_enum = MachineStatus.UNKNOWN
 
-        # 1. Update Hot Storage (Device Entity)
         device = Device(
             equipment_code=code_vo,
             current_status=status_enum,
@@ -160,15 +120,22 @@ class SyncAllDevicesCommand:
         )
         await uow.devices.save(device)
 
-        # 2. Update Cold Storage (History)
         if uow.history:
-            await _update_history_logic(uow.history, code_vo, status_enum, timestamp, remote_start_time, remote_end_time)
+            await _update_history_logic(
+                uow.history,
+                code_vo,
+                status_enum,
+                timestamp,
+                remote_start_time,
+                remote_end_time,
+                equip_name=equip_name,
+            )
 
 
 class SyncDeviceStatusCommand:
     """
-    COMMAND: Syncs a single device status.
-    Uses generic update logic to support both single dict and list of history records.
+    COMMAND: Syncs History for a specific device.
+    OPTIMIZED: Bulk processing and Data filling.
     """
 
     def __init__(self, uow: AbstractUnitOfWork, remote_api: IRemoteDataSource):
@@ -177,46 +144,85 @@ class SyncDeviceStatusCommand:
 
     async def execute(self, equip_code: str, days: int = 30) -> bool:
         try:
-            # Fetch data (Can be Dict or List[Dict] depending on Adapter)
-            # Supports 'days' parameter for history fetching
+            # 1. Fetch toàn bộ dữ liệu (Raw)
             data = await self._remote_api.fetch_device_status(equip_code, days=days)
-
             if not data:
                 return False
 
-            # Normalize to list
             records = data if isinstance(data, list) else [data]
+            if not records:
+                return True
+
+            # 2. Tìm 'equip_name' chuẩn nhất (Lấy từ bản ghi đầu tiên có dữ liệu)
+            master_equip_name = None
+            for r in records:
+                if r.get("equip_name"):
+                    master_equip_name = r.get("equip_name")
+                    break
+
+            # (Fallback: Nếu không thấy trong data, có thể query DB local, nhưng tạm thời để None)
+
+            # Chuẩn bị danh sách Batch
+            batch_periods: List[StatusPeriod] = []
+            latest_record = None
+            latest_timestamp = datetime.min
 
             async with self._uow as uow:
                 for record in records:
                     raw_status = record.get("equip_status", "0")
+                    # Sử dụng timestamp để tìm bản ghi mới nhất cho bảng Devices
                     timestamp = record.get("last_update") or datetime.now()
 
-                    status_enum = MachineStatus.UNKNOWN
+                    # Logic tìm bản ghi mới nhất (để update Hot Store 1 lần)
+                    if timestamp >= latest_timestamp:
+                        latest_timestamp = timestamp
+                        latest_record = record
+
+                    # Logic History
+                    start_time = record.get("start_time")
+                    if start_time:
+                        code_vo = EquipmentCode(record.get("equip_code"))
+                        end_time = record.get("end_time")
+
+                        try:
+                            status_enum = MachineStatus(int(raw_status))
+                        except (ValueError, TypeError):
+                            status_enum = MachineStatus.UNKNOWN
+
+                        # Fix Time Travel & Prepare Object
+                        actual_end = end_time if end_time else None
+                        if actual_end and actual_end < start_time:
+                            actual_end = start_time
+
+                        # Tạo Period Object và thêm vào list (Chưa lưu DB)
+                        period = StatusPeriod(equipment_code=code_vo, status=status_enum, time_range=TimeRange(start=start_time, end=actual_end))
+                        batch_periods.append(period)
+
+                # 3. BULK SAVE HISTORY (Ghi 1 lần duy nhất)
+                # Truyền master_equip_name để điền vào tất cả các dòng (kể cả dòng bị null)
+                if uow.history and batch_periods:
+                    await uow.history.bulk_save_status_history(batch_periods, equip_name=master_equip_name)
+
+                # 4. UPDATE HOT STORE (Chỉ 1 lần duy nhất)
+                if latest_record:
+                    raw_status = latest_record.get("equip_status", "0")
                     try:
                         status_enum = MachineStatus(int(raw_status))
-                    except (ValueError, TypeError):
-                        pass
+                    except:
+                        status_enum = MachineStatus.UNKNOWN
 
-                    code_vo = EquipmentCode(record.get("equip_code"))
-                    start_time = record.get("start_time")
-                    end_time = record.get("end_time")
-
-                    # 1. Update Cold Storage (History)
-                    if uow.history:
-                        await _update_history_logic(uow.history, code_vo, status_enum, timestamp, start_time, end_time)
-
-                    # 2. Update Hot Storage (Latest State) - Overwrite with latest
                     device = Device(
-                        equipment_code=code_vo,
+                        equipment_code=EquipmentCode(latest_record.get("equip_code")),
                         current_status=status_enum,
-                        last_updated_at=timestamp,
-                        equip_name=record.get("equip_name"),
-                        reason_code=record.get("reason_code"),
+                        last_updated_at=latest_timestamp,
+                        equip_name=master_equip_name,  # Luôn dùng tên chuẩn
+                        reason_code=latest_record.get("reason_code"),
                     )
                     await uow.devices.save(device)
 
                 await uow.commit()
+
+            logger.info(f"Synced {len(batch_periods)} history records for {equip_code} (Name: {master_equip_name})")
             return True
 
         except Exception as e:

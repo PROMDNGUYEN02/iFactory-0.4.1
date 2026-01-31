@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional, Sequence
+from typing import Optional, Sequence, List
 
 from ..value_objects.equipment_code import EquipmentCode
 from ..value_objects.material_input import MaterialInput
@@ -33,8 +33,17 @@ class ProductionRepository(ABC):
         pass
 
     @abstractmethod
-    async def save_status_period(self, period: StatusPeriod) -> None:
-        """Record a completed or ongoing status period."""
+    async def save_status_period(self, period: StatusPeriod, equip_name: Optional[str] = None) -> None:
+        """Record a single status period."""
+        pass
+
+    # --- NEW: Hàm lưu hàng loạt để tăng tốc độ ---
+    @abstractmethod
+    async def bulk_save_status_history(self, periods: List[StatusPeriod], equip_name: Optional[str] = None) -> None:
+        """
+        Bulk save multiple status periods at once.
+        Significantly faster for syncing large datasets (e.g., 30 days history).
+        """
         pass
 
     @abstractmethod
