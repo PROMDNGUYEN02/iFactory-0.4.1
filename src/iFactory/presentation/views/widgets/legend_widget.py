@@ -1,24 +1,20 @@
-"""
-Legend Widget - Status color legend.
-Theme-aware with automatic color adaptation and statistical summary.
-Refactored for Hybrid Dict/ViewModel Support.
-"""
-
+# File: presentation/views/widgets/legend_widget.py
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Any, Dict, List
+
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget, QVBoxLayout
-from ...constants.ui_constants import StatusColors
-from ...resources.themes.theme_manager import theme_manager
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+
+from ...constants.status import Status
+from ...resources.themes import get_theme_manager
 
 
 class LegendWidget(QWidget):
-    """Status legend with color indicators and duration stats."""
-
-    def __init__(self, parent=None):
+    def __init__(self, parent: QWidget = None):
         super().__init__(parent)
+        self._theme_manager = get_theme_manager()
         self.setStyleSheet("background-color: transparent;")
         self._stats_labels: Dict[str, QLabel] = {}
         self._status_names_labels: List[QLabel] = []
@@ -31,16 +27,16 @@ class LegendWidget(QWidget):
         layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         title = QLabel("Status\n(24h)")
-        title.setStyleSheet("font-weight: bold; background-color: #64748b; color: white; padding: 2px 5px; border-radius: 3px; font-size: 10px;")
+        title.setStyleSheet("font-weight: bold; background-color: #64748b; color: white; " "padding: 2px 5px; border-radius: 3px; font-size: 10px;")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
         status_map = [
-            ("RUN", StatusColors.RUNNING),
-            ("IDLE", StatusColors.IDLE),
-            ("TEST", StatusColors.TEST),
-            ("ALARM", StatusColors.ERROR),
-            ("OFF", StatusColors.OFFLINE),
+            ("RUN", Status.get_color(1)),
+            ("IDLE", Status.get_color(3)),
+            ("TEST", Status.get_color(4)),
+            ("ALARM", Status.get_color(5)),
+            ("OFF", Status.get_color(0)),
         ]
 
         for label_text, color in status_map:
@@ -76,19 +72,18 @@ class LegendWidget(QWidget):
 
         return container
 
-    def _get_val(self, obj, key):
-        """Helper to get value from either dict or object."""
+    def _get_val(self, obj: Any, key: str) -> Any:
         if isinstance(obj, dict):
             return obj.get(key)
         return getattr(obj, key, None)
 
-    def render_stats(self, timeline_data: Dict[str, List[Any]], start: datetime, end: datetime):
-        """
-        Calculate and display percentage duration for each status.
-        Supports both Dicts and ViewModels.
-        """
-        # 1. Update Theme Colors
-        is_dark = theme_manager.is_dark
+    def render_stats(
+        self,
+        timeline_data: Dict[str, List[Any]],
+        start: datetime,
+        end: datetime,
+    ) -> None:
+        is_dark = self._theme_manager.is_dark
         name_color = "#E0E0E0" if is_dark else "#555555"
         stat_color = "#B0B0B0" if is_dark else "#888888"
 
@@ -98,22 +93,20 @@ class LegendWidget(QWidget):
         for lbl in self._stats_labels.values():
             lbl.setStyleSheet(f"font-size: 10px; color: {stat_color};")
 
-        # 2. Calculate Stats
         total_duration = (end - start).total_seconds()
         if total_duration <= 0:
             return
 
         stats = {key: 0.0 for key in self._stats_labels.keys()}
 
-        def get_key(code):
-            c = int(code)
-            if c == 1:
+        def get_key(code: int) -> str:
+            if code == 1:
                 return "RUN"
-            if c == 2:
+            if code == 3:
                 return "IDLE"
-            if c == 3:
+            if code == 4:
                 return "TEST"
-            if c == 0 or c > 3:
+            if code == 5:
                 return "ALARM"
             return "OFF"
 
@@ -130,8 +123,8 @@ class LegendWidget(QWidget):
 
                 if eff_end > eff_start:
                     duration = (eff_end - eff_start).total_seconds()
-                    code = self._get_val(seg, "status_code") or -1
-                    key = get_key(code)
+                    code = self._get_val(seg, "status_code") or 0
+                    key = get_key(int(code))
                     if key in stats:
                         stats[key] += duration
 
@@ -145,3 +138,6 @@ class LegendWidget(QWidget):
             pct = (duration / grand_total) * 100
             if key in self._stats_labels:
                 self._stats_labels[key].setText(f"{pct:.1f}%")
+
+
+__all__ = ["LegendWidget"]

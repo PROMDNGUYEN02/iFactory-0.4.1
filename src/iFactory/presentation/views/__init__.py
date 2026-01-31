@@ -1,5 +1,4 @@
-"""Presentation Views."""
+# File: presentation/views/__init__.py
+from .main_window import MainWindow
 
-from .main_view import MainView
-
-__all__ = ["MainView"]
+__all__ = ["MainWindow"]

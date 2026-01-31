@@ -1,55 +1,49 @@
-"""
-Theme Manager - Centralized logic for application styling.
-Follows Singleton pattern to provide unified access to theme resources.
-"""
+# File: presentation/resources/themes/manager.py
+from __future__ import annotations
 
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
+
 from PySide6.QtGui import QColor
 
 logger = logging.getLogger(__name__)
 
 
 class ThemeManager:
-    _instance = None
+    _instance: ThemeManager = None
 
-    def __new__(cls):
+    def __new__(cls) -> ThemeManager:
         if cls._instance is None:
-            cls._instance = super(ThemeManager, cls).__new__(cls)
+            cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
     def __init__(self):
         if self._initialized:
             return
-
         self._current_theme = "light"
         self._variables: Dict[str, Any] = {}
-
-        # Tự động tìm file variables.json cùng thư mục
         self._base_path = Path(__file__).parent
         self._load_variables()
         self._initialized = True
 
-    def _load_variables(self):
+    def _load_variables(self) -> None:
         json_path = self._base_path / "variables.json"
         try:
             if json_path.exists():
-                with open(json_path, "r", encoding="utf-8") as f:
-                    self._variables = json.load(f)
+                self._variables = json.loads(json_path.read_text(encoding="utf-8"))
             else:
-                logger.warning(f"Theme variables not found at {json_path}")
-                # Fallback data
+                logger.warning("Theme variables not found: %s", json_path)
                 self._variables = {"common": {}, "light": {}, "dark": {}, "iconAlias": {}}
         except Exception as e:
-            logger.error(f"Failed to load theme variables: {e}")
+            logger.error("Failed to load theme variables: %s", e)
             self._variables = {"common": {}, "light": {}, "dark": {}, "iconAlias": {}}
 
-    def set_theme(self, theme_name: str):
-        if theme_name in ["light", "dark"]:
-            self._current_theme = theme_name
+    def set_theme(self, theme: str) -> None:
+        if theme in ("light", "dark"):
+            self._current_theme = theme
 
     @property
     def current_theme(self) -> str:
@@ -60,10 +54,8 @@ class ThemeManager:
         return self._current_theme == "dark"
 
     def get_color(self, key: str) -> str:
-        """Get hex color string from current theme variables."""
         theme_vars = self._variables.get(self._current_theme, {})
         common_vars = self._variables.get("common", {})
-        # Fallback: Theme var -> Common var -> Default Error Pink
         return theme_vars.get(key, common_vars.get(key, "#FF00FF"))
 
     def get_qcolor(self, key: str) -> QColor:
@@ -78,20 +70,34 @@ class ThemeManager:
         try:
             if not qss_path.exists():
                 return ""
-            with open(qss_path, "r", encoding="utf-8") as f:
-                qss_template = f.read()
 
-            # Merge variables
-            replacements = {**self._variables.get("common", {}), **self._variables.get(self._current_theme, {})}
+            template = qss_path.read_text(encoding="utf-8")
+            replacements = {
+                **self._variables.get("common", {}),
+                **self._variables.get(self._current_theme, {}),
+            }
 
-            # Replace placeholders
             for key, value in replacements.items():
-                qss_template = qss_template.replace(f"${{{key}}}", str(value))
+                template = template.replace(f"${{{key}}}", str(value))
 
-            return qss_template
-        except Exception:
+            return template
+
+        except Exception as e:
+            logger.error("Failed to load stylesheet: %s", e)
             return ""
 
 
-# Global instance
-theme_manager = ThemeManager()
+_theme_manager_instance: ThemeManager = None
+
+
+def get_theme_manager() -> ThemeManager:
+    global _theme_manager_instance
+    if _theme_manager_instance is None:
+        _theme_manager_instance = ThemeManager()
+    return _theme_manager_instance
+
+
+theme_manager = get_theme_manager()
+
+
+__all__ = ["ThemeManager", "get_theme_manager", "theme_manager"]

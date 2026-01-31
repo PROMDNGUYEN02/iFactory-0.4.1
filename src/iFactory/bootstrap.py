@@ -93,7 +93,7 @@ def create_qt_application():
     app.setQuitOnLastWindowClosed(True)
 
     try:
-        from iFactory.presentation.constants.ui_constants import APP_ICON_PATH
+        from iFactory.presentation.constants.status import APP_ICON_PATH
 
         if APP_ICON_PATH:
             app.setWindowIcon(QIcon(str(APP_ICON_PATH)))

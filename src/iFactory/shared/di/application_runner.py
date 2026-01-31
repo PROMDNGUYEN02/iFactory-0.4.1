@@ -14,7 +14,7 @@ from .app_container import AppContainer
 
 # Deferred import to avoid circular dependencies at module level
 if TYPE_CHECKING:
-    from iFactory.presentation.di.ui_container import UIContainer
+    from iFactory.presentation.di.container import UIContainer
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ class ApplicationRunner:
             # Fallback: If AppContainer didn't create it, we do.
             if not self._ui_container:
                 logger.info("[ApplicationRunner] UIContainer not found in AppContainer. Creating manual instance.")
-                from iFactory.presentation.di.ui_container import UIContainer
+                from iFactory.presentation.di.container import UIContainer
 
                 self._ui_container = UIContainer(self.container)
                 self._ui_container.initialize()

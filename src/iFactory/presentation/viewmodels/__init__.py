@@ -1,6 +1,12 @@
-"""Presentation ViewModels - Pure data structures for UI binding."""
+# File: presentation/viewmodels/__init__.py
+from .device import DeviceViewModel
+from .gantt import GanttSegmentViewModel, GanttChartViewModel
+from .shell import ShellViewModel, SystemStatusViewModel
 
-from .device_vm import DeviceViewModel
-from .gantt_vm import GanttSegmentViewModel, GanttChartViewModel
-
-__all__ = ["DeviceViewModel", "GanttSegmentViewModel", "GanttChartViewModel"]
+__all__ = [
+    "DeviceViewModel",
+    "GanttSegmentViewModel",
+    "GanttChartViewModel",
+    "ShellViewModel",
+    "SystemStatusViewModel",
+]

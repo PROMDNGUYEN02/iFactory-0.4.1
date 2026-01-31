@@ -1,29 +1,31 @@
-"""
-Professional Gantt Chart Canvas Widget.
-Displays device status timeline for 24 hours with clear colors.
-Supports Compact Mode for sidebar/summary views.
-Refactored for Hybrid Dict/ViewModel Support.
-"""
-
+# File: presentation/views/widgets/gantt_canvas.py
 from __future__ import annotations
+
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Union
+from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, QRectF, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QLinearGradient, QPainterPath
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QLabel, QScrollArea, QFrame
+from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
-from ...resources.themes.theme_manager import theme_manager
-from ...constants.ui_constants import StatusColors
+from ...constants.layout import Layout
+from ...constants.status import Status
+from ...resources.themes import get_theme_manager
 
 logger = logging.getLogger(__name__)
 
 
 class GanttRowWidget(QWidget):
-    ROW_HEIGHT = 32
-
-    def __init__(self, equip_code: str, segments: List[Any], start_time: datetime, end_time: datetime, label_width: int = 90, parent=None):
+    def __init__(
+        self,
+        equip_code: str,
+        segments: List[Any],
+        start_time: datetime,
+        end_time: datetime,
+        label_width: int = 90,
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
         self._equip_code = equip_code
         self._segments = segments
@@ -31,42 +33,40 @@ class GanttRowWidget(QWidget):
         self._end_time = end_time
         self._label_width = label_width
         self._row_index = 0
+        self._theme_manager = get_theme_manager()
 
         self._is_compact = label_width == 0
-        height = 20 if self._is_compact else self.ROW_HEIGHT
+        height = Layout.GANTT_COMPACT_ROW_HEIGHT if self._is_compact else Layout.GANTT_ROW_HEIGHT
         self.setFixedHeight(height)
         self.setMouseTracking(True)
 
-    def set_row_index(self, index: int):
+    def set_row_index(self, index: int) -> None:
         self._row_index = index
 
-    def paintEvent(self, event):
+    def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.rect()
 
-        # [THEME] Dynamic background
-        bg_base = theme_manager.get_qcolor("chart.bg")
+        bg_base = self._theme_manager.get_qcolor("chart.bg")
         if not self._is_compact:
             if self._row_index % 2 == 0:
-                bg_color = bg_base.lighter(105) if theme_manager.is_dark else bg_base.darker(105)
+                bg_color = bg_base.lighter(105) if self._theme_manager.is_dark else bg_base.darker(105)
             else:
                 bg_color = bg_base
             painter.fillRect(rect, bg_color)
         else:
             painter.fillRect(rect, Qt.transparent)
 
-        # Draw Label and Grid
         if self._label_width > 0:
-            painter.setPen(QPen(theme_manager.get_qcolor("chart.grid"), 1))
+            painter.setPen(QPen(self._theme_manager.get_qcolor("chart.grid"), 1))
             painter.drawLine(self._label_width, rect.height() - 1, rect.width(), rect.height() - 1)
 
-            painter.setPen(theme_manager.get_qcolor("chart.text"))
+            painter.setPen(self._theme_manager.get_qcolor("chart.text"))
             painter.setFont(QFont("Consolas", 9, QFont.Bold))
             label_rect = QRectF(5, 0, self._label_width - 10, rect.height())
             painter.drawText(label_rect, Qt.AlignVCenter | Qt.AlignLeft, self._equip_code)
 
-        # Draw segments
         chart_width = rect.width() - self._label_width - 10
         total_seconds = (self._end_time - self._start_time).total_seconds()
 
@@ -77,20 +77,26 @@ class GanttRowWidget(QWidget):
             for seg in self._segments:
                 self._draw_segment(painter, seg, chart_width, total_seconds, y_pos, bar_height)
 
-    def _get_val(self, obj, key):
-        """Helper to get value from either dict or object."""
+    def _get_val(self, obj: Any, key: str) -> Any:
         if isinstance(obj, dict):
             return obj.get(key)
         return getattr(obj, key, None)
 
-    def _draw_segment(self, painter, seg, chart_width, total_seconds, y, height):
+    def _draw_segment(
+        self,
+        painter: QPainter,
+        seg: Any,
+        chart_width: float,
+        total_seconds: float,
+        y: int,
+        height: int,
+    ) -> None:
         seg_start = self._get_val(seg, "start_time")
         seg_end = self._get_val(seg, "end_time")
 
         if not isinstance(seg_start, datetime) or not isinstance(seg_end, datetime):
             return
 
-        # Clamp segment to window
         if seg_end < self._start_time or seg_start > self._end_time:
             return
 
@@ -104,24 +110,25 @@ class GanttRowWidget(QWidget):
         width = max(((end_offset - start_offset) / total_seconds) * chart_width, 2)
 
         status_code = int(self._get_val(seg, "status_code") or 0)
-        base_color = QColor(StatusColors.get_color(status_code))
+        base_color = QColor(Status.get_color(status_code))
 
-        rect = QRectF(x, y, width, height)
+        draw_rect = QRectF(x, y, width, height)
 
         if self._is_compact:
-            painter.fillRect(rect, base_color)
+            painter.fillRect(draw_rect, base_color)
         else:
-            gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            gradient = QLinearGradient(draw_rect.topLeft(), draw_rect.bottomLeft())
             gradient.setColorAt(0, base_color.lighter(120))
             gradient.setColorAt(1, base_color)
             path = QPainterPath()
-            path.addRoundedRect(rect, 4, 4)
+            path.addRoundedRect(draw_rect, 4, 4)
             painter.fillPath(path, QBrush(gradient))
 
 
 class TimeRulerWidget(QWidget):
-    def __init__(self, parent=None, is_compact=False):
+    def __init__(self, parent: Optional[QWidget] = None, is_compact: bool = False):
         super().__init__(parent)
+        self._theme_manager = get_theme_manager()
         now = datetime.now()
         self._start_time = now - timedelta(hours=24)
         self._end_time = now
@@ -129,24 +136,24 @@ class TimeRulerWidget(QWidget):
         self._is_compact = is_compact
         self.setFixedHeight(16 if is_compact else 28)
 
-    def set_time_range(self, start, end, label_width=90):
+    def set_time_range(self, start: datetime, end: datetime, label_width: int = 90) -> None:
         self._start_time = start
         self._end_time = end
         self._label_width = label_width
         self.update()
 
-    def paintEvent(self, event):
+    def paintEvent(self, event) -> None:
         painter = QPainter(self)
         rect = self.rect()
-        painter.fillRect(rect, theme_manager.get_qcolor("chart.bg"))
+        painter.fillRect(rect, self._theme_manager.get_qcolor("chart.bg"))
 
         total_seconds = (self._end_time - self._start_time).total_seconds()
         if total_seconds <= 0:
             return
 
         painter.setFont(QFont("Consolas", 7 if self._is_compact else 8))
-        grid_color = theme_manager.get_qcolor("chart.grid")
-        text_color = theme_manager.get_qcolor("chart.text")
+        grid_color = self._theme_manager.get_qcolor("chart.grid")
+        text_color = self._theme_manager.get_qcolor("chart.text")
 
         right_pad = 0 if self._is_compact else 10
         chart_width = rect.width() - self._label_width - right_pad
@@ -177,14 +184,15 @@ class TimeRulerWidget(QWidget):
 class GanttCanvasWidget(QWidget):
     segment_clicked = Signal(str, dict)
 
-    def __init__(self, parent=None, is_compact: bool = False):
+    def __init__(self, parent: Optional[QWidget] = None, is_compact: bool = False):
         super().__init__(parent)
-        self._timeline_data = {}
+        self._theme_manager = get_theme_manager()
+        self._timeline_data: Dict[str, Any] = {}
         self._is_compact = is_compact
         self.LABEL_WIDTH = 0 if is_compact else 90
         self._setup_ui()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -219,10 +227,11 @@ class GanttCanvasWidget(QWidget):
         self._scroll.setWidget(self._content)
         layout.addWidget(self._scroll)
 
-    def _update_header_style(self):
+    def _update_header_style(self) -> None:
         if not hasattr(self, "_header"):
             return
-        if theme_manager.is_dark:
+
+        if self._theme_manager.is_dark:
             grad = "qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e2d45, stop:1 #152238)"
             border = "#2a4066"
         else:
@@ -231,8 +240,12 @@ class GanttCanvasWidget(QWidget):
 
         self._header.setStyleSheet(f"QFrame {{ background: {grad}; border-bottom: 1px solid {border}; }}")
 
-    def render_timeline(self, data: Dict[str, Any], start: datetime = None, end: datetime = None):
-        """Render timeline. Accepts data dict containing either Dicts or ViewModels."""
+    def render_timeline(
+        self,
+        data: Dict[str, Any],
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> None:
         if not self._is_compact:
             self._update_header_style()
 
@@ -258,5 +271,8 @@ class GanttCanvasWidget(QWidget):
 
         self._content_layout.addStretch()
 
-        bg = theme_manager.get_color("chart.bg") if not self._is_compact else "transparent"
+        bg = self._theme_manager.get_color("chart.bg") if not self._is_compact else "transparent"
         self._content.setStyleSheet(f"background: {bg};")
+
+
+__all__ = ["GanttCanvasWidget"]

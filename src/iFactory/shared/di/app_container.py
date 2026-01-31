@@ -1,3 +1,4 @@
+# File: shared/di/app_container.py
 """
 Main Application DI Container.
 Wires all layers together following Clean Architecture.
@@ -7,11 +8,8 @@ Supports dual storage: Hot (latest) and Cold (history).
 from __future__ import annotations
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-# --- Infrastructure Layer Imports ---
 from iFactory.infrastructure.persistence.sqlalchemy.database import (
     get_hot_engine,
     get_cold_engine,
@@ -23,34 +21,23 @@ from iFactory.infrastructure.persistence.sqlalchemy.unit_of_work import (
     ColdStorageUnitOfWork,
     DualStorageUnitOfWork,
 )
-
-# ADAPTER: Swapped MssqlDataSource for MssqlAdapter
 from iFactory.infrastructure.adapters.mssql_adapter import MssqlAdapter as MssqlDataSource
 from iFactory.infrastructure.scheduling.task_scheduler import BackgroundScheduler
-
-# --- Config & Path Management ---
 from iFactory.infrastructure.configuration.paths import PATHS
 from iFactory.infrastructure.configuration.db_settings import DatabaseConfig
-
-# ADAPTER: Updated path for SettingsManager
 from iFactory.infrastructure.configuration.settings import SettingsManager
-
-# --- Application Layer Imports (Refactored) ---
 from iFactory.application.queries.devices import GetLatestDeviceStatusQuery, GetAllDevicesStatusQuery
 from iFactory.application.queries.history import GetDeviceHistoryQuery, GenerateProductionTimelineQuery
 from iFactory.application.commands.sync import SyncAllDevicesCommand
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncEngine
-    from iFactory.presentation.di.ui_container import UIContainer
-    from iFactory.presentation.adapters import QtSignalAdapter
+    from iFactory.presentation.di.container import UIContainer
+    from iFactory.presentation.adapters.signal_bus import SignalBus
 
 logger = logging.getLogger(__name__)
 
 
 class DeviceServiceAdapter:
-    """Adapter to present Commands and Queries to the UIContainer."""
-
     def __init__(
         self,
         sync_cmd: Optional[SyncAllDevicesCommand],
@@ -78,7 +65,6 @@ class DeviceServiceAdapter:
         return await self._get_all_qry.execute(equipment_codes)
 
     async def get_device_history(self, equipment_code, days=1):
-        """Get device history from Cold Storage."""
         return await self._get_history_qry.execute(equipment_code, days=days)
 
     async def get_gantt_segments(
@@ -113,11 +99,6 @@ class DeviceServiceAdapter:
 
 
 class AppContainer:
-    """
-    Application Dependency Injection Container.
-    Manages dual storage: Hot (latest state) and Cold (history).
-    """
-
     __slots__ = (
         "_base_dir",
         "_settings",
@@ -131,7 +112,7 @@ class AppContainer:
         "_cache_provider",
         "_device_service_adapter",
         "_ui_container",
-        "_signal_adapter",
+        "_signal_bus",
         "_initialized",
     )
 
@@ -148,7 +129,7 @@ class AppContainer:
         self._cache_provider = None
         self._device_service_adapter = None
         self._ui_container = None
-        self._signal_adapter = None
+        self._signal_bus = None
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -171,19 +152,12 @@ class AppContainer:
             self._db_config = DatabaseConfig()
 
     async def _init_infrastructure(self) -> None:
-        """Initialize Infrastructure layer: Databases, ORM, Cache, and Remote Sources."""
-        # 1. Ensure directories
         PATHS.ensure_directories()
-
-        # 2. Get engines for Hot and Cold storage
         self._hot_engine = get_hot_engine()
         self._cold_engine = get_cold_engine()
-
-        # 3. Get session factories
         self._hot_session_factory = get_hot_session_factory()
         self._cold_session_factory = get_cold_session_factory()
 
-        # 4. Cache (MemoryCache)
         try:
             from iFactory.infrastructure.cache.memory_cache import MemoryCache
 
@@ -195,7 +169,6 @@ class AppContainer:
 
             self._cache_provider = MemoryCache(max_size=100)
 
-        # 5. Remote Data Source (MSSQL)
         if self._db_config and self._db_config.mssql_url:
             try:
                 self._remote_data_source = MssqlDataSource(self._db_config.mssql_url)
@@ -205,73 +178,54 @@ class AppContainer:
         else:
             logger.info("[AppContainer] MSSQL not configured. Running in offline/local mode.")
 
-        # 6. Scheduler
         if self._remote_data_source:
             self._scheduler = BackgroundScheduler(interval_seconds=3.0)
 
-    # -------------------------------------------------------------------------
-    # UoW Factory Methods
-    # -------------------------------------------------------------------------
-
     def _create_hot_uow(self) -> HotStorageUnitOfWork:
-        """Factory for Hot Storage UoW (latest state)."""
         return HotStorageUnitOfWork(self._hot_session_factory)
 
     def _create_cold_uow(self) -> ColdStorageUnitOfWork:
-        """Factory for Cold Storage UoW (history)."""
         return ColdStorageUnitOfWork(self._cold_session_factory)
 
     def _create_dual_uow(self) -> DualStorageUnitOfWork:
-        """Factory for Dual Storage UoW (both Hot and Cold)."""
         return DualStorageUnitOfWork(
             self._hot_session_factory,
             self._cold_session_factory,
         )
 
     def _init_application(self) -> None:
-        """Initialize Application layer with proper Hot/Cold storage separation."""
-        # Ensure cache provider exists
         if self._cache_provider is None:
             logger.error("Cache provider is None! Creating fallback.")
             from iFactory.infrastructure.cache.memory_cache import MemoryCache
 
             self._cache_provider = MemoryCache(max_size=100)
 
-        # --- Queries using Hot Storage (latest state) ---
         get_latest_qry = GetLatestDeviceStatusQuery(
             uow_factory=self._create_hot_uow,
             cache=self._cache_provider,
         )
-
         get_all_qry = GetAllDevicesStatusQuery(
             uow_factory=self._create_hot_uow,
             cache=self._cache_provider,
         )
-
-        # --- Queries using Cold Storage (history) ---
         get_history_qry = GetDeviceHistoryQuery(
             uow_factory=self._create_cold_uow,
             cache=self._cache_provider,
         )
-
         gantt_qry = GenerateProductionTimelineQuery(
             uow_factory=self._create_cold_uow,
             cache=self._cache_provider,
         )
 
-        # --- Commands using Dual Storage ---
         sync_cmd = None
         if self._remote_data_source:
             sync_cmd = SyncAllDevicesCommand(
                 remote_source=self._remote_data_source,
                 dual_uow_factory=self._create_dual_uow,
             )
-
-            # Start scheduler if configured
             if self._scheduler:
                 self._scheduler.start(lambda: sync_cmd.execute())
 
-        # --- Create Service Adapter ---
         self._device_service_adapter = DeviceServiceAdapter(
             sync_cmd=sync_cmd,
             get_latest_qry=get_latest_qry,
@@ -281,14 +235,13 @@ class AppContainer:
         )
 
     def _init_presentation(self) -> None:
-        from iFactory.presentation.adapters import QtSignalAdapter
-        from iFactory.presentation.di.ui_container import UIContainer
+        from iFactory.presentation.adapters.signal_bus import SignalBus
+        from iFactory.presentation.di.container import UIContainer
 
-        self._signal_adapter = QtSignalAdapter()
+        self._signal_bus = SignalBus()
         self._ui_container = UIContainer(app_container=self)
         self._ui_container.initialize()
 
-    # --- Getters ---
     @property
     def device_facade(self) -> Optional[DeviceServiceAdapter]:
         return self._device_service_adapter

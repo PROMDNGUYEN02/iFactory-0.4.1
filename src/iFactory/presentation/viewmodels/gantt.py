@@ -1,24 +1,15 @@
-"""
-Gantt ViewModel - Pure read-only data structures for timeline UI.
-"""
-
+# File: presentation/viewmodels/gantt.py
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GanttSegmentViewModel:
-    """
-    Immutable model for a single block on the Gantt chart.
-    Contains pre-calculated display properties (width, color).
-    """
-
     start_time: datetime
     end_time: datetime
     status_code: int
     status_name: str
-    status_display: str
     status_color: str
     duration_seconds: float
     duration_display: str
@@ -33,12 +24,8 @@ class GanttSegmentViewModel:
         return self.end_time.strftime("%H:%M:%S")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GanttChartViewModel:
-    """
-    Immutable model for a complete Device Timeline row.
-    """
-
     device_code: str
     segments: List[GanttSegmentViewModel]
     start_time: datetime
@@ -52,3 +39,14 @@ class GanttChartViewModel:
     @property
     def time_range_display(self) -> str:
         return f"{self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
+
+    @staticmethod
+    def empty(device_code: str) -> "GanttChartViewModel":
+        now = datetime.now()
+        return GanttChartViewModel(
+            device_code=device_code,
+            segments=[],
+            start_time=now,
+            end_time=now,
+            total_duration_seconds=0,
+        )
