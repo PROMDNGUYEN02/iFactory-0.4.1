@@ -40,6 +40,33 @@ class MssqlAdapter(IRemoteDataSource):
         # Fallback if parsing fails or None
         return datetime.now()
 
+    def _map_row(self, row: Any) -> Dict[str, Any]:
+        """Maps raw SQL tuple to dictionary. Centralizes index mapping."""
+        # Query Order: EQUIP_CODE (0), EQUIP_STATUS (1), START_TIME (2), END_TIME (3), REASON_CODE (4), EQUIP_NAME (5)
+        equip_code = str(row[0]).strip() if row[0] else "UNKNOWN"
+        equip_status = str(row[1]) if row[1] else "0"
+        start_time = self._parse_datetime(row[2])
+        end_time_val = row[3]
+        reason_code = str(row[4]).strip() if row[4] else None
+        equip_name = str(row[5]).strip() if row[5] else None
+
+        # Logic tính last_update
+        if end_time_val:
+            last_update = self._parse_datetime(end_time_val)
+        else:
+            last_update = datetime.now()
+
+        return {
+            "equip_code": equip_code,
+            "equip_status": equip_status,
+            "raw_status": equip_status,
+            "start_time": start_time,
+            "end_time": self._parse_datetime(end_time_val) if end_time_val else None,
+            "reason_code": reason_code,
+            "equip_name": equip_name,
+            "last_update": last_update,
+        }
+
     async def fetch_latest_status(self, equipment_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
         Fetch the single LATEST status for multiple devices (Bulk Sync).
@@ -82,34 +109,7 @@ class MssqlAdapter(IRemoteDataSource):
                 result = await conn.execute(stmt, params)
                 rows = result.fetchall()
 
-                data = []
-                for row in rows:
-                    equip_code = str(row[0]).strip() if row[0] else "UNKNOWN"
-                    equip_status = str(row[1]) if row[1] else "0"
-                    start_time = self._parse_datetime(row[2])
-                    end_time_val = row[3]
-                    reason_code = str(row[4]).strip() if row[4] else None
-                    equip_name = str(row[5]).strip() if row[5] else None
-
-                    # Logic tính last_update
-                    if end_time_val:
-                        last_update = self._parse_datetime(end_time_val)
-                    else:
-                        last_update = datetime.now()
-
-                    data.append(
-                        {
-                            "equip_code": equip_code,
-                            "equip_status": equip_status,
-                            "raw_status": equip_status,
-                            "start_time": start_time,
-                            "end_time": self._parse_datetime(end_time_val) if end_time_val else None,
-                            "reason_code": reason_code,
-                            "equip_name": equip_name,
-                            "last_update": last_update,
-                        }
-                    )
-                return data
+                return [self._map_row(row) for row in rows]
 
         except Exception as e:
             logger.error(f"[MssqlAdapter] Bulk fetch error: {e}")
@@ -145,34 +145,7 @@ class MssqlAdapter(IRemoteDataSource):
                 result = await conn.execute(text(query), {"code": equip_code, "cutoff": cutoff_date})
                 rows = result.fetchall()
 
-                results = []
-                for row in rows:
-                    equip_code_val = str(row[0]).strip() if row[0] else "UNKNOWN"
-                    equip_status = str(row[1]) if row[1] else "0"
-                    start_time = self._parse_datetime(row[2])
-                    end_time_val = row[3]
-                    reason_code = str(row[4]).strip() if row[4] else None
-                    equip_name = str(row[5]).strip() if row[5] else None
-
-                    if end_time_val:
-                        last_update = self._parse_datetime(end_time_val)
-                    else:
-                        last_update = datetime.now()
-
-                    results.append(
-                        {
-                            "equip_code": equip_code_val,
-                            "equip_status": equip_status,
-                            "raw_status": equip_status,
-                            "start_time": start_time,
-                            "end_time": self._parse_datetime(end_time_val) if end_time_val else None,
-                            "reason_code": reason_code,
-                            "equip_name": equip_name,
-                            "last_update": last_update,
-                        }
-                    )
-
-                return results
+                return [self._map_row(row) for row in rows]
 
         except Exception as e:
             logger.error(f"[MssqlAdapter] History fetch error for {equip_code}: {e}")
