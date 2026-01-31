@@ -1,87 +1,144 @@
-/* GLOBAL RESET */
-QMainWindow, QWidget#centralwidget { background: ${app.bg}; color: ${app.fg}; font-family: "Segoe UI", sans-serif; }
-QStackedWidget { background: ${stack.bg}; border: none; }
+# File: presentation/resources/themes/base.qss
+QMainWindow, QWidget#centralwidget {
+    background: ${app.bg};
+    color: ${app.fg};
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 13px;
+}
 
-/* PANEL BORDERS */
-QFrame#title_frame, QFrame#left_slide_menu_frame {
+QStackedWidget {
+    background: ${stack.bg};
+    border: none;
+}
+
+QFrame#title_frame {
+    background: ${slide.bg};
+    border: none;
+    border-bottom: 1px solid ${border};
+    min-height: 48px;
+    max-height: 48px;
+}
+
+QFrame#left_slide_menu_frame {
     background: ${slide.bg};
     border: none;
     border-right: 1px solid ${border};
 }
-QFrame#title_frame { border-bottom: 1px solid ${border}; }
 
-/* HEADER BUTTONS */
-QPushButton#menu_toggle_btn, 
-QPushButton#minimize_window_button, 
-QPushButton#restore_window_button, 
-QPushButton#close_window_button {
+QFrame#left_slide_menu_frame QListWidget {
     background: transparent;
     border: none;
-    border-radius: 6px;
-    margin: 2px;
-    color: ${app.fg};
-    text-align: center;
 }
 
-QPushButton#menu_toggle_btn:hover, 
-QPushButton#minimize_window_button:hover, 
-QPushButton#restore_window_button:hover {
-    background-color: ${hover};
+QFrame#right_slide_menu_frame {
+    background: ${slide.bg};
+    border: none;
+    border-left: 1px solid ${border};
 }
-QPushButton#close_window_button:hover { background-color: #E81123; color: white; }
 
-/* SIDEBAR LIST */
-QListWidget {
+QScrollArea {
     background: transparent;
     border: none;
-    outline: none;
-    margin-top: 10px;
 }
 
-/* EXPANDED STATE (Có chữ, Icon trái) */
-QListWidget::item {
-    height: 42px;
-    margin: 2px 8px; /* Khoảng cách giữa các item */
-    border-radius: 6px;
-    padding-left: 12px;
-    color: ${app.fg};
-    font-size: 14px;
-    border: 1px solid transparent;
+QScrollBar:vertical {
+    background: transparent;
+    width: 6px;
+    margin: 4px 2px;
 }
 
-/* COLLAPSED STATE (Không chữ, Icon giữa) */
-QListWidget[collapsed="true"] { width: ${menu.widthCollapsed}; }
-
-QListWidget[collapsed="true"]::item {
-    /* [QUAN TRỌNG] Reset padding để text-align hoạt động */
-    padding: 0px; 
-    margin: 4px 5px; /* Căn giữa box 50x42 */
-    text-align: center; /* Icon vào giữa */
-    
-    /* Ẩn Text bằng font size ảo */
-    color: transparent;
-    font-size: 1px;
+QScrollBar::handle:vertical {
+    background: ${hint};
+    border-radius: 3px;
+    min-height: 24px;
 }
 
-/* HOVER & SELECTED */
-QListWidget::item:hover {
+QScrollBar::handle:vertical:hover {
+    background: ${app.fg};
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+    height: 0;
+}
+
+QPushButton {
     background-color: ${hover};
     border: 1px solid ${border};
+    border-radius: 8px;
+    padding: 8px 16px;
+    color: ${app.fg};
+    font-weight: 500;
 }
 
-QListWidget::item:selected {
+QPushButton:hover {
     background-color: ${selected};
-    color: ${selected.text};
-    font-weight: 600;
 }
 
-QListWidget[collapsed="true"]::item:selected {
-    color: transparent; /* Đảm bảo không hiện text màu xanh khi chọn */
+QLabel {
+    color: ${app.fg};
+    background: transparent;
 }
 
-/* SETTINGS BOTTOM */
-QListWidget#listWidget_settings {
-    margin-bottom: 10px;
+QFrame#frame_details {
+    background-color: ${frame.bg};
+    border: 1px solid ${border};
+    border-radius: 10px;
+    padding: 12px;
+}
+
+QProgressBar {
+    background-color: ${hover};
+    border: none;
+    border-radius: 4px;
+    height: 6px;
+}
+
+QProgressBar::chunk {
+    background-color: ${accent};
+    border-radius: 4px;
+}
+
+QStatusBar {
+    background-color: ${slide.bg};
     border-top: 1px solid ${border};
-    padding-top: 5px;
+    color: ${hint};
+    font-size: 11px;
+    min-height: 26px;
+}
+
+QStatusBar::item {
+    border: none;
+}
+
+QLCDNumber {
+    background: transparent;
+    color: ${app.fg};
+    border: none;
+}
+
+QToolTip {
+    background-color: ${tooltip.bg};
+    color: ${tooltip.text};
+    border: 1px solid ${tooltip.border};
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+}
+
+QFrame#daboard_top_frame,
+QFrame#orders_top_frame {
+    background-color: ${frame.bg};
+    border: none;
+    border-bottom: 1px solid ${border};
+}
+
+QFrame#daboard_bottom_frame,
+QFrame#orders_bottom_frame {
+    background-color: ${frame.bg};
+    border: none;
+    border-top: 1px solid ${border};
 }

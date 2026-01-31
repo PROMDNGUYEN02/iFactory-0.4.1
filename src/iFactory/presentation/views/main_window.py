@@ -184,6 +184,51 @@ class MainWindow(QMainWindow):
             self.style().unpolish(self)
             self.style().polish(self)
 
+        self._apply_page_theme(theme)
+
+    def _apply_page_theme(self, theme: str) -> None:
+        is_dark = theme == "dark"
+
+        if is_dark:
+            page_bg = "#0F172A"
+            frame_bg = "rgba(30, 41, 59, 0.6)"
+            border = "rgba(51, 65, 85, 0.4)"
+        else:
+            page_bg = "#F1F5F9"
+            frame_bg = "rgba(255, 255, 255, 0.8)"
+            border = "rgba(226, 232, 240, 0.6)"
+
+        for page_name in ["daboard_page", "orders_page"]:
+            page = getattr(self.ui, page_name, None)
+            if page:
+                page.setStyleSheet(f"background-color: {page_bg};")
+
+        for frame_name in ["daboard_top_frame", "orders_top_frame"]:
+            frame = getattr(self.ui, frame_name, None)
+            if frame:
+                frame.setStyleSheet(
+                    f"""
+                    QFrame {{
+                        background-color: {frame_bg};
+                        border: none;
+                        border-bottom: 1px solid {border};
+                    }}
+                """
+                )
+
+        for frame_name in ["daboard_bottom_frame", "orders_bottom_frame"]:
+            frame = getattr(self.ui, frame_name, None)
+            if frame:
+                frame.setStyleSheet(
+                    f"""
+                    QFrame {{
+                        background-color: {frame_bg};
+                        border: none;
+                        border-top: 1px solid {border};
+                    }}
+                """
+                )
+
     def _on_state_changed(self, state: Dict[str, Any]) -> None:
         theme = select_theme(state)
         if theme != self._prev_state.get("theme"):
@@ -260,3 +305,6 @@ class MainWindow(QMainWindow):
             return False
         rect = QRect(widget.mapToGlobal(widget.rect().topLeft()), widget.size())
         return rect.contains(pos)
+
+
+__all__ = ["MainWindow"]

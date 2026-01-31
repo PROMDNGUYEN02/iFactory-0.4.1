@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional, Tuple
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QIcon, QFont, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton
 
 from ...constants.layout import Layout
@@ -26,57 +26,119 @@ class HeaderView:
         controller: "ShellController",
     ):
         self._container = container
-        self._toggle_btn = toggle_btn
-        self._title_label = title_label
-        self._title_icon = title_icon
+        self._ui_toggle_btn = toggle_btn
+        self._ui_title_label = title_label
+        self._ui_title_icon = title_icon
         self._window_buttons = window_buttons
         self._controller = controller
         self._theme_manager = get_theme_manager()
-
         self._current_theme = "light"
-        self._setup()
+        self._is_expanded = False
 
-    def _setup(self) -> None:
+        self._setup_header()
+
+    def _setup_header(self) -> None:
         if not self._container:
             return
 
+        if self._ui_title_icon:
+            self._ui_title_icon.setText("")
+            self._ui_title_icon.setFixedSize(32, 32)
+            self._ui_title_icon.setScaledContents(True)
+            self._ui_title_icon.setPixmap(QPixmap(":/icon/logo.png"))
+            self._ui_title_icon.setStyleSheet("background: transparent; padding: 4px;")
+
+        if self._ui_title_label:
+            self._ui_title_label.setText("iFactory")
+            self._ui_title_label.setFont(QFont("Segoe UI", 12, QFont.DemiBold))
+            self._ui_title_label.setStyleSheet("background: transparent; padding-left: 4px;")
+
+        if self._ui_toggle_btn:
+            self._ui_toggle_btn.setText("")
+            self._ui_toggle_btn.setFixedSize(40, 32)
+            self._ui_toggle_btn.setCursor(Qt.PointingHandCursor)
+            self._ui_toggle_btn.setToolTip("Toggle Menu (Ctrl+M)")
+            self._ui_toggle_btn.setIconSize(QSize(20, 20))
+            self._ui_toggle_btn.clicked.connect(self._controller.toggle_sidebar_menu)
+
+        layout = self._container.layout()
+        if layout:
+            layout.setContentsMargins(8, 4, 8, 4)
+            layout.setSpacing(4)
+
+        self._apply_styles()
+
+    def _apply_styles(self) -> None:
+        is_dark = self._current_theme == "dark"
+
+        if is_dark:
+            bg = "rgba(30, 41, 59, 0.98)"
+            border = "rgba(51, 65, 85, 0.8)"
+            text_color = "#F1F5F9"
+            btn_hover = "rgba(71, 85, 105, 0.6)"
+        else:
+            bg = "rgba(255, 255, 255, 0.98)"
+            border = "rgba(226, 232, 240, 0.8)"
+            text_color = "#1E293B"
+            btn_hover = "rgba(241, 245, 249, 0.8)"
+
+        self._container.setStyleSheet(
+            f"""
+            QFrame#title_frame {{
+                background-color: {bg};
+                border: none;
+                border-bottom: 1px solid {border};
+            }}
+        """
+        )
+
+        if self._ui_title_label:
+            self._ui_title_label.setStyleSheet(
+                f"""
+                QLabel {{
+                    color: {text_color};
+                    background: transparent;
+                    font-size: 13px;
+                    font-weight: 600;
+                    padding-left: 6px;
+                }}
+            """
+            )
+
+        if self._ui_toggle_btn:
+            self._ui_toggle_btn.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background-color: transparent;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 6px;
+                }}
+                QPushButton:hover {{
+                    background-color: {btn_hover};
+                }}
+                QPushButton:pressed {{
+                    background-color: rgba(128, 128, 128, 0.3);
+                }}
+            """
+            )
+
+    def _update_toggle_icon(self) -> None:
+        if not self._ui_toggle_btn:
+            return
+        icon_name = "arrow_menu_close" if self._is_expanded else "arrow_menu_open"
+        icon_path = self._theme_manager.get_icon_path(f":/icon/{icon_name}.svg")
+        self._ui_toggle_btn.setIcon(QIcon(icon_path))
+
+    def _reorder_layout(self) -> None:
         layout = self._container.layout()
         if not layout:
-            layout = QHBoxLayout(self._container)
-        layout.setContentsMargins(5, 0, 5, 0)
-        layout.setSpacing(5)
-        layout.setAlignment(Qt.AlignVCenter)
+            return
 
-        if self._toggle_btn:
-            self._toggle_btn.setText("")
-            self._toggle_btn.setFixedSize(40, 40)
-            self._toggle_btn.setCursor(Qt.PointingHandCursor)
-            self._toggle_btn.clicked.connect(self._controller.toggle_sidebar_menu)
-
-        for btn in self._window_buttons:
-            if btn:
-                btn.setText("")
-                btn.setFixedSize(36, 36)
-                btn.setCursor(Qt.PointingHandCursor)
-
-        if self._title_icon:
-            self._title_icon.setText("")
-            self._title_icon.setScaledContents(True)
-            self._title_icon.setFixedSize(28, 28)
-
-        if self._title_label:
-            self._title_label.setText("iFactory Monitor")
-
-        if len(self._window_buttons) >= 3:
-            min_btn, restore_btn, close_btn = self._window_buttons[0], self._window_buttons[1], self._window_buttons[2]
-            window = self._container.window()
-
-            if min_btn and window:
-                min_btn.clicked.connect(window.showMinimized)
-            if close_btn and window:
-                close_btn.clicked.connect(window.close)
-            if restore_btn and window:
-                restore_btn.clicked.connect(lambda: window.showNormal() if window.isMaximized() else window.showMaximized())
+        if self._is_expanded:
+            layout.setDirection(QHBoxLayout.LeftToRight)
+        else:
+            layout.setDirection(QHBoxLayout.RightToLeft)
 
     def render(self, state: dict) -> None:
         theme = select_theme(state)
@@ -84,35 +146,28 @@ class HeaderView:
 
         if theme != self._current_theme:
             self._current_theme = theme
-            self._update_icons(is_expanded)
+            self._apply_styles()
+
+        if is_expanded != self._is_expanded:
+            self._is_expanded = is_expanded
+            self._reorder_layout()
+
+        self._update_toggle_icon()
 
         width = Layout.SIDEBAR_EXPANDED_WIDTH if is_expanded else Layout.SIDEBAR_COLLAPSED_WIDTH
         self._container.setFixedWidth(width)
 
-        if self._toggle_btn:
-            icon_name = "arrow_menu_close" if is_expanded else "arrow_menu_open"
-            icon_path = self._theme_manager.get_icon_path(f":/icon/{icon_name}.svg")
-            self._toggle_btn.setIcon(QIcon(icon_path))
-
-        if self._title_icon:
-            self._title_icon.setVisible(is_expanded)
-        if self._title_label:
-            self._title_label.setVisible(is_expanded)
+        if self._ui_title_icon:
+            self._ui_title_icon.setVisible(is_expanded)
+        if self._ui_title_label:
+            self._ui_title_label.setVisible(is_expanded)
 
         layout = self._container.layout()
         if layout:
             if is_expanded:
-                layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-                layout.setContentsMargins(10, 0, 0, 0)
+                layout.setContentsMargins(10, 4, 6, 4)
             else:
-                layout.setAlignment(Qt.AlignCenter)
-                layout.setContentsMargins(0, 0, 0, 0)
-
-    def _update_icons(self, is_expanded: bool) -> None:
-        if self._toggle_btn:
-            icon_name = "arrow_menu_close" if is_expanded else "arrow_menu_open"
-            icon_path = self._theme_manager.get_icon_path(f":/icon/{icon_name}.svg")
-            self._toggle_btn.setIcon(QIcon(icon_path))
+                layout.setContentsMargins(5, 4, 5, 4)
 
 
 __all__ = ["HeaderView"]
