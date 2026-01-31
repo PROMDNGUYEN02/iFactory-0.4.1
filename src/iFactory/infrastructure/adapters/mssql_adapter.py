@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 class MssqlAdapter(IRemoteDataSource):
     """
     Adapter for External MSSQL PLC/SCADA Database.
-    Responsible ONLY for fetching raw data. No business logic.
     """
 
     def __init__(self, connection_string: Optional[str] = None) -> None:
@@ -113,8 +112,6 @@ class MssqlAdapter(IRemoteDataSource):
     async def fetch_device_status(self, equip_code: str, days: int = 30) -> List[Dict[str, Any]]:
         """
         Fetch HISTORY status for a single device within a time range.
-        Default range: 30 days.
-        Returns a LIST of records ordered by START_TIME ASC.
         """
         if not self._engine:
             return []
@@ -128,7 +125,8 @@ class MssqlAdapter(IRemoteDataSource):
         FROM TT_EQ_STATUS S
         LEFT JOIN TT_EQ_EQUIPMENT E ON S.EQUIP_CODE = E.EQUIP_CODE
         WHERE S.EQUIP_CODE = :code 
-          AND (S.START_TIME >= :cutoff OR S.END_TIME >= :cutoff)
+            AND S.START_TIME < TRUNC(SYSDATE) + 1
+            AND (S.END_TIME >= TRUNC(SYSDATE) OR S.END_TIME IS NULL)
         ORDER BY S.START_TIME ASC
         """
 
