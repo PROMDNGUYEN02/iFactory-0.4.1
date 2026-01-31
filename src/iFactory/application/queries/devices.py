@@ -44,9 +44,7 @@ class GetAllDevicesStatusQuery:
                     last_update=device.last_updated_at,
                     is_active=device.is_active,
                     # Extended Data
-                    # [FIX] Updated from device.name to device.equip_name
                     name=device.equip_name,
-                    # [FIX] Description removed from Entity, set to None or remove field from DTO if needed
                     description=None,
                     material_batch=material.material_batch.value if material else None,
                     feeding_time=material.feeding_time if material else None,
@@ -78,8 +76,6 @@ class GetLatestDeviceStatusQuery:
 
         async with self._uow_factory() as uow:
             device = await uow.devices.get_by_code_string(equip_code)
-            if not device:
-                pass
 
         if not device:
             return None
