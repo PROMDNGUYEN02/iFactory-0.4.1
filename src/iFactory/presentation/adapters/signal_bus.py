@@ -1,4 +1,7 @@
-# File: presentation/adapters/signal_bus.py
+"""
+Signal Bus - Application-wide signal management.
+"""
+
 import logging
 from typing import Any, Dict
 

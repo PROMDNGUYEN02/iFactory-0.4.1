@@ -1,6 +1,6 @@
 """
 Infrastructure: Application Paths Management.
-Ensures system directories (data, logs, db) exist.
+Simplified: Single storage database.
 """
 
 from functools import lru_cache
@@ -17,29 +17,29 @@ class AppPaths:
     def __init__(self) -> None:
         self.project_root = get_project_root()
 
-        # 1. Định nghĩa các thư mục chính
+        # Main directories
         self.data_dir = self.project_root / "data"
         self.config_dir = self.data_dir / "config"
         self.storage_dir = self.data_dir / "storage"
         self.logs_dir = self.project_root / "logs"
 
-        # 2. Cập nhật đường dẫn Database (trỏ vào storage)
-        self.hot_db_path = self.storage_dir / "hot_store.db"
-        self.cold_db_path = self.storage_dir / "cold_store.db"
+        # Storage database
+        self.storage_db_path = self.storage_dir / "storage.db"
 
-        # 3. Cập nhật đường dẫn Config (trỏ vào config)
+        # Legacy compatibility
+        self.hot_db_path = self.storage_db_path
+        self.cold_db_path = self.storage_db_path
+
+        # Config files
         self.settings_path = self.config_dir / "settings.json"
         self.device_positions_path = self.config_dir / "device_positions.json"
         self.legends_path = self.config_dir / "legends.json"
 
     def ensure_directories(self) -> None:
-        """
-        Creates necessary directories if they do not exist.
-        """
-        # Thêm self.config_dir vào danh sách tạo thư mục
+        """Creates necessary directories if they do not exist."""
         for directory in [self.data_dir, self.config_dir, self.storage_dir, self.logs_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
 
-# Global instance for easy access, but prefer DI where possible.
+# Global instance
 PATHS = AppPaths()

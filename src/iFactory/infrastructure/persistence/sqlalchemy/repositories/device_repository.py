@@ -1,3 +1,8 @@
+"""
+Device Repository - Cache layer for offline mode.
+In Remote-First architecture, this is optional.
+"""
+
 from __future__ import annotations
 
 from typing import Optional, Sequence, Tuple
@@ -8,15 +13,17 @@ from iFactory.domain.entities.device import Device
 from iFactory.domain.repositories.device_repository import DeviceRepository
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
 from iFactory.domain.value_objects.material_input import MaterialInput
-from iFactory.infrastructure.persistence.sqlalchemy.models import DeviceModel, LatestMaterialInputModel
-
+from iFactory.infrastructure.persistence.sqlalchemy.models import (
+    DeviceModel,
+    LatestMaterialInputModel,
+)
 from iFactory.infrastructure.persistence.sqlalchemy.mapper import SQLAlchemyMapper
 
 
 class SqlAlchemyDeviceRepository(DeviceRepository):
     """
-    Hot Store Implementation of DeviceRepository.
-    Manages current state of devices.
+    Device cache repository.
+    Used for offline mode fallback.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -28,19 +35,26 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         model = result.scalar_one_or_none()
         return SQLAlchemyMapper.to_device_entity(model)
 
+    async def get_by_code_string(self, code: str) -> Optional[Device]:
+        """Get device by code string."""
+        return await self.get_by_code(EquipmentCode(code))
+
     async def get_all(self) -> Sequence[Device]:
         stmt = select(DeviceModel).order_by(DeviceModel.equip_code)
         result = await self._session.execute(stmt)
         models = result.scalars().all()
         return [SQLAlchemyMapper.to_device_entity(m) for m in models if m]
 
-    async def get_dashboard_snapshot(self) -> Sequence[Tuple[Device, Optional[MaterialInput]]]:
-        """
-        Optimized join query to fetch Device + Latest Material Input in one go.
-        """
+    async def get_dashboard_snapshot(
+        self,
+    ) -> Sequence[Tuple[Device, Optional[MaterialInput]]]:
+        """Optimized join query for dashboard."""
         stmt = (
             select(DeviceModel, LatestMaterialInputModel)
-            .outerjoin(LatestMaterialInputModel, DeviceModel.equip_code == LatestMaterialInputModel.equipment_code)
+            .outerjoin(
+                LatestMaterialInputModel,
+                DeviceModel.equip_code == LatestMaterialInputModel.equipment_code,
+            )
             .order_by(DeviceModel.equip_code)
         )
 

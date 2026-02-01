@@ -1,11 +1,16 @@
-# File: presentation/state/reducers.py
+"""
+State Reducers.
+Pure functions that handle state transitions.
+"""
+
+from datetime import datetime
 from typing import Any, Dict
 
 from .actions import Action, ActionType
 
 INITIAL_STATE: Dict[str, Any] = {
     "theme": "light",
-    "current_page": "dashboard_page",
+    "current_page": "dashboard_page",  # Default to dashboard
     "sidebar_expanded": False,
     "right_panel_expanded": False,
     "selected_device_id": None,
@@ -15,6 +20,8 @@ INITIAL_STATE: Dict[str, Any] = {
     "error": None,
     "devices": {},
     "gantt_data": {},
+    "page_devices": {},
+    "last_sync": None,
     "system_status": {
         "mssql": False,
         "sqlite": False,
@@ -36,15 +43,19 @@ def root_reducer(state: Dict[str, Any], action: Action) -> Dict[str, Any]:
         ActionType.TOGGLE_SIDEBAR: _handle_toggle_sidebar,
         ActionType.TOGGLE_RIGHT_PANEL: _handle_toggle_right_panel,
         ActionType.SELECT_DEVICE: _handle_select_device,
+        ActionType.SELECT_DEVICE_ONLY: _handle_select_device_only,
         ActionType.DESELECT_DEVICE: _handle_deselect_device,
         ActionType.SET_DATA_RANGE: _handle_set_data_range,
         ActionType.SET_LOADING: _handle_set_loading,
         ActionType.SET_ERROR: _handle_set_error,
         ActionType.CLEAR_ERROR: _handle_clear_error,
         ActionType.LOAD_DEVICES: _handle_load_devices,
+        ActionType.UPDATE_DEVICES: _handle_update_devices,
         ActionType.LOAD_GANTT: _handle_load_gantt,
         ActionType.SET_SELECTED_DEVICE_GANTT: _handle_set_selected_device_gantt,
         ActionType.UPDATE_SYSTEM_STATUS: _handle_update_system_status,
+        ActionType.SYNC_COMPLETED: _handle_sync_completed,
+        ActionType.SET_PAGE_DEVICES: _handle_set_page_devices,
     }
 
     handler = handlers.get(action.type)
@@ -61,7 +72,8 @@ def _handle_set_theme(state: Dict[str, Any], payload: str) -> Dict[str, Any]:
 
 
 def _handle_set_page(state: Dict[str, Any], payload: str) -> Dict[str, Any]:
-    return {**state, "current_page": payload}
+    normalized = payload.replace("daboard", "dashboard")
+    return {**state, "current_page": normalized}
 
 
 def _handle_toggle_sidebar(state: Dict[str, Any], _: Any) -> Dict[str, Any]:
@@ -73,12 +85,23 @@ def _handle_toggle_right_panel(state: Dict[str, Any], _: Any) -> Dict[str, Any]:
 
 
 def _handle_select_device(state: Dict[str, Any], payload: str) -> Dict[str, Any]:
+    """Select device AND open right panel (double-click behavior)."""
     new_state = {
         **state,
         "selected_device_id": payload,
         "right_panel_expanded": True,
     }
-    # Clear gantt when device changes
+    if payload != state.get("selected_device_id"):
+        new_state["selected_device_gantt"] = None
+    return new_state
+
+
+def _handle_select_device_only(state: Dict[str, Any], payload: str) -> Dict[str, Any]:
+    """Select device WITHOUT changing panel state (single-click behavior)."""
+    new_state = {
+        **state,
+        "selected_device_id": payload,
+    }
     if payload != state.get("selected_device_id"):
         new_state["selected_device_gantt"] = None
     return new_state
@@ -109,18 +132,32 @@ def _handle_clear_error(state: Dict[str, Any], _: Any) -> Dict[str, Any]:
 
 
 def _handle_load_devices(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]:
+    """Replace all devices."""
     return {**state, "devices": payload, "is_loading": False}
+
+
+def _handle_update_devices(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]:
+    """Merge/update devices (partial update)."""
+    current_devices = dict(state.get("devices", {}))
+    current_devices.update(payload)
+    return {**state, "devices": current_devices, "is_loading": False}
 
 
 def _handle_load_gantt(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]:
     return {**state, "gantt_data": payload}
 
 
-def _handle_set_selected_device_gantt(state: Dict[str, Any], payload: Any) -> Dict[str, Any]:
+def _handle_set_selected_device_gantt(
+    state: Dict[str, Any],
+    payload: Any,
+) -> Dict[str, Any]:
     return {**state, "selected_device_gantt": payload}
 
 
-def _handle_update_system_status(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]:
+def _handle_update_system_status(
+    state: Dict[str, Any],
+    payload: Dict,
+) -> Dict[str, Any]:
     current = state.get("system_status", {})
     updated = {
         "mssql": payload.get("mssql", current.get("mssql", False)),
@@ -128,6 +165,24 @@ def _handle_update_system_status(state: Dict[str, Any], payload: Dict) -> Dict[s
         "message": payload.get("message") or current.get("message", ""),
     }
     return {**state, "system_status": updated}
+
+
+def _handle_sync_completed(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]:
+    return {
+        **state,
+        "last_sync": payload.get("timestamp", datetime.now()),
+        "is_loading": False,
+    }
+
+
+def _handle_set_page_devices(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]:
+    page = payload.get("page", "")
+    devices = payload.get("devices", [])
+
+    page_devices = dict(state.get("page_devices", {}))
+    page_devices[page] = devices
+
+    return {**state, "page_devices": page_devices}
 
 
 __all__ = ["INITIAL_STATE", "root_reducer"]

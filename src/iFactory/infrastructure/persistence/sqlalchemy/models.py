@@ -1,6 +1,6 @@
 """
 Infrastructure: SQLAlchemy Models.
-Declarative definitions for Hot and Cold storage tables.
+Simplified: Single base for storage.
 """
 
 from __future__ import annotations
@@ -12,64 +12,25 @@ from sqlalchemy import String, DateTime, Boolean, Integer, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-# --- Base Classes ---
-
-
-class HotBase(DeclarativeBase):
-    """Base for Hot Storage (Latest State)."""
+class StorageBase(DeclarativeBase):
+    """Single base for all storage models."""
 
     pass
 
 
-class ColdBase(DeclarativeBase):
-    """Base for Cold Storage (History)."""
-
-    pass
-
-
-# Compatibility Alias
-Base = HotBase
+# Legacy compatibility aliases
+HotBase = StorageBase
+ColdBase = StorageBase
+Base = StorageBase
 
 
-# --- Hot Storage Models (Current State) ---
-
-
-class DeviceModel(HotBase):
-    """Latest snapshot of device state."""
-
-    __tablename__ = "devices"
-
-    id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    equip_code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
-    equip_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    equip_status: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    reason_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    last_update: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-
-
-class LatestMaterialInputModel(HotBase):
-    """Latest material batch feeding (Cache/Hot)."""
-
-    __tablename__ = "latest_material_inputs"
-
-    id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    equipment_code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
-    material_batch: Mapped[str] = mapped_column(String(100), nullable=False)
-    feeding_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-
-
-# --- Cold Storage Models (History) ---
-
-
-class StatusHistoryModel(ColdBase):
+class StatusHistoryModel(StorageBase):
     """
     Historical status logs.
-    Table: status_historys
-    Replaces old status_periods table.
+    This is the primary table for storing device status history.
     """
 
-    __tablename__ = "status_historys"
+    __tablename__ = "status_history"
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     equip_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
@@ -84,7 +45,7 @@ class StatusHistoryModel(ColdBase):
     )
 
 
-class MaterialInputHistoryModel(ColdBase):
+class MaterialInputHistoryModel(StorageBase):
     """Historical material feedings log."""
 
     __tablename__ = "material_input_history"
@@ -101,5 +62,30 @@ class MaterialInputHistoryModel(ColdBase):
     )
 
 
-# Alias for backward compatibility
+class DeviceModel(StorageBase):
+    """Device cache (optional - for offline mode)."""
+
+    __tablename__ = "devices_cache"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    equip_code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    equip_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    equip_status: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reason_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_update: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class LatestMaterialInputModel(StorageBase):
+    """Latest material batch feeding cache."""
+
+    __tablename__ = "latest_material_inputs"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    equipment_code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    material_batch: Mapped[str] = mapped_column(String(100), nullable=False)
+    feeding_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+# Aliases
 MaterialInputModel = MaterialInputHistoryModel

@@ -1,13 +1,17 @@
-# File: infrastructure/adapters/mssql_adapter.py
+"""
+MSSQL Adapter.
+Implements IRemoteDataSource for MSSQL/SCADA database.
+"""
+
 import logging
-from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
 from sqlalchemy import text, bindparam
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
 from sqlalchemy.pool import NullPool
 
 from iFactory.application.ports.remote import IRemoteDataSource
-from iFactory.infrastructure.persistence.sqlalchemy.database import get_mssql_engine
 
 logger = logging.getLogger(__name__)
 
@@ -15,22 +19,20 @@ logger = logging.getLogger(__name__)
 class MssqlAdapter(IRemoteDataSource):
     """
     Adapter for External MSSQL PLC/SCADA Database.
-    Uses NullPool to avoid connection issues with async event loops.
+    Optimized for page-based selective syncing.
     """
 
     def __init__(self, connection_string: Optional[str] = None) -> None:
         self._engine: Optional[AsyncEngine] = None
         self._connection_string = connection_string
+        self._is_disposed = False
 
         if connection_string:
-            # Use NullPool to avoid event loop issues
             self._engine = create_async_engine(
                 connection_string,
-                poolclass=NullPool,  # Don't pool connections
+                poolclass=NullPool,
                 echo=False,
             )
-        else:
-            self._engine = get_mssql_engine()
 
     def _parse_datetime(self, val: Any) -> datetime:
         """Robust datetime parsing for legacy SQL types."""
@@ -72,18 +74,27 @@ class MssqlAdapter(IRemoteDataSource):
             "last_update": last_update,
         }
 
-    async def fetch_latest_status(self, equipment_codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """Fetch the single LATEST status for multiple devices."""
-        if not self._engine:
-            logger.warning("MSSQL Engine not initialized.")
+    async def fetch_latest_status(
+        self,
+        equipment_codes: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch the single LATEST status for specified devices.
+        """
+        if self._is_disposed or not self._engine:
+            logger.warning("MSSQL Engine not initialized or disposed.")
             return []
 
+        if equipment_codes is not None and len(equipment_codes) == 0:
+            return []
+
+        # Build filter clause
         filter_clause = ""
-        params = {}
+        params: Dict[str, Any] = {}
 
         if equipment_codes:
             filter_clause = "AND S.EQUIP_CODE IN :codes"
-            params["codes"] = list(equipment_codes)
+            params["codes"] = tuple(equipment_codes)
 
         query_str = f"""
         WITH RankedStatus AS (
@@ -114,52 +125,31 @@ class MssqlAdapter(IRemoteDataSource):
                 return [self._map_row(row) for row in rows]
 
         except Exception as e:
-            logger.error(f"[MssqlAdapter] Bulk fetch error: {e}")
+            if not self._is_disposed:
+                logger.error(f"[MssqlAdapter] Bulk fetch error: {e}")
             return []
 
-    async def fetch_device_status(self, equip_code: str, days: int = 1) -> List[Dict[str, Any]]:
-        """Fetch HISTORY status for a single device within a time range."""
-        if not self._engine:
+    async def fetch_device_status(
+        self,
+        equip_code: str,
+        days: int = 1,
+    ) -> List[Dict[str, Any]]:
+        """Fetch history status for a single device."""
+        if self._is_disposed:
             return []
 
         now = datetime.now()
         start_of_range = now - timedelta(days=days)
+        return await self.fetch_device_history_range(equip_code, start_of_range, now)
 
-        query = """
-        SELECT 
-            S.EQUIP_CODE, S.EQUIP_STATUS, S.START_TIME, S.END_TIME, S.REASON_CODE,
-            E.EQUIP_NAME
-        FROM TT_EQ_STATUS S
-        LEFT JOIN TT_EQ_EQUIPMENT E ON S.EQUIP_CODE = E.EQUIP_CODE
-        WHERE S.EQUIP_CODE = :code 
-            AND (S.DEL_FLAG = '0' OR S.DEL_FLAG IS NULL)
-            AND S.START_TIME >= :start_time
-            AND (S.END_TIME IS NULL OR S.END_TIME <= :end_time)
-        ORDER BY S.START_TIME ASC
-        """
-
-        try:
-            async with self._engine.connect() as conn:
-                result = await conn.execute(
-                    text(query),
-                    {
-                        "code": equip_code,
-                        "start_time": start_of_range,
-                        "end_time": now,
-                    },
-                )
-                rows = result.fetchall()
-
-                logger.debug(f"[MssqlAdapter] Fetched {len(rows)} history records for {equip_code}")
-                return [self._map_row(row) for row in rows]
-
-        except Exception as e:
-            logger.error(f"[MssqlAdapter] History fetch error for {equip_code}: {e}")
-            return []
-
-    async def fetch_device_history_range(self, equip_code: str, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
-        """Fetch history for a specific time range (for Gantt chart)."""
-        if not self._engine:
+    async def fetch_device_history_range(
+        self,
+        equip_code: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> List[Dict[str, Any]]:
+        """Fetch history for a specific time range."""
+        if self._is_disposed or not self._engine:
             return []
 
         query = """
@@ -186,22 +176,59 @@ class MssqlAdapter(IRemoteDataSource):
                     },
                 )
                 rows = result.fetchall()
-
-                logger.info(f"[MssqlAdapter] Fetched {len(rows)} history records for {equip_code} ({start_time} to {end_time})")
                 return [self._map_row(row) for row in rows]
 
         except Exception as e:
-            logger.error(f"[MssqlAdapter] History range fetch error for {equip_code}: {e}")
+            if not self._is_disposed:
+                logger.error(f"[MssqlAdapter] History fetch error for {equip_code}: {e}")
+            return []
+
+    async def fetch_latest_history_records(
+        self,
+        equip_code: str,
+        limit: int = 2,
+    ) -> List[Dict[str, Any]]:
+        """Fetch the N most recent history records for a device."""
+        if self._is_disposed or not self._engine:
+            return []
+
+        query = """
+        SELECT TOP(:limit)
+            S.EQUIP_CODE, S.EQUIP_STATUS, S.START_TIME, S.END_TIME, S.REASON_CODE,
+            E.EQUIP_NAME
+        FROM TT_EQ_STATUS S
+        LEFT JOIN TT_EQ_EQUIPMENT E ON S.EQUIP_CODE = E.EQUIP_CODE
+        WHERE S.EQUIP_CODE = :code 
+            AND (S.DEL_FLAG = '0' OR S.DEL_FLAG IS NULL)
+        ORDER BY S.START_TIME DESC
+        """
+
+        try:
+            async with self._engine.connect() as conn:
+                result = await conn.execute(
+                    text(query),
+                    {"code": equip_code, "limit": limit},
+                )
+                rows = result.fetchall()
+                return [self._map_row(row) for row in rows]
+
+        except Exception as e:
+            if not self._is_disposed:
+                logger.error(f"[MssqlAdapter] Latest history error for {equip_code}: {e}")
             return []
 
     async def dispose(self) -> None:
         """Clean up engine."""
+        self._is_disposed = True
+
         if self._engine:
             try:
                 await self._engine.dispose()
+                logger.info("[MssqlAdapter] Engine disposed")
             except Exception as e:
                 logger.warning(f"Error disposing MSSQL engine: {e}")
-            self._engine = None
+            finally:
+                self._engine = None
 
 
 __all__ = ["MssqlAdapter"]

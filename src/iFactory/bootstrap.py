@@ -1,12 +1,6 @@
 """
 Application Bootstrapper.
-
-Single entry point that:
-1. Configures logging
-2. Initializes Database (Creates folders & tables if not exist)
-3. Creates QApplication
-4. Initializes DI container
-5. Runs the application
+Entry point with optimized initialization.
 """
 
 import asyncio
@@ -25,8 +19,11 @@ def configure_logging() -> None:
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
 
-    # Basic configuration
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
 
     # Silence noisy libraries
     for noisy in ("aiosqlite", "qasync", "sqlalchemy.engine", "faker"):
@@ -34,42 +31,23 @@ def configure_logging() -> None:
 
 
 async def init_database() -> None:
-    """
-    Initialize both Hot and Cold Storage databases.
-    Uses conn.run_sync() to create tables with AsyncEngine.
-    """
+    """Initialize storage database."""
     try:
-        # 1. Ensure physical directories exist
-        # LƯU Ý: Đảm bảo class AppPaths hoặc biến PATHS đã được định nghĩa trong file này
         from iFactory.infrastructure.configuration.paths import PATHS
 
         PATHS.ensure_directories()
 
-        # 2. Get Async Engines
         from iFactory.infrastructure.persistence.sqlalchemy.database import (
-            get_hot_engine,
-            get_cold_engine,
+            get_storage_engine,
         )
 
-        hot_engine = get_hot_engine()
-        cold_engine = get_cold_engine()
+        storage_engine = get_storage_engine()
 
-        # 3. Import Base classes to register metadata
-        # NOTE: This triggers models.py execution, so StatusHistoryModel is registered to ColdBase.metadata
-        from iFactory.infrastructure.persistence.sqlalchemy.models import (
-            HotBase,
-            ColdBase,
-        )
+        from iFactory.infrastructure.persistence.sqlalchemy.models import StorageBase
 
-        # 4. Initialize Hot Store (latest status, latest inputs)
-        async with hot_engine.begin() as conn:
-            await conn.run_sync(HotBase.metadata.create_all)
-        logger.debug("Hot Storage tables initialized.")
-
-        # 5. Initialize Cold Store (status history, material history)
-        async with cold_engine.begin() as conn:
-            await conn.run_sync(ColdBase.metadata.create_all)
-        logger.debug("Cold Storage tables initialized.")
+        async with storage_engine.begin() as conn:
+            await conn.run_sync(StorageBase.metadata.create_all)
+        logger.debug("Storage tables initialized")
 
     except ImportError as e:
         logger.error(f"Configuration or Persistence module missing: {e}")
@@ -84,7 +62,6 @@ def create_qt_application():
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QIcon
 
-    # Check if instance already exists (e.g. testing)
     if QApplication.instance():
         return QApplication.instance()
 
@@ -104,23 +81,21 @@ def create_qt_application():
 
 
 def run_application() -> int:
-    """
-    Run the application.
-    """
+    """Run the application."""
     configure_logging()
     logger.info("=" * 60)
     logger.info("iFactory starting...")
     logger.info("=" * 60)
 
     try:
-        # Initialize databases (Hot + Cold) before Qt App starts
+        # Initialize databases
         logger.info("Initializing database...")
-        # Windows ProactorEventLoop policy fix for Python 3.8+
+
         if sys.platform == "win32":
             asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
         asyncio.run(init_database())
-        logger.info("Database initialized and tables verified successfully.")
+        logger.info("Database initialized successfully")
 
         # Create Qt Application
         qt_app = create_qt_application()
@@ -142,8 +117,10 @@ def _show_error(message: str) -> None:
     try:
         from PySide6.QtWidgets import QApplication, QMessageBox
 
-        # Ensure we have an app instance to show the alert
         app = QApplication.instance() or QApplication(sys.argv)
         QMessageBox.critical(None, "Fatal Error", message)
     except Exception:
         print(f"ERROR: {message}", file=sys.stderr)
+
+
+__all__ = ["run_application", "configure_logging", "init_database"]

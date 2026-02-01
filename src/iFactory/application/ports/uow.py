@@ -4,34 +4,27 @@ Defines the contract for transaction management.
 """
 
 import abc
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from iFactory.domain.repositories.device_repository import DeviceRepository
-
-    # Forward declaration for generic history repo if not explicitly imported
-    # from iFactory.domain.repositories.production_repository import ProductionRepository
 
 
 class AbstractUnitOfWork(abc.ABC):
     """
     Port for managing transaction boundaries (Async Context Manager).
-    Abstraction for Data Access Layer.
     """
 
     @property
     @abc.abstractmethod
-    def devices(self) -> "DeviceRepository":
-        """Repository for Device Aggregates (Hot Storage)."""
+    def devices(self) -> Optional["DeviceRepository"]:
+        """Repository for Device cache (optional in remote-first)."""
         pass
 
     @property
     @abc.abstractmethod
-    def history(self) -> Any:
-        """
-        Repository for Device History/Production (Cold Storage).
-        Returns domain repository interface.
-        """
+    def history(self) -> Optional[Any]:
+        """Repository for history/production data."""
         pass
 
     @abc.abstractmethod

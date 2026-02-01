@@ -1,5 +1,6 @@
 """
 Infrastructure: Database Configuration.
+Simplified: Single storage database.
 """
 
 from pydantic import Field
@@ -14,11 +15,25 @@ class DatabaseConfig(BaseSettings):
     Prioritizes environment variables (prefix DB_).
     """
 
-    model_config = SettingsConfigDict(env_prefix="DB_", case_sensitive=False, env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="DB_",
+        case_sensitive=False,
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
-    # SQLite (Local)
-    hot_db_url: str = Field(default=f"sqlite:///{PATHS.hot_db_path}")
-    cold_db_url: str = Field(default=f"sqlite:///{PATHS.cold_db_path}")
+    # SQLite storage
+    storage_db_url: str = Field(default=f"sqlite:///{PATHS.storage_db_path}")
+
+    # Legacy compatibility
+    @property
+    def hot_db_url(self) -> str:
+        return self.storage_db_url
+
+    @property
+    def cold_db_url(self) -> str:
+        return self.storage_db_url
 
     # MSSQL (Remote)
     mssql_host: str | None = None
@@ -36,5 +51,4 @@ class DatabaseConfig(BaseSettings):
         if not (self.mssql_host and self.mssql_db):
             return None
         driver = self.mssql_driver.replace(" ", "+")
-        # Ensure aioodbc protocol
         return f"mssql+aioodbc://{self.mssql_user}:{self.mssql_password}@" f"{self.mssql_host}/{self.mssql_db}?driver={driver}"

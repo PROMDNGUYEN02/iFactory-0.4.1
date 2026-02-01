@@ -1,6 +1,10 @@
-# File: presentation/views/shell/right_panel.py
+"""
+Right Panel - Device details view.
+"""
+
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from PySide6.QtCore import Qt
@@ -10,18 +14,20 @@ from ...constants.layout import Layout
 from ...resources.themes import get_theme_manager
 from ...state.selectors import (
     select_right_panel_expanded,
-    select_selected_device,
     select_selected_device_id,
     select_theme,
+    select_devices,
 )
 
 if TYPE_CHECKING:
     from ...controllers.shell_controller import ShellController
     from ...state.store import Store
 
+logger = logging.getLogger(__name__)
+
 
 class RightPanelView:
-    """Right panel showing device details only (Gantt moved to middle frame 2)."""
+    """Right panel showing device details."""
 
     def __init__(
         self,
@@ -34,6 +40,8 @@ class RightPanelView:
         self._controller = controller
         self._theme_manager = get_theme_manager()
         self._current_theme = "light"
+        self._last_device_id: Optional[str] = None
+        self._last_render_data: Optional[Dict] = None
 
         self._layout: Optional[QVBoxLayout] = None
         self._setup()
@@ -195,6 +203,7 @@ class RightPanelView:
         self._cycle.setStyleSheet(f"color: {text_primary};")
 
     def render(self, state: Dict[str, Any]) -> None:
+        """Render panel based on state."""
         is_expanded = select_right_panel_expanded(state)
         theme = select_theme(state)
 
@@ -208,16 +217,70 @@ class RightPanelView:
         if not is_expanded:
             return
 
-        device = select_selected_device(state)
+        # Get selected device ID
         device_id = select_selected_device_id(state)
 
-        if not device:
-            self._title.setText("SELECT DEVICE")
-            self._status_badge.setText("N/A")
-            self._status_badge.setStyleSheet("background-color: #64748B; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;")
+        if not device_id:
+            self._show_no_selection()
+            self._last_device_id = None
             return
 
-        self._render_device_info(device, device_id)
+        # Get device data from devices dict
+        devices = select_devices(state)
+        device = devices.get(device_id)
+
+        if not device:
+            logger.debug(f"[RightPanel] Device {device_id} not found in state " f"(available: {list(devices.keys())[:5]}...)")
+            # Show device ID but with no data
+            self._show_loading_device(device_id)
+            return
+
+        # Only re-render if device or data changed
+        if device_id != self._last_device_id or device != self._last_render_data:
+            logger.debug(f"[RightPanel] Rendering device: {device_id}")
+            self._render_device_info(device, device_id)
+            self._last_device_id = device_id
+            self._last_render_data = device
+
+    def _show_no_selection(self) -> None:
+        """Show no device selected state."""
+        self._title.setText("SELECT DEVICE")
+        self._status_badge.setText("N/A")
+        self._status_badge.setStyleSheet("background-color: #64748B; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;")
+        self._desc.setText("")
+        self._desc.setVisible(False)
+        self._last_update.setText("🕒 --")
+        self._batch.setText("📦 --")
+        self._fed_time.setText("⏰ Fed: --")
+        self._lbl_oee.setText("OEE: 0%")
+        self._bar_oee.setValue(0)
+        self._lbl_yield.setText("Yield: 0%")
+        self._bar_yield.setValue(0)
+        self._inputs.setText("📥 Inputs: 0")
+        self._outputs.setText("📦 Outputs: 0")
+        self._cycle.setText("⏱️ Cycle: 0s")
+        self._error.setText("--")
+        self._error.setStyleSheet("color: #64748B;")
+
+    def _show_loading_device(self, device_id: str) -> None:
+        """Show loading state for selected device."""
+        self._title.setText(device_id)
+        self._status_badge.setText("LOADING")
+        self._status_badge.setStyleSheet("background-color: #64748B; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;")
+        self._desc.setText("Loading device data...")
+        self._desc.setVisible(True)
+        self._last_update.setText("🕒 --")
+        self._batch.setText("📦 --")
+        self._fed_time.setText("⏰ Fed: --")
+        self._lbl_oee.setText("OEE: --%")
+        self._bar_oee.setValue(0)
+        self._lbl_yield.setText("Yield: --%")
+        self._bar_yield.setValue(0)
+        self._inputs.setText("📥 Inputs: --")
+        self._outputs.setText("📦 Outputs: --")
+        self._cycle.setText("⏱️ Cycle: --")
+        self._error.setText("--")
+        self._error.setStyleSheet("color: #64748B;")
 
     def _render_device_info(self, device: Any, device_id: str) -> None:
         """Render device information section."""
@@ -227,7 +290,7 @@ class RightPanelView:
                 return device.get(key, default)
             return getattr(device, key, default)
 
-        display_name = get_val("display_name") or device_id
+        display_name = get_val("display_name") or get_val("equip_name") or device_id
         status_name = get_val("status_name") or "Unknown"
         status_color = get_val("status_color") or "#64748B"
         description = get_val("description") or ""
@@ -261,7 +324,7 @@ class RightPanelView:
 
         oee_val = float(oee) if oee else 0
         self._lbl_oee.setText(f"OEE: {oee_val:.1f}%")
-        self._bar_oee.setValue(int(oee_val))
+        self._bar_oee.setValue(int(min(oee_val, 100)))
         bar_color = "#10B981" if oee_val > 85 else ("#F59E0B" if oee_val > 60 else "#EF4444")
         bar_bg = "#334155" if self._current_theme == "dark" else "#E2E8F0"
         self._bar_oee.setStyleSheet(
@@ -271,7 +334,7 @@ class RightPanelView:
 
         yield_val = float(yield_rate) if yield_rate else 0
         self._lbl_yield.setText(f"Yield: {yield_val:.1f}%")
-        self._bar_yield.setValue(int(yield_val))
+        self._bar_yield.setValue(int(min(yield_val, 100)))
         self._bar_yield.setStyleSheet(
             f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }} "
             f"QProgressBar::chunk {{ background-color: #3B82F6; border-radius: 4px; }}"
@@ -282,7 +345,7 @@ class RightPanelView:
         self._cycle.setText(f"⏱️ Cycle: {cycle_time}s")
 
         if last_error:
-            self._error.setText(f"���️ {last_error}")
+            self._error.setText(f"⚠️ {last_error}")
             self._error.setStyleSheet("color: #EF4444; font-weight: 600;")
         else:
             self._error.setText("✅ Healthy")

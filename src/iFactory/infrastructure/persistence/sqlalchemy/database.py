@@ -1,6 +1,6 @@
 """
 Infrastructure: Database Connectivity.
-Factories for Async SQLAlchemy Engines (Hot, Cold, and MSSQL).
+Simplified: Single storage engine.
 """
 
 from functools import lru_cache
@@ -17,48 +17,40 @@ from iFactory.infrastructure.configuration.db_settings import DatabaseConfig
 
 
 @lru_cache(maxsize=1)
+def get_storage_engine() -> AsyncEngine:
+    """
+    Single Storage Engine for all local data.
+    Used for history data only (latest status comes from remote).
+    """
+    config = DatabaseConfig()
+    url = config.storage_db_url.replace("sqlite:///", "sqlite+aiosqlite:///")
+    return create_async_engine(
+        url,
+        echo=config.echo,
+        pool_pre_ping=True,
+    )
+
+
+# Legacy compatibility aliases
 def get_hot_engine() -> AsyncEngine:
-    """
-    Hot Storage Engine.
-    Used for latest state (read-heavy, frequent writes).
-    """
-    config = DatabaseConfig()
-    # Ensure asyncio compatible driver for SQLite
-    url = config.hot_db_url.replace("sqlite:///", "sqlite+aiosqlite:///")
-    return create_async_engine(
-        url,
-        echo=config.echo,
-        pool_pre_ping=True,
-    )
+    """Legacy alias - returns storage engine."""
+    return get_storage_engine()
 
 
-@lru_cache(maxsize=1)
 def get_cold_engine() -> AsyncEngine:
-    """
-    Cold Storage Engine.
-    Used for historical data (write-heavy logs, range queries).
-    """
-    config = DatabaseConfig()
-    url = config.cold_db_url.replace("sqlite:///", "sqlite+aiosqlite:///")
-    return create_async_engine(
-        url,
-        echo=config.echo,
-        pool_pre_ping=True,
-    )
+    """Legacy alias - returns storage engine."""
+    return get_storage_engine()
 
 
 @lru_cache(maxsize=1)
 def get_mssql_engine() -> Optional[AsyncEngine]:
-    """
-    Async Engine for MSSQL remote source.
-    """
+    """Async Engine for MSSQL remote source."""
     config = DatabaseConfig()
     url = config.mssql_url
 
     if not url:
         return None
 
-    # Ensure aioodbc driver is used for async support if not present
     if "aioodbc" not in url and "pyodbc" in url:
         url = url.replace("pyodbc", "aioodbc")
     elif "driver=" in url and "aioodbc" not in url:
@@ -76,22 +68,20 @@ def get_mssql_engine() -> Optional[AsyncEngine]:
 
 
 @lru_cache(maxsize=1)
+def get_storage_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Factory for storage sessions."""
+    engine = get_storage_engine()
+    return async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+
+# Legacy compatibility
 def get_hot_session_factory() -> async_sessionmaker[AsyncSession]:
-    """Factory for Hot Storage sessions."""
-    engine = get_hot_engine()
-    return async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
+    return get_storage_session_factory()
 
 
-@lru_cache(maxsize=1)
 def get_cold_session_factory() -> async_sessionmaker[AsyncSession]:
-    """Factory for Cold Storage sessions."""
-    engine = get_cold_engine()
-    return async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
+    return get_storage_session_factory()

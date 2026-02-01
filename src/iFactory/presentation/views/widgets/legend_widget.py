@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from ...constants.status import Status
+from ...constants.status import Status, StatusCode
 from ...resources.themes import get_theme_manager
 
 
@@ -17,7 +17,7 @@ class LegendWidget(QWidget):
         self._theme_manager = get_theme_manager()
         self.setStyleSheet("background-color: transparent;")
         self._stats_labels: Dict[str, QLabel] = {}
-        self._status_names_labels: List[QLabel] = []
+        self._status_names_labels: Dict[str, QLabel] = {}
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -31,19 +31,20 @@ class LegendWidget(QWidget):
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
+        # Use Status class colors for consistency
         status_map = [
-            ("RUN", Status.get_color(1)),
-            ("IDLE", Status.get_color(3)),
-            ("TEST", Status.get_color(4)),
-            ("ALARM", Status.get_color(5)),
-            ("OFF", Status.get_color(0)),
+            ("RUN", Status.get_color(StatusCode.RUNNING), StatusCode.RUNNING),
+            ("STOP", Status.get_color(StatusCode.STOPPED), StatusCode.STOPPED),
+            ("MAINT", Status.get_color(StatusCode.MAINTENANCE), StatusCode.MAINTENANCE),
+            ("ALARM", Status.get_color(StatusCode.ALARM), StatusCode.ALARM),
+            ("OFF", Status.get_color(StatusCode.SHUTDOWN), StatusCode.SHUTDOWN),
         ]
 
-        for label_text, color in status_map:
-            item = self._create_legend_item(label_text, color)
+        for label_text, color, status_code in status_map:
+            item = self._create_legend_item(label_text, color, status_code)
             layout.addWidget(item)
 
-    def _create_legend_item(self, label_text: str, color: str) -> QWidget:
+    def _create_legend_item(self, label_text: str, color: str, status_code: int) -> QWidget:
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -58,10 +59,12 @@ class LegendWidget(QWidget):
 
         lbl_name = QLabel(label_text)
         lbl_name.setStyleSheet("font-size: 11px; font-weight: bold; color: #555;")
-        self._status_names_labels.append(lbl_name)
+        lbl_name.setProperty("status_code", status_code)
+        self._status_names_labels[label_text] = lbl_name
 
         lbl_stat = QLabel("0.0%")
         lbl_stat.setStyleSheet("font-size: 10px; color: #888;")
+        lbl_stat.setProperty("status_code", status_code)
         self._stats_labels[label_text] = lbl_stat
 
         text_layout.addWidget(lbl_name)
@@ -77,17 +80,31 @@ class LegendWidget(QWidget):
             return obj.get(key)
         return getattr(obj, key, None)
 
+    def clear_stats(self) -> None:
+        """Clear all statistics to default values."""
+        is_dark = self._theme_manager.is_dark
+        name_color = "#E0E0E0" if is_dark else "#555555"
+        stat_color = "#B0B0B0" if is_dark else "#888888"
+
+        for key, lbl in self._status_names_labels.items():
+            lbl.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {name_color};")
+
+        for key, lbl in self._stats_labels.items():
+            lbl.setText("0.0%")
+            lbl.setStyleSheet(f"font-size: 10px; color: {stat_color};")
+
     def render_stats(
         self,
         timeline_data: Dict[str, List[Any]],
         start: datetime,
         end: datetime,
     ) -> None:
+        """Render statistics from timeline data."""
         is_dark = self._theme_manager.is_dark
         name_color = "#E0E0E0" if is_dark else "#555555"
         stat_color = "#B0B0B0" if is_dark else "#888888"
 
-        for lbl in self._status_names_labels:
+        for key, lbl in self._status_names_labels.items():
             lbl.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {name_color};")
 
         for lbl in self._stats_labels.values():
@@ -95,21 +112,19 @@ class LegendWidget(QWidget):
 
         total_duration = (end - start).total_seconds()
         if total_duration <= 0:
+            self.clear_stats()
             return
 
-        stats = {key: 0.0 for key in self._stats_labels.keys()}
+        # Initialize stats by status code
+        stats_by_code = {
+            StatusCode.RUNNING: 0.0,
+            StatusCode.SHUTDOWN: 0.0,
+            StatusCode.STOPPED: 0.0,
+            StatusCode.MAINTENANCE: 0.0,
+            StatusCode.ALARM: 0.0,
+        }
 
-        def get_key(code: int) -> str:
-            if code == 1:
-                return "RUN"
-            if code == 3:
-                return "IDLE"
-            if code == 4:
-                return "TEST"
-            if code == 5:
-                return "ALARM"
-            return "OFF"
-
+        # Calculate durations from segments
         for segments in timeline_data.values():
             for seg in segments:
                 s_start = self._get_val(seg, "start_time")
@@ -123,21 +138,34 @@ class LegendWidget(QWidget):
 
                 if eff_end > eff_start:
                     duration = (eff_end - eff_start).total_seconds()
-                    code = self._get_val(seg, "status_code") or 0
-                    key = get_key(int(code))
-                    if key in stats:
-                        stats[key] += duration
+                    code = self._get_val(seg, "status_code")
+                    if code is not None:
+                        code = int(code)
+                        if code in stats_by_code:
+                            stats_by_code[code] += duration
 
+        # Map status codes to legend labels
+        code_to_label = {
+            StatusCode.RUNNING: "RUN",
+            StatusCode.SHUTDOWN: "OFF",
+            StatusCode.STOPPED: "STOP",
+            StatusCode.MAINTENANCE: "MAINT",
+            StatusCode.ALARM: "ALARM",
+        }
+
+        # Calculate percentages
         device_count = len(timeline_data)
         if device_count == 0:
+            self.clear_stats()
             return
 
         grand_total = total_duration * device_count
 
-        for key, duration in stats.items():
-            pct = (duration / grand_total) * 100
-            if key in self._stats_labels:
-                self._stats_labels[key].setText(f"{pct:.1f}%")
+        for code, duration in stats_by_code.items():
+            label_key = code_to_label.get(code)
+            if label_key and label_key in self._stats_labels:
+                pct = (duration / grand_total) * 100
+                self._stats_labels[label_key].setText(f"{pct:.1f}%")
 
 
 __all__ = ["LegendWidget"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, Qt, Signal, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
@@ -46,10 +46,12 @@ class DeviceIconItem(QGraphicsObject):
         self.setCursor(Qt.PointingHandCursor)
         self.setFlag(QGraphicsItem.ItemIsSelectable, False)
 
-        self._status_color = QColor(Qt.transparent)
+        self._status_color = QColor("#9E9E9E")  # Default gray
         self._is_hovered = False
         self._pixmap: Optional[QPixmap] = None
         self._is_dark = False
+        self._click_count = 0
+        self._double_click_timer: Optional[QTimer] = None
 
         lbl_text = device_data.get("label_text", self.equip_code)
         self.label = QGraphicsSimpleTextItem(lbl_text, self)
@@ -154,27 +156,30 @@ class DeviceIconItem(QGraphicsObject):
         self.label.setPos(x, y)
 
     def update_live_data(self, device_vm: Any) -> None:
+        """Update device with live data."""
         status_color_str = "#9E9E9E"
         output_count = 0
         last_update = None
         status_display = "Unknown"
 
-        if hasattr(device_vm, "status_color"):
-            status_color_str = device_vm.status_color
-            output_count = getattr(device_vm, "output_count", 0) or 0
-            last_update = getattr(device_vm, "last_update", None)
-            status_display = getattr(device_vm, "status_name", "Unknown")
-        elif isinstance(device_vm, dict):
+        if isinstance(device_vm, dict):
             status_color_str = device_vm.get("status_color", "#9E9E9E")
             output_count = device_vm.get("output_count", 0) or 0
             last_update = device_vm.get("last_update")
             status_display = device_vm.get("status_name", "Unknown")
+        elif hasattr(device_vm, "status_color"):
+            status_color_str = device_vm.status_color
+            output_count = getattr(device_vm, "output_count", 0) or 0
+            last_update = getattr(device_vm, "last_update", None)
+            status_display = getattr(device_vm, "status_name", "Unknown")
 
+        # Always update color
         new_color = QColor(status_color_str)
-        if new_color != self._status_color:
-            self._status_color = new_color
-            self._glow.setColor(new_color)
-            self.update()
+        self._status_color = new_color
+        self._glow.setColor(new_color)
+
+        # Force repaint
+        self.update()
 
         if output_count > 0:
             txt = str(output_count)
@@ -214,14 +219,44 @@ class DeviceIconItem(QGraphicsObject):
         super().hoverLeaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
+        """Handle mouse press - detect single vs double click."""
         if event.button() == Qt.LeftButton:
-            self._parent_canvas.device_clicked.emit(self.equip_code)
+            self._click_count += 1
+
+            if self._click_count == 1:
+                if self._double_click_timer is None:
+                    self._double_click_timer = QTimer()
+                    self._double_click_timer.setSingleShot(True)
+                    self._double_click_timer.timeout.connect(self._on_single_click_confirmed)
+
+                self._double_click_timer.start(250)
+
             event.accept()
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        """Handle double click - open right panel."""
+        if event.button() == Qt.LeftButton:
+            self._click_count = 0
+            if self._double_click_timer:
+                self._double_click_timer.stop()
+
+            self._parent_canvas.device_double_clicked.emit(self.equip_code)
+            logger.debug(f"[DeviceIcon] Double clicked: {self.equip_code}")
+            event.accept()
+        super().mouseDoubleClickEvent(event)
+
+    def _on_single_click_confirmed(self) -> None:
+        """Called when single click is confirmed."""
+        if self._click_count == 1:
+            self._parent_canvas.device_clicked.emit(self.equip_code)
+            logger.debug(f"[DeviceIcon] Single clicked: {self.equip_code}")
+        self._click_count = 0
 
 
 class DeviceCanvasWidget(QWidget):
     device_clicked = Signal(str)
+    device_double_clicked = Signal(str)
 
     def __init__(
         self,
@@ -254,8 +289,8 @@ class DeviceCanvasWidget(QWidget):
         self.view.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.view.setViewportUpdateMode(QGraphicsView.BoundingRectViewportUpdate)
-        self.view.setCacheMode(QGraphicsView.CacheBackground)
+        self.view.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)  # Force full update
+        self.view.setCacheMode(QGraphicsView.CacheNone)  # Disable cache for live updates
 
         layout.addWidget(self.view)
 
@@ -287,6 +322,7 @@ class DeviceCanvasWidget(QWidget):
                 item = DeviceIconItem(dev, self._ref_width, self._ref_height, self)
                 self.scene.addItem(item)
                 self._device_items[dev["id"]] = item
+                logger.debug(f"[Canvas] Added device: {dev['id']}")
 
         except Exception as e:
             logger.error("Failed to init canvas items: %s", e)
@@ -298,6 +334,10 @@ class DeviceCanvasWidget(QWidget):
         return f":/icon/{base}{suffix}"
 
     def render_state(self, devices_state: Dict[str, Any], is_dark: bool) -> None:
+        """Render device states with proper color updates."""
+        logger.debug(f"[Canvas] render_state called with {len(devices_state)} devices, is_dark={is_dark}")
+
+        # Update theme if changed
         if is_dark != self._is_dark:
             self._is_dark = is_dark
             if self._bg_item:
@@ -315,10 +355,16 @@ class DeviceCanvasWidget(QWidget):
             for item in self._device_items.values():
                 item.update_theme(is_dark)
 
+        # Update each device's live data
         for dev_id, vm in devices_state.items():
             item = self._device_items.get(dev_id)
             if item:
                 item.update_live_data(vm)
+                logger.debug(f"[Canvas] Updated device {dev_id}")
+
+        # Force scene update
+        self.scene.update()
+        self.view.viewport().update()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

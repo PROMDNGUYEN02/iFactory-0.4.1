@@ -1,7 +1,5 @@
-# File: application/queries/history.py
 """
-History Queries (Cold Storage).
-Read-only operations for historical data and Gantt charts.
+History Queries - For Gantt charts.
 """
 
 import logging
@@ -16,9 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 class GetDeviceHistoryQuery:
-    """QUERY: Fetches raw history logs."""
+    """QUERY: Fetches raw history logs from storage."""
 
-    def __init__(self, uow_factory: Callable[[], AbstractUnitOfWork], cache: ICacheProvider):
+    def __init__(
+        self,
+        uow_factory: Callable[[], AbstractUnitOfWork],
+        cache: ICacheProvider,
+    ):
         self._uow_factory = uow_factory
         self._cache = cache
 
@@ -72,7 +74,11 @@ class GetDeviceHistoryQuery:
 class GenerateProductionTimelineQuery:
     """QUERY: Generates formatted Gantt chart segments."""
 
-    def __init__(self, uow_factory: Callable[[], AbstractUnitOfWork], cache: ICacheProvider):
+    def __init__(
+        self,
+        uow_factory: Callable[[], AbstractUnitOfWork],
+        cache: ICacheProvider,
+    ):
         self._uow_factory = uow_factory
         self._cache = cache
 
@@ -84,7 +90,7 @@ class GenerateProductionTimelineQuery:
         fill_gaps: bool = True,
     ) -> List[GanttSegmentDTO]:
 
-        cache_key = f"timeline_{equip_code}_{start_time.date().isoformat()}_{end_time.date().isoformat()}"
+        cache_key = f"timeline_{equip_code}_" f"{start_time.date().isoformat()}_{end_time.date().isoformat()}"
         cached = await self._cache.get(cache_key)
         if cached:
             logger.debug(f"Gantt cache hit for {equip_code}")
@@ -127,7 +133,10 @@ class GenerateProductionTimelineQuery:
             return segments
 
         except Exception as e:
-            logger.error(f"Failed to generate timeline for {equip_code}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to generate timeline for {equip_code}: {e}",
+                exc_info=True,
+            )
             return []
 
 

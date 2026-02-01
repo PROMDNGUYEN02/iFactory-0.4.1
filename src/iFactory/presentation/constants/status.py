@@ -13,13 +13,18 @@ class StatusCode(IntEnum):
 
 
 class Status:
+    """
+    Status configuration - SYNCHRONIZED with Gantt widget colors.
+    """
+
+    # Modern color palette matching Gantt widget
     COLORS: Final[Dict[int, str]] = {
-        StatusCode.UNKNOWN: "#9E9E9E",
-        StatusCode.RUNNING: "#2E7D32",
-        StatusCode.SHUTDOWN: "#616161",
-        StatusCode.STOPPED: "#C62828",
-        StatusCode.MAINTENANCE: "#0288D1",
-        StatusCode.ALARM: "#F9A825",
+        StatusCode.UNKNOWN: "#64748B",  # Slate gray
+        StatusCode.RUNNING: "#10B981",  # Emerald green
+        StatusCode.SHUTDOWN: "#3B82F6",  # Blue
+        StatusCode.STOPPED: "#F59E0B",  # Amber/Orange
+        StatusCode.MAINTENANCE: "#8B5CF6",  # Violet
+        StatusCode.ALARM: "#EF4444",  # Red
     }
 
     NAMES: Final[Dict[int, str]] = {
@@ -34,9 +39,9 @@ class Status:
     EMOJIS: Final[Dict[int, str]] = {
         StatusCode.UNKNOWN: "❓",
         StatusCode.RUNNING: "🟢",
-        StatusCode.SHUTDOWN: "⬛",
+        StatusCode.SHUTDOWN: "🔵",
         StatusCode.STOPPED: "🟡",
-        StatusCode.MAINTENANCE: "🔧",
+        StatusCode.MAINTENANCE: "🟣",
         StatusCode.ALARM: "🔴",
     }
 

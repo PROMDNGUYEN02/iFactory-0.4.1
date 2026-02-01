@@ -1,4 +1,9 @@
 # File: presentation/state/actions.py
+"""
+State Actions.
+Defines all possible state mutations.
+"""
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
@@ -12,15 +17,19 @@ class ActionType(Enum):
     TOGGLE_SIDEBAR = auto()
     TOGGLE_RIGHT_PANEL = auto()
     SELECT_DEVICE = auto()
+    SELECT_DEVICE_ONLY = auto()  # Select without opening panel
     DESELECT_DEVICE = auto()
     SET_DATA_RANGE = auto()
     SET_LOADING = auto()
     SET_ERROR = auto()
     CLEAR_ERROR = auto()
     LOAD_DEVICES = auto()
+    UPDATE_DEVICES = auto()
     LOAD_GANTT = auto()
     SET_SELECTED_DEVICE_GANTT = auto()
     UPDATE_SYSTEM_STATUS = auto()
+    SYNC_COMPLETED = auto()
+    SET_PAGE_DEVICES = auto()
 
 
 @dataclass(frozen=True)
@@ -51,7 +60,13 @@ def toggle_right_panel() -> Action:
 
 
 def select_device(device_id: str) -> Action:
+    """Select device AND open right panel (double-click)."""
     return create_action(ActionType.SELECT_DEVICE, device_id)
+
+
+def select_device_only(device_id: str) -> Action:
+    """Select device WITHOUT opening right panel (single-click)."""
+    return create_action(ActionType.SELECT_DEVICE_ONLY, device_id)
 
 
 def deselect_device() -> Action:
@@ -75,7 +90,13 @@ def clear_error() -> Action:
 
 
 def load_devices(devices: Dict[str, Any]) -> Action:
+    """Replace all devices in state."""
     return create_action(ActionType.LOAD_DEVICES, devices)
+
+
+def update_devices(devices: Dict[str, Any]) -> Action:
+    """Merge/update devices in state (partial update)."""
+    return create_action(ActionType.UPDATE_DEVICES, devices)
 
 
 def load_gantt(gantt_data: Dict[str, Any]) -> Action:
@@ -83,7 +104,6 @@ def load_gantt(gantt_data: Dict[str, Any]) -> Action:
 
 
 def set_selected_device_gantt(gantt_view_model: Any) -> Action:
-    """Set the Gantt chart ViewModel for the selected device."""
     return create_action(ActionType.SET_SELECTED_DEVICE_GANTT, gantt_view_model)
 
 
@@ -92,6 +112,14 @@ def update_system_status(mssql: bool, sqlite: bool, message: str = "") -> Action
         ActionType.UPDATE_SYSTEM_STATUS,
         {"mssql": mssql, "sqlite": sqlite, "message": message},
     )
+
+
+def sync_completed(payload: Dict[str, Any]) -> Action:
+    return create_action(ActionType.SYNC_COMPLETED, payload)
+
+
+def set_page_devices(page: str, device_codes: list) -> Action:
+    return create_action(ActionType.SET_PAGE_DEVICES, {"page": page, "devices": device_codes})
 
 
 __all__ = [
@@ -103,13 +131,17 @@ __all__ = [
     "toggle_sidebar",
     "toggle_right_panel",
     "select_device",
+    "select_device_only",
     "deselect_device",
     "set_data_range",
     "set_loading",
     "set_error",
     "clear_error",
     "load_devices",
+    "update_devices",
     "load_gantt",
     "set_selected_device_gantt",
     "update_system_status",
+    "sync_completed",
+    "set_page_devices",
 ]

@@ -1,4 +1,7 @@
-# File: infrastructure/persistence/sqlalchemy/repositories/production_repository.py
+"""
+Production Repository - History storage only.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -22,7 +25,7 @@ from iFactory.infrastructure.persistence.sqlalchemy.mapper import SQLAlchemyMapp
 
 @dataclass
 class HistoryRecord:
-    """Simple data class for history records returned by get_history."""
+    """Simple data class for history records."""
 
     device_code: str
     status_code: int
@@ -32,10 +35,7 @@ class HistoryRecord:
 
 
 class SqlAlchemyProductionRepository(ProductionRepository):
-    """
-    Cold Store Implementation of ProductionRepository.
-    Manages historical timelines and material inputs.
-    """
+    """Repository for production history data."""
 
     STATUS_NAMES = {
         0: "Unknown",
@@ -55,7 +55,11 @@ class SqlAlchemyProductionRepository(ProductionRepository):
         model = result.scalar_one_or_none()
         return SQLAlchemyMapper.to_status_period(model)
 
-    async def get_status_history(self, code: EquipmentCode, window: TimeRange) -> Sequence[StatusPeriod]:
+    async def get_status_history(
+        self,
+        code: EquipmentCode,
+        window: TimeRange,
+    ) -> Sequence[StatusPeriod]:
         stmt = (
             select(StatusHistoryModel)
             .where(
@@ -75,10 +79,7 @@ class SqlAlchemyProductionRepository(ProductionRepository):
         start_time: datetime,
         end_time: datetime,
     ) -> Sequence[HistoryRecord]:
-        """
-        Get history records for a device within a time range.
-        Returns HistoryRecord objects with simple attributes.
-        """
+        """Get history records for a device within a time range."""
         stmt = (
             select(StatusHistoryModel)
             .where(
@@ -108,11 +109,19 @@ class SqlAlchemyProductionRepository(ProductionRepository):
 
         return records
 
-    async def save_status_period(self, period: StatusPeriod, equip_name: Optional[str] = None) -> None:
+    async def save_status_period(
+        self,
+        period: StatusPeriod,
+        equip_name: Optional[str] = None,
+    ) -> None:
         model = SQLAlchemyMapper.to_status_period_model(period, equip_name=equip_name)
         await self._session.merge(model)
 
-    async def bulk_save_status_history(self, periods: List[StatusPeriod], equip_name: Optional[str] = None) -> None:
+    async def bulk_save_status_history(
+        self,
+        periods: List[StatusPeriod],
+        equip_name: Optional[str] = None,
+    ) -> None:
         if not periods:
             return
         models = [SQLAlchemyMapper.to_status_period_model(p, equip_name=equip_name) for p in periods]
@@ -129,7 +138,11 @@ class SqlAlchemyProductionRepository(ProductionRepository):
         model = result.scalar_one_or_none()
         return SQLAlchemyMapper.to_material_input(model)
 
-    async def get_input_history(self, code: EquipmentCode, window: TimeRange) -> Sequence[MaterialInput]:
+    async def get_input_history(
+        self,
+        code: EquipmentCode,
+        window: TimeRange,
+    ) -> Sequence[MaterialInput]:
         stmt = (
             select(MaterialInputHistoryModel)
             .where(
