@@ -1,340 +1,365 @@
 # File: application/services/sync_orchestrator.py
 """
 Sync Orchestrator Service.
-Coordinates sync operations for both Latest Status and History.
-Optimized to sync only necessary devices based on current page.
+
+Coordinates sync operations as an Application Layer facade.
+This service is UI-AGNOSTIC - it operates on explicit device IDs
+provided by callers, not on implicit UI state.
+
+The Presentation Layer (e.g., Controllers) is responsible for:
+- Determining which devices are currently visible/relevant
+- Calling the orchestrator with explicit device ID lists
+- Handling the sync results for UI updates
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Protocol, Set
 
 from iFactory.application.ports.remote import IRemoteDataSource
 from iFactory.application.ports.uow import AbstractUnitOfWork
-from iFactory.domain.entities.device import Device
-from iFactory.domain.enums.machine_status import MachineStatus
-from iFactory.domain.value_objects.equipment_code import EquipmentCode
-from iFactory.domain.value_objects.status_period import StatusPeriod
-from iFactory.domain.value_objects.time_range import TimeRange
-
-if TYPE_CHECKING:
-    pass
+from iFactory.application.commands.sync import (
+    SyncLatestStatusHandler,
+    SyncLatestStatusRequest,
+    SyncLatestStatusResult,
+    SyncHistoryHandler,
+    SyncHistoryRequest,
+    SyncHistoryResult,
+    SyncIncrementalHistoryHandler,
+    SyncIncrementalRequest,
+)
 
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# Callback Protocol for Sync Events
+# =============================================================================
+
+
+class SyncEventListener(Protocol):
+    """Protocol for sync event callbacks."""
+
+    def __call__(self, result: SyncLatestStatusResult) -> None:
+        """Handle sync completion event."""
+        ...
+
+
+# =============================================================================
+# Sync Session State
+# =============================================================================
+
+
+class SyncSession:
+    """
+    Tracks sync state for a session.
+
+    This is Application Layer state, not UI state.
+    It tracks which devices have had their initial history loaded
+    to avoid redundant fetches.
+    """
+
+    def __init__(self):
+        self._initial_history_loaded: Set[str] = set()
+        self._last_sync_time: Optional[datetime] = None
+
+    def mark_history_loaded(self, device_ids: List[str]) -> None:
+        """Mark devices as having initial history loaded."""
+        self._initial_history_loaded.update(device_ids)
+
+    def filter_unloaded(self, device_ids: List[str]) -> List[str]:
+        """Return only devices that haven't had initial history loaded."""
+        return [d for d in device_ids if d not in self._initial_history_loaded]
+
+    def is_history_loaded(self, device_id: str) -> bool:
+        """Check if a device has had initial history loaded."""
+        return device_id in self._initial_history_loaded
+
+    def record_sync(self) -> None:
+        """Record that a sync occurred."""
+        self._last_sync_time = datetime.now()
+
+    @property
+    def last_sync_time(self) -> Optional[datetime]:
+        return self._last_sync_time
+
+    @property
+    def loaded_device_count(self) -> int:
+        return len(self._initial_history_loaded)
+
+    def reset(self) -> None:
+        """Reset session state (e.g., on reconnect)."""
+        self._initial_history_loaded.clear()
+        self._last_sync_time = None
+
+
+# =============================================================================
+# Sync Orchestrator
+# =============================================================================
+
+
 class SyncOrchestrator:
     """
-    Orchestrates all sync operations with optimized strategies:
+    Orchestrates all sync operations.
 
-    1. Latest Status Sync:
-       - Only syncs devices visible on current page
-       - Triggers immediate UI update after sync
+    This is a Facade/Coordinator that:
+    1. Delegates to appropriate command handlers
+    2. Manages session state (initial history tracking)
+    3. Provides a simple API for the Presentation Layer
 
-    2. History Sync:
-       - Initial load: 00:00 to now (once per app session)
-       - Incremental: Every 3s, fetch last 2 records per device for upsert
+    UI Decoupling:
+    - All methods accept explicit device_ids parameters
+    - No internal tracking of "current page" or UI concepts
+    - Callers are responsible for determining which devices to sync
     """
 
     def __init__(
         self,
         remote_source: IRemoteDataSource,
-        dual_uow_factory: Callable[[], AbstractUnitOfWork],
-        on_sync_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
+        uow_factory: Callable[[], AbstractUnitOfWork],
+        on_sync_complete: Optional[SyncEventListener] = None,
     ):
         self._remote_source = remote_source
-        self._uow_factory = dual_uow_factory
+        self._uow_factory = uow_factory
         self._on_sync_complete = on_sync_complete
 
-        # Track sync state
-        self._initial_history_loaded: Set[str] = set()
-        self._last_sync_time: Optional[datetime] = None
-        self._current_page_devices: List[str] = []
+        # Command handlers
+        self._latest_handler = SyncLatestStatusHandler(remote_source, uow_factory)
+        self._history_handler = SyncHistoryHandler(remote_source, uow_factory)
+        self._incremental_handler = SyncIncrementalHistoryHandler(remote_source, uow_factory)
+
+        # Session state
+        self._session = SyncSession()
 
         # Statistics
         self._stats = {
-            "latest_synced": 0,
-            "history_created": 0,
-            "history_updated": 0,
+            "total_latest_syncs": 0,
+            "total_history_syncs": 0,
+            "total_incremental_syncs": 0,
         }
 
-    def set_page_devices(self, device_codes: List[str]) -> None:
-        """Update the list of devices for current page."""
-        self._current_page_devices = device_codes
-        logger.info(f"[SyncOrchestrator] Page devices updated: {len(device_codes)} devices")
+    # -------------------------------------------------------------------------
+    # Primary Sync Methods (Explicit Device IDs)
+    # -------------------------------------------------------------------------
 
-    async def sync_latest_status(self, equipment_codes: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def sync_latest_status(self, device_ids: List[str]) -> SyncLatestStatusResult:
         """
-        Sync latest status for specified devices (or current page devices).
-        Returns dict with synced device data for immediate UI update.
+        Sync latest status for the specified devices.
+
+        Args:
+            device_ids: Explicit list of equipment codes to sync.
+                       Empty list results in no-op.
+
+        Returns:
+            SyncLatestStatusResult with synced device data.
         """
-        codes_to_sync = equipment_codes or self._current_page_devices
+        if not device_ids:
+            logger.debug("[SyncOrchestrator] No device IDs provided for latest sync")
+            return SyncLatestStatusResult(count=0, timestamp=datetime.now())
 
-        if not codes_to_sync:
-            logger.debug("[SyncOrchestrator] No devices to sync for latest status")
-            return {"devices": {}, "count": 0}
+        request = SyncLatestStatusRequest(device_ids=device_ids)
+        result = await self._latest_handler.execute(request)
 
-        try:
-            # Fetch from remote
-            remote_records = await self._remote_source.fetch_latest_status(codes_to_sync)
+        self._session.record_sync()
+        self._stats["total_latest_syncs"] += 1
 
-            if not remote_records:
-                return {"devices": {}, "count": 0}
+        # Notify listeners
+        if self._on_sync_complete and result.success:
+            self._on_sync_complete(result)
 
-            synced_devices = {}
+        return result
 
-            async with self._uow_factory() as uow:
-                for record in remote_records:
-                    try:
-                        device = await self._process_latest_record(uow, record)
-                        if device:
-                            synced_devices[device.equipment_code.value] = {
-                                "equip_code": device.equipment_code.value,
-                                "status_code": str(device.current_status.value),
-                                "status_name": device.current_status.name,
-                                "last_update": device.last_updated_at,
-                                "equip_name": device.equip_name,
-                                "is_active": device.is_active,
-                            }
-                    except Exception as e:
-                        code = record.get("equip_code", "unknown")
-                        logger.warning(f"[SyncOrchestrator] Error syncing {code}: {e}")
-
-                await uow.commit()
-
-            self._stats["latest_synced"] = len(synced_devices)
-            self._last_sync_time = datetime.now()
-
-            result = {
-                "devices": synced_devices,
-                "count": len(synced_devices),
-                "timestamp": self._last_sync_time,
-            }
-
-            # Notify listeners
-            if self._on_sync_complete:
-                self._on_sync_complete(result)
-
-            logger.info(f"[SyncOrchestrator] Latest status synced: {len(synced_devices)} devices")
-            return result
-
-        except Exception as e:
-            logger.error(f"[SyncOrchestrator] Latest status sync failed: {e}")
-            return {"devices": {}, "count": 0, "error": str(e)}
-
-    async def sync_initial_history(self, equipment_codes: Optional[List[str]] = None) -> int:
+    async def sync_initial_history(
+        self,
+        device_ids: List[str],
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> SyncHistoryResult:
         """
-        Initial history sync: From 00:00 today to now.
-        Only runs once per device per app session.
+        Sync initial history for devices that haven't been loaded yet.
+
+        Args:
+            device_ids: Devices to potentially sync.
+            start_time: Start of range (default: 00:00 today).
+            end_time: End of range (default: now).
+
+        Returns:
+            SyncHistoryResult with count of synced records.
+
+        Note:
+            Automatically filters out devices that have already had
+            initial history loaded this session.
         """
-        codes_to_sync = equipment_codes or self._current_page_devices
+        # Filter to only unloaded devices
+        unloaded_ids = self._session.filter_unloaded(device_ids)
 
-        # Filter out already loaded devices
-        new_codes = [c for c in codes_to_sync if c not in self._initial_history_loaded]
-
-        if not new_codes:
+        if not unloaded_ids:
             logger.debug("[SyncOrchestrator] All devices already have initial history")
-            return 0
+            return SyncHistoryResult()
 
-        # Time range: 00:00 today to now
         now = datetime.now()
-        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = start_time or now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = end_time or now
 
-        total_synced = 0
+        request = SyncHistoryRequest(
+            device_ids=unloaded_ids,
+            start_time=start,
+            end_time=end,
+        )
 
-        try:
-            async with self._uow_factory() as uow:
-                for code in new_codes:
-                    try:
-                        records = await self._remote_source.fetch_device_history_range(code, start_of_day, now)
+        result = await self._history_handler.execute(request)
 
-                        if records and uow.history:
-                            count = await self._bulk_save_history(uow.history, code, records)
-                            total_synced += count
-                            self._initial_history_loaded.add(code)
+        if result.success:
+            self._session.mark_history_loaded(unloaded_ids)
+            self._stats["total_history_syncs"] += 1
 
-                    except Exception as e:
-                        logger.warning(f"[SyncOrchestrator] Initial history failed for {code}: {e}")
+        logger.info(f"[SyncOrchestrator] Initial history: {result.records_synced} records " f"for {result.devices_processed} devices")
 
-                await uow.commit()
+        return result
 
-            logger.info(f"[SyncOrchestrator] Initial history synced: {total_synced} records for {len(new_codes)} devices")
-            return total_synced
-
-        except Exception as e:
-            logger.error(f"[SyncOrchestrator] Initial history sync failed: {e}")
-            return 0
-
-    async def sync_incremental_history(self, equipment_codes: Optional[List[str]] = None) -> int:
+    async def sync_incremental_history(self, device_ids: List[str], record_limit: int = 2) -> SyncHistoryResult:
         """
-        Incremental history sync: Fetch last 2 records per device for upsert.
-        Runs every 3 seconds after initial load.
+        Sync recent history records for incremental updates.
+
+        Args:
+            device_ids: Devices to sync.
+            record_limit: Number of recent records per device.
+
+        Returns:
+            SyncHistoryResult with count of updated records.
         """
-        codes_to_sync = equipment_codes or self._current_page_devices
+        if not device_ids:
+            return SyncHistoryResult()
 
-        if not codes_to_sync:
-            return 0
+        request = SyncIncrementalRequest(
+            device_ids=device_ids,
+            record_limit=record_limit,
+        )
 
-        total_updated = 0
+        result = await self._incremental_handler.execute(request)
 
-        try:
-            async with self._uow_factory() as uow:
-                for code in codes_to_sync:
-                    try:
-                        # Fetch only last 2 records
-                        records = await self._remote_source.fetch_latest_history_records(code, limit=2)
+        if result.records_synced > 0:
+            self._stats["total_incremental_syncs"] += 1
 
-                        if records and uow.history:
-                            count = await self._upsert_history(uow.history, code, records)
-                            total_updated += count
+        return result
 
-                    except Exception as e:
-                        logger.debug(f"[SyncOrchestrator] Incremental sync failed for {code}: {e}")
-
-                await uow.commit()
-
-            if total_updated > 0:
-                logger.debug(f"[SyncOrchestrator] Incremental history: {total_updated} records updated")
-
-            return total_updated
-
-        except Exception as e:
-            logger.error(f"[SyncOrchestrator] Incremental history sync failed: {e}")
-            return 0
-
-    async def sync_all(self, equipment_codes: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def sync_all(
+        self,
+        device_ids: List[str],
+        force_initial_history: bool = False,
+    ) -> SyncLatestStatusResult:
         """
         Combined sync: Latest status + History (initial or incremental).
+
+        Args:
+            device_ids: Devices to sync.
+            force_initial_history: If True, reload history even if already loaded.
+
+        Returns:
+            SyncLatestStatusResult from the latest status sync.
         """
-        codes = equipment_codes or self._current_page_devices
+        if not device_ids:
+            return SyncLatestStatusResult(count=0, timestamp=datetime.now())
 
         # Sync latest status
-        latest_result = await self.sync_latest_status(codes)
+        latest_result = await self.sync_latest_status(device_ids)
 
-        # Sync history
-        new_codes = [c for c in codes if c not in self._initial_history_loaded]
+        # Determine history sync strategy
+        unloaded_ids = self._session.filter_unloaded(device_ids)
 
-        if new_codes:
+        if unloaded_ids or force_initial_history:
             # Initial load for new devices
-            await self.sync_initial_history(new_codes)
+            ids_to_load = device_ids if force_initial_history else unloaded_ids
+            await self.sync_initial_history(ids_to_load)
         else:
-            # Incremental for already loaded
-            await self.sync_incremental_history(codes)
+            # Incremental for already loaded devices
+            await self.sync_incremental_history(device_ids)
 
         return latest_result
 
-    async def _process_latest_record(self, uow: AbstractUnitOfWork, record: Dict[str, Any]) -> Optional[Device]:
-        """Process a single latest status record."""
-        raw_code = str(record.get("equip_code"))
-        raw_status = record.get("raw_status") or record.get("equip_status") or "0"
-        timestamp = record.get("last_update") or datetime.now()
-        equip_name = record.get("equip_name")
-        reason_code = record.get("reason_code")
+    # -------------------------------------------------------------------------
+    # Convenience Methods
+    # -------------------------------------------------------------------------
 
-        code_vo = EquipmentCode(raw_code)
+    def reset_session(self) -> None:
+        """
+        Reset session state.
 
-        try:
-            status_enum = MachineStatus(int(raw_status))
-        except (ValueError, TypeError):
-            status_enum = MachineStatus.UNKNOWN
+        Call this when:
+        - User explicitly requests refresh
+        - Connection is re-established after failure
+        - Application needs to reload all data
+        """
+        self._session.reset()
+        logger.info("[SyncOrchestrator] Session reset")
 
-        device = Device(
-            equipment_code=code_vo,
-            current_status=status_enum,
-            last_updated_at=timestamp,
-            equip_name=equip_name,
-            reason_code=reason_code,
-        )
-
-        if uow.devices:
-            await uow.devices.save(device)
-
-        return device
-
-    async def _bulk_save_history(self, history_repo, equip_code: str, records: List[Dict[str, Any]]) -> int:
-        """Bulk save history records."""
-        if not records:
-            return 0
-
-        periods = []
-        equip_name = None
-
-        for record in records:
-            equip_name = equip_name or record.get("equip_name")
-            start_time = record.get("start_time")
-
-            if not start_time:
-                continue
-
-            raw_status = record.get("equip_status", "0")
-            try:
-                status_enum = MachineStatus(int(raw_status))
-            except (ValueError, TypeError):
-                status_enum = MachineStatus.UNKNOWN
-
-            end_time = record.get("end_time")
-            if end_time and end_time < start_time:
-                end_time = start_time
-
-            period = StatusPeriod(
-                equipment_code=EquipmentCode(equip_code),
-                status=status_enum,
-                time_range=TimeRange(start=start_time, end=end_time),
-            )
-            periods.append(period)
-
-        if periods:
-            await history_repo.bulk_save_status_history(periods, equip_name=equip_name)
-
-        return len(periods)
-
-    async def _upsert_history(self, history_repo, equip_code: str, records: List[Dict[str, Any]]) -> int:
-        """Upsert history records (update or insert)."""
-        if not records:
-            return 0
-
-        count = 0
-        equip_name = None
-
-        for record in records:
-            equip_name = equip_name or record.get("equip_name")
-            start_time = record.get("start_time")
-
-            if not start_time:
-                continue
-
-            raw_status = record.get("equip_status", "0")
-            try:
-                status_enum = MachineStatus(int(raw_status))
-            except (ValueError, TypeError):
-                status_enum = MachineStatus.UNKNOWN
-
-            end_time = record.get("end_time")
-            if end_time and end_time < start_time:
-                end_time = start_time
-
-            period = StatusPeriod(
-                equipment_code=EquipmentCode(equip_code),
-                status=status_enum,
-                time_range=TimeRange(start=start_time, end=end_time),
-            )
-
-            # Use save_status_period which does upsert via merge
-            await history_repo.save_status_period(period, equip_name=equip_name)
-            count += 1
-
-        return count
+    def is_device_history_loaded(self, device_id: str) -> bool:
+        """Check if a device has had its initial history loaded."""
+        return self._session.is_history_loaded(device_id)
 
     def get_stats(self) -> Dict[str, Any]:
         """Get sync statistics."""
         return {
             **self._stats,
-            "last_sync": self._last_sync_time,
-            "initial_loaded_count": len(self._initial_history_loaded),
-            "current_page_devices": len(self._current_page_devices),
+            "last_sync": self._session.last_sync_time,
+            "devices_with_history": self._session.loaded_device_count,
         }
 
+    # -------------------------------------------------------------------------
+    # Deprecated Methods (Backward Compatibility)
+    # -------------------------------------------------------------------------
 
-__all__ = ["SyncOrchestrator"]
+    def set_page_devices(self, device_codes: List[str]) -> None:
+        """
+        DEPRECATED: This method exists for backward compatibility only.
+
+        The Application Layer should not track UI concepts like "pages".
+        Instead, callers should pass device_ids directly to sync methods.
+
+        This method now does nothing but log a deprecation warning.
+        """
+        import warnings
+
+        warnings.warn(
+            "set_page_devices() is deprecated. " "Pass device_ids directly to sync methods instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        logger.warning(
+            "[SyncOrchestrator] DEPRECATED: set_page_devices() called. "
+            "This method no longer has any effect. "
+            "Pass device_ids directly to sync methods."
+        )
+
+
+# =============================================================================
+# Factory Function
+# =============================================================================
+
+
+def create_sync_orchestrator(
+    remote_source: IRemoteDataSource,
+    uow_factory: Callable[[], AbstractUnitOfWork],
+    on_sync_complete: Optional[SyncEventListener] = None,
+) -> SyncOrchestrator:
+    """
+    Factory function to create a SyncOrchestrator.
+
+    This is the recommended way to instantiate the orchestrator,
+    ensuring all dependencies are properly injected.
+    """
+    return SyncOrchestrator(
+        remote_source=remote_source,
+        uow_factory=uow_factory,
+        on_sync_complete=on_sync_complete,
+    )
+
+
+__all__ = [
+    "SyncOrchestrator",
+    "SyncSession",
+    "SyncEventListener",
+    "create_sync_orchestrator",
+]

@@ -5,8 +5,8 @@ from pathlib import Path
 # ========================
 
 INPUT_DIRS = [
-    Path("src/iFactory/shared"),
-    Path("src/iFactory/presentation"),
+    # Path("src/iFactory/shared"),
+    Path("src/iFactory/infrastructure"),
 ]
 
 TEXT_EXTENSIONS = {
