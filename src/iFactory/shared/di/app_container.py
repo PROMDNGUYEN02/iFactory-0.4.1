@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from iFactory.presentation.di.container import UIContainer
     from iFactory.application.services.sync_orchestrator import SyncOrchestrator
     from iFactory.application.ports.uow import AbstractUnitOfWork
+    from iFactory.infrastructure.persistence.sqlalchemy.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class AppContainer:
         "_base_dir",
         "_settings",
         "_db_config",
+        "_db_manager",
         "_remote_data_source",
         "_sync_orchestrator",
         "_uow_factory",
@@ -55,6 +57,7 @@ class AppContainer:
         self._base_dir = base_dir if base_dir is not None else PATHS.project_root
         self._settings = None
         self._db_config: Optional[DatabaseConfig] = None
+        self._db_manager: Optional["DatabaseManager"] = None
         self._remote_data_source = None
         self._sync_orchestrator: Optional["SyncOrchestrator"] = None
         self._uow_factory: Optional[Callable[[], "AbstractUnitOfWork"]] = None
@@ -100,30 +103,42 @@ class AppContainer:
         else:
             logger.info("[AppContainer] MSSQL not configured - offline mode")
 
-        # Initialize UoW factory if needed for history caching
+        # Initialize UoW factory for history caching
         await self._init_uow_factory()
 
     async def _init_uow_factory(self) -> None:
-        """Initialize Unit of Work factory for local caching (optional)."""
+        """Initialize Unit of Work factory for local caching."""
         try:
-            from iFactory.infrastructure.persistence.sqlalchemy.unit_of_work import (
+            from iFactory.infrastructure.persistence.sqlalchemy import (
+                DatabaseManager,
                 SqlAlchemyUnitOfWork,
             )
-            from iFactory.infrastructure.persistence.sqlalchemy.database import (
-                DatabaseManager,
-            )
 
-            # Initialize database for history caching
-            if self._db_config and self._db_config.sqlite_url:
-                db_manager = DatabaseManager(self._db_config.sqlite_url)
-                await db_manager.initialize()
+            # Get SQLite URL from config
+            sqlite_url = None
+            if self._db_config:
+                # Try storage_db_url first, then sqlite_url for compatibility
+                sqlite_url = getattr(self._db_config, "storage_db_url", None)
+                if not sqlite_url:
+                    sqlite_url = getattr(self._db_config, "sqlite_url", None)
 
-                self._uow_factory = lambda: SqlAlchemyUnitOfWork(db_manager.session_factory)
+            if sqlite_url:
+                # Initialize database manager
+                self._db_manager = DatabaseManager(sqlite_url)
+                await self._db_manager.initialize()
+
+                # Create UoW factory
+                session_factory = self._db_manager.session_factory
+                self._uow_factory = lambda: SqlAlchemyUnitOfWork(session_factory)
+
                 logger.info("[AppContainer] UoW factory configured for history caching")
             else:
                 self._uow_factory = None
-                logger.info("[AppContainer] No local database - history caching disabled")
+                logger.info("[AppContainer] No local database URL - history caching disabled")
 
+        except ImportError as e:
+            logger.warning(f"UoW factory init failed (import error): {e}")
+            self._uow_factory = None
         except Exception as e:
             logger.warning(f"UoW factory init failed: {e}")
             self._uow_factory = None
@@ -179,7 +194,6 @@ class AppContainer:
     def _on_sync_complete(self, result) -> None:
         """Handle sync completion from orchestrator."""
         logger.debug(f"[AppContainer] Sync completed: {result.count} devices")
-        # Could emit to signal bus if needed
 
     def _init_presentation(self) -> None:
         """Initialize Presentation Layer."""
@@ -219,6 +233,11 @@ class AppContainer:
         """Get database configuration."""
         return self._db_config
 
+    @property
+    def db_manager(self) -> Optional["DatabaseManager"]:
+        """Get database manager."""
+        return self._db_manager
+
     def get_ui_container(self) -> Optional["UIContainer"]:
         """Get UI container."""
         return self._ui_container
@@ -236,13 +255,21 @@ class AppContainer:
             self._ui_container.shutdown()
             self._ui_container = None
 
-        # Then dispose remote source
+        # Dispose remote source
         if self._remote_data_source:
             try:
                 await self._remote_data_source.dispose()
             except Exception as e:
                 logger.warning(f"Error disposing remote source: {e}")
             self._remote_data_source = None
+
+        # Dispose database manager
+        if self._db_manager:
+            try:
+                await self._db_manager.dispose()
+            except Exception as e:
+                logger.warning(f"Error disposing database manager: {e}")
+            self._db_manager = None
 
         self._sync_orchestrator = None
         self._uow_factory = None

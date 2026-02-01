@@ -1,9 +1,14 @@
+# File: infrastructure/persistence/sqlalchemy/__init__.py
 """
 SQLAlchemy persistence infrastructure.
 Supports dual storage: Hot (latest) and Cold (history).
 """
 
 from .database import (
+    # Class-based API
+    DatabaseManager,
+    # Functional API
+    get_storage_engine,
     get_hot_engine,
     get_cold_engine,
     get_hot_session_factory,
@@ -16,34 +21,30 @@ from .models import (
     ColdBase,
     DeviceModel,
     LatestMaterialInputModel,
-    StatusHistoryModel,  # UPDATED: Renamed from StatusPeriodModel
+    StatusHistoryModel,
     MaterialInputHistoryModel,
     MaterialInputModel,
 )
-
-# Import from .mapper (singular) to match file system
 from .mapper import SQLAlchemyMapper
-
-# Alias for backward compatibility
-OrmDeviceMapper = SQLAlchemyMapper
-
 from .unit_of_work import (
     HotStorageUnitOfWork,
     ColdStorageUnitOfWork,
     DualStorageUnitOfWork,
 )
-
-# REPOSITORIES
 from .repositories.device_repository import SqlAlchemyDeviceRepository
 from .repositories.production_repository import SqlAlchemyProductionRepository
 
-# Aliases
+# Aliases for backward compatibility
+OrmDeviceMapper = SQLAlchemyMapper
 HotStorageRepository = SqlAlchemyDeviceRepository
 ColdStorageRepository = SqlAlchemyProductionRepository
 SqlAlchemyUnitOfWork = HotStorageUnitOfWork
 
 __all__ = [
+    # Database Manager
+    "DatabaseManager",
     # Engines
+    "get_storage_engine",
     "get_hot_engine",
     "get_cold_engine",
     "get_hot_session_factory",
@@ -56,7 +57,7 @@ __all__ = [
     # Models
     "DeviceModel",
     "LatestMaterialInputModel",
-    "StatusHistoryModel",  # UPDATED
+    "StatusHistoryModel",
     "MaterialInputHistoryModel",
     "MaterialInputModel",
     # Mapper
