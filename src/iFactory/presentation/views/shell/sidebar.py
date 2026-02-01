@@ -1,8 +1,21 @@
+"""
+Sidebar View - MVVM Architecture.
+
+Modern navigation sidebar with:
+- Navigation buttons
+- Settings menu
+- Theme support
+- Expansion animation
+
+Binds to ShellViewModel for navigation and theme.
+"""
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, List
+import logging
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QSize, QPoint
+from PySide6.QtCore import Qt, QSize, QPoint, Slot
 from PySide6.QtGui import QIcon, QFont, QColor, QPainter, QPainterPath, QBrush, QPixmap
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QListWidget, QMenu, QGraphicsDropShadowEffect
 from PySide6.QtSvg import QSvgRenderer
@@ -12,7 +25,9 @@ from ...resources.themes import get_theme_manager
 from ...state.selectors import select_current_page, select_sidebar_expanded, select_theme, select_data_range_days
 
 if TYPE_CHECKING:
-    from ...controllers.shell_controller import ShellController
+    from ...viewmodels import ShellViewModel
+
+logger = logging.getLogger(__name__)
 
 
 def create_colored_icon(icon_path: str, color: QColor, size: int = 16) -> QIcon:
@@ -20,20 +35,16 @@ def create_colored_icon(icon_path: str, color: QColor, size: int = 16) -> QIcon:
     renderer = QSvgRenderer(icon_path)
 
     if not renderer.isValid():
-        # Fallback: try loading as regular icon
         return QIcon(icon_path)
 
-    # Create pixmap with transparency
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
 
-    # Render SVG
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
     renderer.render(painter)
     painter.end()
 
-    # Apply color mask
     colored_pixmap = QPixmap(pixmap.size())
     colored_pixmap.fill(Qt.transparent)
 
@@ -49,6 +60,8 @@ def create_colored_icon(icon_path: str, color: QColor, size: int = 16) -> QIcon:
 
 
 class ModernNavButton(QWidget):
+    """Modern navigation button with hover and active states."""
+
     def __init__(self, icon_path: str, text: str, page_id: str, on_click: callable, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._icon_path = icon_path
@@ -208,7 +221,6 @@ class SettingsMenu(QMenu):
         ("Last Year", 365, "calendar_year"),
     ]
 
-    # Inline SVG data for menu icons (more reliable than external files)
     ICON_SVG = {
         "calendar_today": """
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" 
@@ -297,14 +309,13 @@ class SettingsMenu(QMenu):
         """,
     }
 
-    def __init__(self, controller: "ShellController", current_range: int, theme_manager, parent: Optional[QWidget] = None):
+    def __init__(self, shell_vm: "ShellViewModel", current_range: int, theme_manager, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self._controller = controller
+        self._shell_vm = shell_vm
         self._current_range = current_range
         self._theme_manager = theme_manager
         self._is_dark = theme_manager.is_dark
 
-        # Icon colors based on theme
         self._icon_color = "#E2E8F0" if self._is_dark else "#475569"
         self._icon_color_active = "#60A5FA" if self._is_dark else "#2563EB"
         self._icon_color_disabled = "#64748B" if self._is_dark else "#94A3B8"
@@ -317,16 +328,12 @@ class SettingsMenu(QMenu):
         if not svg_template:
             return QIcon()
 
-        # Replace color placeholder
         svg_data = svg_template.format(color=color).strip().encode("utf-8")
-
-        # Create renderer from SVG data
         renderer = QSvgRenderer(svg_data)
 
         if not renderer.isValid():
             return QIcon()
 
-        # Render to pixmap
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.transparent)
 
@@ -338,13 +345,11 @@ class SettingsMenu(QMenu):
         return QIcon(pixmap)
 
     def _setup_menu(self) -> None:
-        # Menu styling
         if self._is_dark:
             self.setStyleSheet(self._get_dark_style())
         else:
             self.setStyleSheet(self._get_light_style())
 
-        # Add shadow
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(32)
         shadow.setXOffset(0)
@@ -439,20 +444,16 @@ class SettingsMenu(QMenu):
         header = self.addAction("DATA RANGE")
         header.setEnabled(False)
 
-        # Date range options with themed icons
+        # Date range options
         for label, days, icon_name in self.DATE_RANGE_OPTIONS:
             is_selected = self._current_range == days
-
-            # Use active color for selected item
             icon_color = self._icon_color_active if is_selected else self._icon_color
             icon = self._create_icon_from_svg(icon_name, icon_color)
 
-            # Add checkmark for selected item
-            display_label = f"  {label}" if not is_selected else f"  {label}"
+            display_label = f"  {label}"
             action = self.addAction(icon, display_label)
 
             if is_selected:
-                # Add checkmark icon to indicate selection
                 action.setIcon(self._create_icon_from_svg("check", self._icon_color_active))
 
             action.triggered.connect(lambda checked, d=days: self._on_range_selected(d))
@@ -463,7 +464,7 @@ class SettingsMenu(QMenu):
         appearance_header = self.addAction("APPEARANCE")
         appearance_header.setEnabled(False)
 
-        # Theme toggle with appropriate icon
+        # Theme toggle
         if self._is_dark:
             theme_icon = self._create_icon_from_svg("sun", self._icon_color)
             theme_action = self.addAction(theme_icon, "  Switch to Light Mode")
@@ -471,30 +472,32 @@ class SettingsMenu(QMenu):
             theme_icon = self._create_icon_from_svg("moon", self._icon_color)
             theme_action = self.addAction(theme_icon, "  Switch to Dark Mode")
 
-        theme_action.triggered.connect(self._controller.toggle_theme)
+        theme_action.triggered.connect(self._shell_vm.toggle_theme)
 
         self.addSeparator()
 
-        # About Section Header
+        # About Section
         info_header = self.addAction("ABOUT")
         info_header.setEnabled(False)
 
-        # Version info with icon
         version_icon = self._create_icon_from_svg("info", self._icon_color_disabled)
         version_action = self.addAction(version_icon, "  Version 1.0.0")
         version_action.setEnabled(False)
 
     def _on_range_selected(self, days: int) -> None:
         self._current_range = days
-        self._controller.set_data_range(days)
+        # TODO: Add data range to ShellViewModel if needed
+        # For now, this would need to be dispatched to store
 
 
 class SettingsButton(QWidget):
-    def __init__(self, icon_path: str, text: str, controller: "ShellController", parent: Optional[QWidget] = None):
+    """Settings button that opens the settings menu."""
+
+    def __init__(self, icon_path: str, text: str, shell_vm: "ShellViewModel", parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._icon_path = icon_path
         self._text = text
-        self._controller = controller
+        self._shell_vm = shell_vm
         self._is_hovered = False
         self._is_expanded = False
         self._current_range = 1
@@ -600,25 +603,18 @@ class SettingsButton(QWidget):
         super().mousePressEvent(event)
 
     def _show_menu(self) -> None:
-        menu = SettingsMenu(controller=self._controller, current_range=self._current_range, theme_manager=self._theme_manager, parent=self)
+        menu = SettingsMenu(shell_vm=self._shell_vm, current_range=self._current_range, theme_manager=self._theme_manager, parent=self)
 
-        # Calculate menu size
         menu.adjustSize()
         menu_height = menu.sizeHint().height()
 
-        # Get button position in global coordinates
         btn_global_pos = self.mapToGlobal(self.rect().topRight())
-
-        # Position menu to the RIGHT of sidebar, ABOVE the button
-        # Menu appears above to avoid covering status bar
         sidebar_width = Layout.SIDEBAR_EXPANDED_WIDTH if self._is_expanded else Layout.SIDEBAR_COLLAPSED_WIDTH
 
         menu_x = self.mapToGlobal(QPoint(0, 0)).x() + sidebar_width + 8
         menu_y = btn_global_pos.y() - menu_height + self.height()
 
-        # Ensure menu doesn't go above the screen
         if menu_y < 10:
-            # If not enough space above, show below
             menu_y = btn_global_pos.y()
 
         menu.exec(QPoint(menu_x, menu_y))
@@ -639,6 +635,15 @@ class SettingsButton(QWidget):
 
 
 class SidebarView:
+    """
+    Sidebar navigation view.
+
+    Passive view that:
+    - Binds to ShellViewModel signals
+    - Delegates navigation to ViewModel
+    - Renders based on state
+    """
+
     NAV_ITEMS = [
         (":/icon/dashboard.svg", "Dashboard", "dashboard_page"),
         (":/icon/orders.svg", "Analytics", "orders_page"),
@@ -649,12 +654,12 @@ class SidebarView:
         container: QFrame,
         nav_list: QListWidget,
         settings_list: QListWidget,
-        controller: "ShellController",
+        shell_vm: "ShellViewModel",
     ):
         self._container = container
         self._nav_list = nav_list
         self._settings_list = settings_list
-        self._controller = controller
+        self._shell_vm = shell_vm
         self._theme_manager = get_theme_manager()
 
         self._current_theme = "light"
@@ -663,6 +668,36 @@ class SidebarView:
         self._settings_btn: Optional[SettingsButton] = None
 
         self._setup_sidebar()
+        self._bind_viewmodel()
+
+    def _bind_viewmodel(self) -> None:
+        """Bind to ViewModel signals."""
+        self._shell_vm.themeChanged.connect(self._on_theme_changed)
+        self._shell_vm.sidebarChanged.connect(self._on_sidebar_changed)
+        self._shell_vm.pageChanged.connect(self._on_page_changed)
+
+    @Slot(str)
+    def _on_theme_changed(self, theme: str) -> None:
+        """Handle theme change."""
+        if theme != self._current_theme:
+            self._current_theme = theme
+            self._apply_styles()
+            for btn in self._nav_buttons:
+                btn.set_theme(theme)
+            if self._settings_btn:
+                self._settings_btn.set_theme(theme)
+
+    @Slot(bool)
+    def _on_sidebar_changed(self, expanded: bool) -> None:
+        """Handle sidebar expansion change."""
+        if expanded != self._is_expanded:
+            self._is_expanded = expanded
+            self._update_expansion()
+
+    @Slot(str)
+    def _on_page_changed(self, page: str) -> None:
+        """Handle page change."""
+        self._update_active(page)
 
     def _setup_sidebar(self) -> None:
         if not self._container:
@@ -690,7 +725,7 @@ class SidebarView:
         self._content_layout.setContentsMargins(4, 12, 4, 12)
         self._content_layout.setSpacing(4)
 
-        # Navigation buttons only (no MENU label)
+        # Navigation buttons
         for icon_path, text, page_id in self.NAV_ITEMS:
             btn = ModernNavButton(icon_path, text, page_id, self._on_nav_click)
             self._nav_buttons.append(btn)
@@ -698,18 +733,17 @@ class SidebarView:
 
         self._content_layout.addStretch()
 
-        # Divider (hidden when collapsed)
+        # Divider
         self._divider = QFrame()
         self._divider.setFixedHeight(1)
         self._divider.setVisible(False)
         self._content_layout.addWidget(self._divider)
 
         # Settings button
-        self._settings_btn = SettingsButton(":/icon/settings.svg", "Settings", self._controller)
+        self._settings_btn = SettingsButton(":/icon/settings.svg", "Settings", self._shell_vm)
         self._content_layout.addWidget(self._settings_btn)
 
         existing_layout.addWidget(self._content)
-
         self._apply_styles()
 
     def _apply_styles(self) -> None:
@@ -736,20 +770,45 @@ class SidebarView:
         self._divider.setStyleSheet(f"background-color: {divider_color}; margin: 4px 12px;")
 
     def _on_nav_click(self, page_id: str) -> None:
-        self._controller.navigate_to(page_id)
+        """Handle navigation button click - delegate to ViewModel."""
+        self._shell_vm.navigate_to(page_id)
 
     def _update_active(self, current_page: str) -> None:
+        """Update active button based on current page."""
         normalized = current_page.replace("daboard", "dashboard")
         for btn in self._nav_buttons:
             btn_page = btn.page_id.replace("daboard", "dashboard")
             btn.set_active(btn_page == normalized)
 
-    def render(self, state: dict) -> None:
+    def _update_expansion(self) -> None:
+        """Update expansion state of all buttons."""
+        for btn in self._nav_buttons:
+            btn.set_expanded(self._is_expanded)
+        if self._settings_btn:
+            self._settings_btn.set_expanded(self._is_expanded)
+
+        self._divider.setVisible(self._is_expanded)
+
+        if self._is_expanded:
+            self._content_layout.setContentsMargins(6, 12, 6, 12)
+        else:
+            self._content_layout.setContentsMargins(4, 12, 4, 12)
+
+        width = Layout.SIDEBAR_EXPANDED_WIDTH if self._is_expanded else Layout.SIDEBAR_COLLAPSED_WIDTH
+        self._container.setFixedWidth(width)
+
+    def render(self, state: Dict[str, Any]) -> None:
+        """
+        Render sidebar based on state.
+
+        Legacy compatibility - primary updates come via ViewModel signals.
+        """
         theme = select_theme(state)
         is_expanded = select_sidebar_expanded(state)
         current_page = select_current_page(state)
         data_range = select_data_range_days(state)
 
+        # Theme update
         if theme != self._current_theme:
             self._current_theme = theme
             self._apply_styles()
@@ -758,25 +817,15 @@ class SidebarView:
             if self._settings_btn:
                 self._settings_btn.set_theme(theme)
 
+        # Expansion update
         if is_expanded != self._is_expanded:
             self._is_expanded = is_expanded
-            for btn in self._nav_buttons:
-                btn.set_expanded(is_expanded)
-            if self._settings_btn:
-                self._settings_btn.set_expanded(is_expanded)
+            self._update_expansion()
 
-            self._divider.setVisible(is_expanded)
-
-            if is_expanded:
-                self._content_layout.setContentsMargins(6, 12, 6, 12)
-            else:
-                self._content_layout.setContentsMargins(4, 12, 4, 12)
-
-        width = Layout.SIDEBAR_EXPANDED_WIDTH if is_expanded else Layout.SIDEBAR_COLLAPSED_WIDTH
-        self._container.setFixedWidth(width)
-
+        # Active page update
         self._update_active(current_page)
 
+        # Settings button range
         if self._settings_btn:
             self._settings_btn.set_current_range(data_range)
 

@@ -1,5 +1,5 @@
 """
-Application Runner - Optimized with Deferred Data Loading.
+Application Runner - Optimized with MVVM and Deferred Data Loading.
 """
 
 from __future__ import annotations
@@ -19,12 +19,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CLEANUP_TIMEOUT = 2.0  # Reduced timeout
+_CLEANUP_TIMEOUT = 2.0
 
 
 class ApplicationRunner:
     """
-    Runs the Qt application with optimized startup.
+    Runs the Qt application with MVVM architecture.
+
+    Startup sequence:
+    1. Initialize AppContainer (infrastructure, services)
+    2. Initialize UIContainer (ViewModels, Views)
+    3. Show main window
+    4. Trigger deferred data loading
     """
 
     __slots__ = ("qt_app", "container", "_ui_container", "main_window", "_loop")
@@ -52,6 +58,7 @@ class ApplicationRunner:
 
                 self._show_window()
 
+                # Schedule deferred data load after window is shown
                 if self._ui_container:
                     self._ui_container.schedule_deferred_data_load()
 
@@ -66,10 +73,12 @@ class ApplicationRunner:
     async def _initialize(self) -> None:
         """Initialize application - fast path only."""
         try:
+            # Initialize infrastructure and application layer
             self.container = AppContainer()
             await self.container.initialize()
             logger.info("AppContainer initialized")
 
+            # Get UI container (already initialized in AppContainer)
             if hasattr(self.container, "get_ui_container"):
                 self._ui_container = self.container.get_ui_container()
 
@@ -80,12 +89,14 @@ class ApplicationRunner:
                 self._ui_container = UIContainer(self.container)
                 self._ui_container.initialize()
 
+            # Get main window from UI container
             self.main_window = self._ui_container.get_main_window()
 
+            # Run async initialization if available
             if hasattr(self._ui_container, "initialize_async"):
                 await self._ui_container.initialize_async()
 
-            logger.info("Application initialized successfully")
+            logger.info("Application initialized with MVVM architecture")
 
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
@@ -104,17 +115,16 @@ class ApplicationRunner:
         """Cleanup resources."""
         logger.info("Cleaning up application...")
 
-        # Shutdown UI first (this stops timers and async executors)
+        # Shutdown UI first (stops timers, disposes ViewModels)
         if hasattr(self, "_ui_container") and self._ui_container:
             try:
                 self._ui_container.shutdown()
             except Exception as e:
                 logger.warning(f"UI shutdown error: {e}")
 
-        # Brief pause to let pending operations complete
+        # Brief pause for pending operations
         if self._loop and not self._loop.is_closed():
             try:
-                # Give a short time for cleanup
                 self._loop.run_until_complete(asyncio.sleep(0.1))
             except Exception:
                 pass

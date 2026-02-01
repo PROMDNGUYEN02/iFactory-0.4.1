@@ -1,9 +1,8 @@
-# File: shared/di/app_container.py
 """
-Main Application DI Container - Remote-First Architecture with New Sync API.
+Main Application DI Container - Remote-First Architecture with MVVM.
 
 Wires up Application Layer components (SyncOrchestrator, Handlers) and
-provides them to the Presentation Layer.
+provides them to the Presentation Layer using MVVM pattern.
 """
 
 from __future__ import annotations
@@ -33,10 +32,11 @@ class AppContainer:
     Responsibilities:
     - Initialize infrastructure components (remote source, databases)
     - Create Application Layer services (SyncOrchestrator)
-    - Provide dependencies to Presentation Layer
+    - Provide dependencies to Presentation Layer (ViewModels)
 
     Architecture:
     - Remote-First: Device status fetched directly from MSSQL
+    - MVVM Pattern: ViewModels orchestrate Use Cases
     - New Sync API: SyncOrchestrator receives explicit device IDs
     """
 
@@ -70,7 +70,7 @@ class AppContainer:
         if self._initialized:
             return
 
-        logger.info("[AppContainer] Initializing...")
+        logger.info("[AppContainer] Initializing with MVVM architecture...")
 
         self._load_settings()
         await self._init_infrastructure()
@@ -114,20 +114,16 @@ class AppContainer:
                 SqlAlchemyUnitOfWork,
             )
 
-            # Get SQLite URL from config
             sqlite_url = None
             if self._db_config:
-                # Try storage_db_url first, then sqlite_url for compatibility
                 sqlite_url = getattr(self._db_config, "storage_db_url", None)
                 if not sqlite_url:
                     sqlite_url = getattr(self._db_config, "sqlite_url", None)
 
             if sqlite_url:
-                # Initialize database manager
                 self._db_manager = DatabaseManager(sqlite_url)
                 await self._db_manager.initialize()
 
-                # Create UoW factory
                 session_factory = self._db_manager.session_factory
                 self._uow_factory = lambda: SqlAlchemyUnitOfWork(session_factory)
 
@@ -154,7 +150,6 @@ class AppContainer:
                 create_sync_orchestrator,
             )
 
-            # Create sync orchestrator with dependencies
             self._sync_orchestrator = create_sync_orchestrator(
                 remote_source=self._remote_data_source,
                 uow_factory=self._uow_factory or self._create_null_uow_factory(),
@@ -196,7 +191,7 @@ class AppContainer:
         logger.debug(f"[AppContainer] Sync completed: {result.count} devices")
 
     def _init_presentation(self) -> None:
-        """Initialize Presentation Layer."""
+        """Initialize Presentation Layer with MVVM architecture."""
         from iFactory.presentation.adapters.signal_bus import SignalBus
         from iFactory.presentation.di.container import UIContainer
 
@@ -207,11 +202,6 @@ class AppContainer:
     # -------------------------------------------------------------------------
     # Public Properties
     # -------------------------------------------------------------------------
-
-    @property
-    def device_facade(self):
-        """Legacy - no facade needed in remote-first architecture."""
-        return None
 
     @property
     def remote_source(self):
@@ -255,13 +245,22 @@ class AppContainer:
             self._ui_container.shutdown()
             self._ui_container = None
 
-        # Dispose remote source
+        # Wait a bit for pending operations to complete
+        import asyncio
+
+        await asyncio.sleep(0.2)
+
+        # Dispose remote source with proper cleanup
         if self._remote_data_source:
             try:
+                # Cancel any pending operations first
+                if hasattr(self._remote_data_source, "cancel_pending"):
+                    await self._remote_data_source.cancel_pending()
                 await self._remote_data_source.dispose()
             except Exception as e:
                 logger.warning(f"Error disposing remote source: {e}")
-            self._remote_data_source = None
+            finally:
+                self._remote_data_source = None
 
         # Dispose database manager
         if self._db_manager:
@@ -269,7 +268,8 @@ class AppContainer:
                 await self._db_manager.dispose()
             except Exception as e:
                 logger.warning(f"Error disposing database manager: {e}")
-            self._db_manager = None
+            finally:
+                self._db_manager = None
 
         self._sync_orchestrator = None
         self._uow_factory = None
@@ -277,7 +277,6 @@ class AppContainer:
 
         logger.info("[AppContainer] Disposed")
 
-    # Alias for compatibility
     cleanup = dispose
 
 

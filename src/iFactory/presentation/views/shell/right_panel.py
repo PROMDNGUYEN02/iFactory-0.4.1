@@ -1,5 +1,12 @@
 """
 Right Panel - Device details view.
+
+MVVM Architecture:
+- Binds to DeviceListViewModel for selection
+- Binds to ShellViewModel for panel state
+- Displays selected device details
+- Auto-closes when clicking outside (except on devices)
+- Updates content when different device selected without close/reopen
 """
 
 from __future__ import annotations
@@ -7,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout
 
 from ...constants.layout import Layout
@@ -20,31 +27,110 @@ from ...state.selectors import (
 )
 
 if TYPE_CHECKING:
-    from ...controllers.shell_controller import ShellController
     from ...state.store import Store
+    from ...viewmodels import DeviceListViewModel, ShellViewModel
 
 logger = logging.getLogger(__name__)
 
 
 class RightPanelView:
-    """Right panel showing device details."""
+    """
+    Right panel showing device details.
+
+    Passive view that:
+    - Binds to ViewModel signals
+    - Displays selected device information
+    - Renders based on state
+    - Supports seamless device switching without panel flicker
+    """
 
     def __init__(
         self,
         container: QFrame,
         store: "Store",
-        controller: "ShellController",
+        device_vm: "DeviceListViewModel",
+        shell_vm: "ShellViewModel",
     ):
         self._container = container
         self._store = store
-        self._controller = controller
+        self._device_vm = device_vm
+        self._shell_vm = shell_vm
         self._theme_manager = get_theme_manager()
         self._current_theme = "light"
         self._last_device_id: Optional[str] = None
         self._last_render_data: Optional[Dict] = None
+        self._is_panel_open = False
 
         self._layout: Optional[QVBoxLayout] = None
         self._setup()
+        self._bind_viewmodels()
+
+    def _bind_viewmodels(self) -> None:
+        """Bind to ViewModel signals."""
+        self._device_vm.selectionChanged.connect(self._on_selection_changed)
+        self._shell_vm.themeChanged.connect(self._on_theme_changed)
+        self._shell_vm.rightPanelChanged.connect(self._on_panel_changed)
+
+    @Slot(object)
+    def _on_selection_changed(self, selection) -> None:
+        """
+        Handle device selection change from ViewModel.
+
+        Key behavior:
+        - If panel is open and different device selected: update content only
+        - If panel is closed and device selected: open panel with content
+        - If no selection: show placeholder (panel state unchanged)
+        """
+        if selection.has_selection:
+            device_id = selection.selected_device_id
+
+            # Check if this is a different device than currently shown
+            is_different_device = device_id != self._last_device_id
+
+            device = self._device_vm.selected_device
+            if device:
+                # Update content - panel state handled by ViewModel
+                self._render_device_from_model(device)
+                self._last_device_id = device_id
+
+                if is_different_device:
+                    logger.debug(f"[RightPanelView] Updated content for device: {device_id}")
+            else:
+                self._show_loading_device(device_id)
+        else:
+            self._show_no_selection()
+            self._last_device_id = None
+
+    @Slot(str)
+    def _on_theme_changed(self, theme: str) -> None:
+        """Handle theme change."""
+        if theme != self._current_theme:
+            self._current_theme = theme
+            self._apply_theme_styles()
+
+    @Slot(bool)
+    def _on_panel_changed(self, expanded: bool) -> None:
+        """Handle panel expansion change."""
+        self._is_panel_open = expanded
+        width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
+        self._container.setFixedWidth(width)
+
+        if not expanded:
+            # Panel closing - clear last device to allow fresh render on reopen
+            self._last_device_id = None
+            logger.debug("[RightPanelView] Panel closed")
+        else:
+            logger.debug("[RightPanelView] Panel opened")
+
+    @property
+    def is_open(self) -> bool:
+        """Check if panel is currently open."""
+        return self._is_panel_open
+
+    @property
+    def current_device_id(self) -> Optional[str]:
+        """Get the currently displayed device ID."""
+        return self._last_device_id
 
     def _setup(self) -> None:
         if not self._container:
@@ -62,7 +148,9 @@ class RightPanelView:
         # Header row
         header_layout = QHBoxLayout()
         self._title = QLabel("SELECT DEVICE")
+        self._title.setObjectName("panel_title")
         self._status_badge = QLabel("N/A")
+        self._status_badge.setObjectName("status_badge")
         self._status_badge.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(self._title)
         header_layout.addStretch()
@@ -71,11 +159,13 @@ class RightPanelView:
 
         # Description
         self._desc = QLabel("")
+        self._desc.setObjectName("device_description")
         self._desc.setWordWrap(True)
         self._layout.addWidget(self._desc)
 
         # Last update
         self._last_update = QLabel("Last Update: --")
+        self._last_update.setObjectName("last_update")
         self._layout.addWidget(self._last_update)
 
         # Material info frame
@@ -202,45 +292,60 @@ class RightPanelView:
         self._outputs.setStyleSheet(f"color: {text_primary};")
         self._cycle.setStyleSheet(f"color: {text_primary};")
 
-    def render(self, state: Dict[str, Any]) -> None:
-        """Render panel based on state."""
-        is_expanded = select_right_panel_expanded(state)
-        theme = select_theme(state)
+    def _render_device_from_model(self, device) -> None:
+        """Render device from DeviceDisplayModel."""
+        if hasattr(device, "device_id"):
+            # DeviceDisplayModel
+            self._title.setText(str(device.display_name))
+            self._desc.setText(str(device.description) if device.description else "")
+            self._desc.setVisible(bool(device.description))
 
-        if theme != self._current_theme:
-            self._current_theme = theme
-            self._apply_theme_styles()
+            if device.last_update:
+                clean_time = str(device.last_update).replace("T", " ").split(".")[0]
+                self._last_update.setText(f"🕒 {clean_time}")
+            else:
+                self._last_update.setText("🕒 --")
 
-        width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if is_expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
-        self._container.setFixedWidth(width)
+            self._status_badge.setText(str(device.status_name).upper())
+            self._status_badge.setStyleSheet(
+                f"background-color: {device.status_color}; color: white; font-weight: 600; "
+                f"padding: 4px 12px; border-radius: 10px; font-size: 10px;"
+            )
 
-        if not is_expanded:
-            return
+            self._batch.setText(f"📦 {device.material_batch}")
+            self._fed_time.setText(f"⏰ Fed: {device.feeding_time}")
 
-        # Get selected device ID
-        device_id = select_selected_device_id(state)
+            oee_val = float(device.oee) if device.oee else 0
+            self._lbl_oee.setText(f"OEE: {oee_val:.1f}%")
+            self._bar_oee.setValue(int(min(oee_val, 100)))
+            bar_color = "#10B981" if oee_val > 85 else ("#F59E0B" if oee_val > 60 else "#EF4444")
+            bar_bg = "#334155" if self._current_theme == "dark" else "#E2E8F0"
+            self._bar_oee.setStyleSheet(
+                f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }} "
+                f"QProgressBar::chunk {{ background-color: {bar_color}; border-radius: 4px; }}"
+            )
 
-        if not device_id:
-            self._show_no_selection()
-            self._last_device_id = None
-            return
+            yield_val = float(device.yield_rate) if device.yield_rate else 0
+            self._lbl_yield.setText(f"Yield: {yield_val:.1f}%")
+            self._bar_yield.setValue(int(min(yield_val, 100)))
+            self._bar_yield.setStyleSheet(
+                f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }} "
+                f"QProgressBar::chunk {{ background-color: #3B82F6; border-radius: 4px; }}"
+            )
 
-        # Get device data from devices dict
-        devices = select_devices(state)
-        device = devices.get(device_id)
+            self._inputs.setText(f"📥 Inputs: {device.input_count:,}")
+            self._outputs.setText(f"📦 Outputs: {device.output_count:,}")
+            self._cycle.setText(f"⏱️ Cycle: {device.cycle_time}s")
 
-        if not device:
-            logger.debug(f"[RightPanel] Device {device_id} not found in state " f"(available: {list(devices.keys())[:5]}...)")
-            # Show device ID but with no data
-            self._show_loading_device(device_id)
-            return
-
-        # Only re-render if device or data changed
-        if device_id != self._last_device_id or device != self._last_render_data:
-            logger.debug(f"[RightPanel] Rendering device: {device_id}")
-            self._render_device_info(device, device_id)
-            self._last_device_id = device_id
-            self._last_render_data = device
+            if device.last_error:
+                self._error.setText(f"⚠️ {device.last_error}")
+                self._error.setStyleSheet("color: #EF4444; font-weight: 600;")
+            else:
+                self._error.setText("✅ Healthy")
+                self._error.setStyleSheet("color: #10B981;")
+        else:
+            # Fallback for dict
+            self._render_device_info(device, device.get("device_id", "Unknown"))
 
     def _show_no_selection(self) -> None:
         """Show no device selected state."""
@@ -283,7 +388,7 @@ class RightPanelView:
         self._error.setStyleSheet("color: #64748B;")
 
     def _render_device_info(self, device: Any, device_id: str) -> None:
-        """Render device information section."""
+        """Render device information from dict (legacy support)."""
 
         def get_val(key: str, default: Any = None) -> Any:
             if isinstance(device, dict):
@@ -350,6 +455,45 @@ class RightPanelView:
         else:
             self._error.setText("✅ Healthy")
             self._error.setStyleSheet("color: #10B981;")
+
+    def render(self, state: Dict[str, Any]) -> None:
+        """
+        Render panel based on state.
+
+        Legacy compatibility - primary updates come via ViewModel signals.
+        """
+        is_expanded = select_right_panel_expanded(state)
+        theme = select_theme(state)
+
+        if theme != self._current_theme:
+            self._current_theme = theme
+            self._apply_theme_styles()
+
+        width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if is_expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
+        self._container.setFixedWidth(width)
+        self._is_panel_open = is_expanded
+
+        if not is_expanded:
+            return
+
+        device_id = select_selected_device_id(state)
+
+        if not device_id:
+            self._show_no_selection()
+            self._last_device_id = None
+            return
+
+        devices = select_devices(state)
+        device = devices.get(device_id)
+
+        if not device:
+            self._show_loading_device(device_id)
+            return
+
+        if device_id != self._last_device_id or device != self._last_render_data:
+            self._render_device_info(device, device_id)
+            self._last_device_id = device_id
+            self._last_render_data = device
 
 
 __all__ = ["RightPanelView"]

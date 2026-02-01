@@ -1,6 +1,11 @@
 """
-Main Window - Optimized for Remote-First Architecture.
-Default page: Dashboard
+Main Window - MVVM Architecture.
+
+The View is a passive consumer that:
+- Binds to ViewModel signals
+- Delegates all user interactions to ViewModels
+- Contains no business logic
+- Handles click-outside detection for panels using overlay
 """
 
 from __future__ import annotations
@@ -10,9 +15,9 @@ import sys
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from PySide6.QtCore import QEvent, QRect, QTimer, Slot
-from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QRect, QTimer, Slot, QPoint, Qt, Signal
+from PySide6.QtGui import QKeySequence, QShortcut, QMouseEvent, QPainter, QColor
+from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QGraphicsView, QFrame
 
 import iFactory.presentation.resources.resources_rc as resources_rc
 
@@ -25,7 +30,6 @@ from ..state.selectors import (
     select_current_page,
     select_devices,
     select_factory_summary,
-    select_gantt_data,
     select_right_panel_expanded,
     select_selected_device_id,
     select_sidebar_expanded,
@@ -41,37 +45,123 @@ from .widgets.device_gantt_widget import DeviceGanttDisplayWidget
 from .widgets.legend_widget import LegendWidget
 
 if TYPE_CHECKING:
-    from ..controllers.gantt_controller import GanttController
-    from ..controllers.shell_controller import ShellController
     from ..services.page_device_manager import PageDeviceManager
     from ..state.store import Store
+    from ..viewmodels import (
+        DeviceListViewModel,
+        GanttChartViewModel,
+        ShellViewModel,
+        GanttChartModel,
+        DeviceSelectionModel,
+    )
 
 logger = logging.getLogger(__name__)
 
 
+class ClickOutsideOverlay(QWidget):
+    """
+    Transparent overlay widget that captures clicks outside the right panel.
+    When clicked, it signals to close the panel.
+    """
+
+    clicked_outside = Signal()
+
+    def __init__(self, parent: QWidget = None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setStyleSheet("background: transparent;")
+        self.hide()
+        self._excluded_widgets: List[QWidget] = []
+
+    def set_excluded_widgets(self, widgets: List[QWidget]) -> None:
+        """Set widgets that should not trigger close when clicked."""
+        self._excluded_widgets = widgets
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Handle mouse press - check if click should close panel."""
+        global_pos = event.globalPosition().toPoint()
+
+        # Check if click is on excluded widgets
+        for widget in self._excluded_widgets:
+            if widget and widget.isVisible():
+                widget_rect = self._get_widget_global_rect(widget)
+                if widget_rect.contains(global_pos):
+                    # Click on excluded widget - don't close, pass event through
+                    event.ignore()
+                    return
+
+        # Click on overlay (outside excluded widgets) - close panel
+        logger.info("[Overlay] Click outside detected - emitting signal")
+        self.clicked_outside.emit()
+        event.accept()
+
+    def _get_widget_global_rect(self, widget: QWidget) -> QRect:
+        """Get global rect of a widget."""
+        if not widget or not widget.isVisible():
+            return QRect()
+        try:
+            top_left = widget.mapToGlobal(QPoint(0, 0))
+            return QRect(top_left, widget.size())
+        except Exception:
+            return QRect()
+
+    def show_overlay(self) -> None:
+        """Show the overlay."""
+        if self.parent():
+            # Resize to cover the entire parent
+            self.setGeometry(self.parent().rect())
+            self.raise_()  # Bring to front but below excluded widgets
+        self.show()
+        logger.debug("[Overlay] Shown")
+
+    def hide_overlay(self) -> None:
+        """Hide the overlay."""
+        self.hide()
+        logger.debug("[Overlay] Hidden")
+
+
 class MainWindow(QMainWindow):
+    """
+    Main application window - PASSIVE VIEW.
+
+    Binds to ViewModel signals for state updates.
+    Delegates user actions to ViewModels.
+    Contains no business logic.
+    Uses overlay for click-outside detection.
+    """
+
     def __init__(
         self,
         store: "Store",
-        shell_controller: "ShellController",
+        shell_vm: "ShellViewModel",
+        device_vm: "DeviceListViewModel",
+        gantt_vm: "GanttChartViewModel",
         page_manager: Optional["PageDeviceManager"] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
+
         self._store = store
-        self._controller = shell_controller
+        self._shell_vm = shell_vm
+        self._device_vm = device_vm
+        self._gantt_vm = gantt_vm
         self._page_manager = page_manager
         self._theme_manager = get_theme_manager()
-        self._gantt_controller: Optional["GanttController"] = None
 
         self._prev_state: Dict[str, Any] = {}
         self._components_ready = False
-        self._selected_device_id: Optional[str] = None
-        self._current_gantt_segments: List[Dict[str, Any]] = []
+
+        # Click handling flags
+        self._device_click_in_progress = False
 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.setWindowTitle("iFactory Production Monitor")
+
+        # Create click-outside overlay
+        self._overlay = ClickOutsideOverlay(self.ui.centralwidget)
+        self._overlay.clicked_outside.connect(self._on_overlay_clicked)
 
         self._apply_initial_layout()
         self._init_shell()
@@ -79,113 +169,254 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(Timing.DEFERRED_LOAD_DELAY_MS, self._init_workspace)
 
         self._setup_shortcuts()
+        self._bind_viewmodels()
         self._apply_theme("light")
 
         self._store.state_changed.connect(self._on_state_changed)
-        self._store.devices_updated.connect(self._on_devices_updated)
 
-        QApplication.instance().installEventFilter(self)
+        logger.info("[MainWindow] Initialized with MVVM")
 
-        logger.info("[MainWindow] Initialized")
+    # =========================================================================
+    # Overlay Click Handler
+    # =========================================================================
 
-    def set_gantt_controller(self, controller: "GanttController") -> None:
-        self._gantt_controller = controller
-        controller.device_gantt_ready.connect(self._on_gantt_data_ready)
-        controller.loading_started.connect(self._on_gantt_loading_started)
-        controller.loading_finished.connect(self._on_gantt_loading_finished)
-        controller.fetch_error.connect(self._on_gantt_fetch_error)
-        logger.info("[MainWindow] Gantt controller connected")
+    def _on_overlay_clicked(self) -> None:
+        """Handle click on overlay - close right panel."""
+        logger.info("[MainWindow] Overlay clicked - closing right panel")
+        self._shell_vm.close_right_panel()
+        self._device_vm.deselect_device()
+        self._overlay.hide_overlay()
+
+    def _update_overlay_state(self) -> None:
+        """Update overlay visibility based on right panel state."""
+        if self._shell_vm.right_panel_expanded:
+            # Set excluded widgets (right panel and device canvases)
+            excluded = [self.ui.right_slide_menu_frame]
+            if hasattr(self, "canvas_dashboard"):
+                excluded.append(self.canvas_dashboard)
+            if hasattr(self, "canvas_orders"):
+                excluded.append(self.canvas_orders)
+
+            self._overlay.set_excluded_widgets(excluded)
+            self._overlay.show_overlay()
+
+            # Make sure right panel is above overlay
+            self.ui.right_slide_menu_frame.raise_()
+        else:
+            self._overlay.hide_overlay()
+
+    # =========================================================================
+    # ViewModel Bindings
+    # =========================================================================
+
+    def _bind_viewmodels(self) -> None:
+        """Bind to ViewModel signals."""
+        self._device_vm.devicesChanged.connect(self._on_devices_updated)
+        self._device_vm.selectionChanged.connect(self._on_selection_changed)
+        self._device_vm.stateChanged.connect(self._on_device_state_changed)
+
+        self._gantt_vm.chartReady.connect(self._on_chart_ready)
+        self._gantt_vm.loadingStateChanged.connect(self._on_gantt_loading_changed)
+
+        self._shell_vm.themeChanged.connect(self._on_theme_changed)
+        self._shell_vm.pageChanged.connect(self._on_page_changed)
+        self._shell_vm.sidebarChanged.connect(self._on_sidebar_changed)
+        self._shell_vm.rightPanelChanged.connect(self._on_right_panel_changed)
+
+    # =========================================================================
+    # Device ViewModel Handlers
+    # =========================================================================
 
     @Slot(dict)
     def _on_devices_updated(self, devices: Dict[str, Any]) -> None:
-        """Handle device updates - render immediately."""
         if not self._components_ready:
             return
 
-        logger.info(f"[MainWindow] Devices updated: {len(devices)} devices")
+        logger.debug(f"[MainWindow] Devices updated: {len(devices)} devices")
 
         is_dark = self._theme_manager.is_dark
-        self.canvas_dashboard.render_state(devices, is_dark)
-        self.canvas_orders.render_state(devices, is_dark)
 
-    @Slot(str, list)
-    def _on_gantt_data_ready(
-        self,
-        device_code: str,
-        segments: List[Dict[str, Any]],
-    ) -> None:
-        """Handle gantt data ready - update gantt widget and legend."""
+        # Convert DeviceDisplayModel to dict if needed
+        devices_dict = {}
+        for code, device in devices.items():
+            if hasattr(device, "to_dict"):
+                devices_dict[code] = device.to_dict()
+            else:
+                devices_dict[code] = device
+
+        self.canvas_dashboard.render_state(devices_dict, is_dark)
+        self.canvas_orders.render_state(devices_dict, is_dark)
+
+    @Slot(object)
+    def _on_selection_changed(self, selection: "DeviceSelectionModel") -> None:
         if not self._components_ready:
             return
 
-        if device_code != self._selected_device_id:
+        if selection.has_selection:
+            self._gantt_vm.load_device_chart(
+                device_code=selection.selected_device_id,
+                device_name=self._get_device_name(selection.selected_device_id),
+            )
+        else:
+            self._gantt_vm.clear_chart()
+            self.device_gantt_dashboard.show_placeholder()
+            self.device_gantt_orders.show_placeholder()
+            self.legend_dashboard.clear_stats()
+            self.legend_orders.clear_stats()
+
+    @Slot(object)
+    def _on_device_state_changed(self, state) -> None:
+        pass
+
+    def _get_device_name(self, device_id: str) -> str:
+        devices = self._device_vm.devices
+        device = devices.get(device_id)
+        if device:
+            return device.display_name if hasattr(device, "display_name") else str(device)
+        return device_id
+
+    # =========================================================================
+    # Gantt ViewModel Handlers
+    # =========================================================================
+
+    @Slot(object)
+    def _on_chart_ready(self, chart: "GanttChartModel") -> None:
+        if not self._components_ready:
             return
 
-        logger.info(f"[MainWindow] Gantt data ready: {device_code}, {len(segments)} segments")
+        logger.info(f"[MainWindow] Chart ready: {chart.device_code}")
 
-        self._current_gantt_segments = segments
+        segments = [
+            {
+                "start_time": seg.start_time,
+                "end_time": seg.end_time,
+                "status_code": seg.status_code,
+                "status_name": seg.status_name,
+                "duration_seconds": seg.duration_seconds,
+            }
+            for seg in chart.segments
+        ]
 
-        state = self._store.get_state()
-        devices = select_devices(state)
-        device_info = devices.get(device_code, {})
-
-        if isinstance(device_info, dict):
-            device_name = device_info.get("display_name") or device_info.get("equip_name") or device_code
-        else:
-            device_name = getattr(device_info, "display_name", None) or getattr(device_info, "equip_name", None) or device_code
-
-        now = datetime.now()
-        start = now - timedelta(hours=24)
-
-        # Update gantt widgets
         self.device_gantt_dashboard.render_device_gantt(
-            device_code=device_code,
-            device_name=device_name,
+            device_code=chart.device_code,
+            device_name=chart.device_name,
             segments=segments,
-            start_time=start,
-            end_time=now,
+            start_time=chart.start_time,
+            end_time=chart.end_time,
         )
         self.device_gantt_orders.render_device_gantt(
-            device_code=device_code,
-            device_name=device_name,
+            device_code=chart.device_code,
+            device_name=chart.device_name,
             segments=segments,
-            start_time=start,
-            end_time=now,
+            start_time=chart.start_time,
+            end_time=chart.end_time,
         )
 
-        # Update legend
-        self._update_legend_with_segments(device_code, segments, start, now)
+        gantt_data = {chart.device_code: segments}
+        self.legend_dashboard.render_stats(gantt_data, chart.start_time, chart.end_time)
+        self.legend_orders.render_stats(gantt_data, chart.start_time, chart.end_time)
 
-    def _update_legend_with_segments(
-        self,
-        device_code: str,
-        segments: List[Dict[str, Any]],
-        start_time: datetime,
-        end_time: datetime,
-    ) -> None:
-        gantt_data = {device_code: segments}
-        self.legend_dashboard.render_stats(gantt_data, start_time, end_time)
-        self.legend_orders.render_stats(gantt_data, start_time, end_time)
+    @Slot(object)
+    def _on_gantt_loading_changed(self, state) -> None:
+        if state.is_loading and self._components_ready:
+            now = datetime.now()
+            start = now - timedelta(hours=24)
+
+            self.device_gantt_dashboard.render_device_gantt(
+                device_code=state.device_code,
+                device_name=f"{state.device_code} (Loading...)",
+                segments=[],
+                start_time=start,
+                end_time=now,
+            )
+            self.device_gantt_orders.render_device_gantt(
+                device_code=state.device_code,
+                device_name=f"{state.device_code} (Loading...)",
+                segments=[],
+                start_time=start,
+                end_time=now,
+            )
+
+    # =========================================================================
+    # Shell ViewModel Handlers
+    # =========================================================================
 
     @Slot(str)
-    def _on_gantt_loading_started(self, device_code: str) -> None:
-        pass
+    def _on_theme_changed(self, theme: str) -> None:
+        self._apply_theme(theme)
 
     @Slot(str)
-    def _on_gantt_loading_finished(self, device_code: str) -> None:
-        pass
+    def _on_page_changed(self, page: str) -> None:
+        self._switch_page(page)
 
-    @Slot(str, str)
-    def _on_gantt_fetch_error(self, device_code: str, error: str) -> None:
-        logger.error(f"[MainWindow] Gantt fetch error for {device_code}: {error}")
+    @Slot(bool)
+    def _on_sidebar_changed(self, expanded: bool) -> None:
+        width = Layout.SIDEBAR_EXPANDED_WIDTH if expanded else Layout.SIDEBAR_COLLAPSED_WIDTH
+        self.ui.left_slide_menu_frame.setFixedWidth(width)
+        self.ui.title_frame.setFixedWidth(width)
+
+    @Slot(bool)
+    def _on_right_panel_changed(self, expanded: bool) -> None:
+        width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
+        self.ui.right_slide_menu_frame.setFixedWidth(width)
+
+        # Update overlay state
+        self._update_overlay_state()
+
+        logger.debug(f"[MainWindow] Right panel changed: expanded={expanded}, width={width}")
+
+    # =========================================================================
+    # Canvas Event Handlers (User Interactions -> ViewModel)
+    # =========================================================================
+
+    def _on_device_single_clicked(self, device_id: str) -> None:
+        """Handle single click on device - select device, update panel content."""
+        logger.debug(f"[MainWindow] Device single clicked: {device_id}")
+
+        self._device_click_in_progress = True
+
+        # Select device - this will update panel content if different device
+        self._device_vm.select_device(device_id, open_panel=False)
+
+        # Reset flag
+        QTimer.singleShot(100, lambda: setattr(self, "_device_click_in_progress", False))
+
+    def _on_device_double_clicked(self, device_id: str) -> None:
+        """Handle double click on device - select device and toggle panel."""
+        logger.debug(f"[MainWindow] Device double clicked: {device_id}")
+
+        self._device_click_in_progress = True
+
+        # Double click opens/toggles panel
+        self._device_vm.select_device(device_id, open_panel=True)
+
+        # Reset flag
+        QTimer.singleShot(100, lambda: setattr(self, "_device_click_in_progress", False))
+
+    # =========================================================================
+    # Keyboard Shortcuts
+    # =========================================================================
+
+    def _setup_shortcuts(self) -> None:
+        QShortcut(QKeySequence("Ctrl+T"), self).activated.connect(self._shell_vm.toggle_theme)
+        QShortcut(QKeySequence("Ctrl+M"), self).activated.connect(self._shell_vm.toggle_sidebar)
+        QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(self._shell_vm.toggle_right_panel)
+        QShortcut(QKeySequence("Escape"), self).activated.connect(self._on_escape_pressed)
+
+    def _on_escape_pressed(self) -> None:
+        if self._shell_vm.right_panel_expanded:
+            self._shell_vm.close_right_panel()
+        self._device_vm.deselect_device()
+
+    # =========================================================================
+    # UI Setup
+    # =========================================================================
 
     def _apply_initial_layout(self) -> None:
-        """Set initial layout - Dashboard as default page."""
         self.ui.right_slide_menu_frame.setFixedWidth(Layout.RIGHT_PANEL_COLLAPSED_WIDTH)
         self.ui.left_slide_menu_frame.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
         self.ui.title_frame.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
 
-        # Default to dashboard page
         if hasattr(self.ui, "dashboard_page"):
             self.ui.stackedWidget.setCurrentWidget(self.ui.dashboard_page)
         elif hasattr(self.ui, "daboard_page"):
@@ -202,20 +433,21 @@ class MainWindow(QMainWindow):
                 getattr(self.ui, "restore_window_button", None),
                 getattr(self.ui, "close_window_button", None),
             ),
-            controller=self._controller,
+            shell_vm=self._shell_vm,
         )
 
         self.sidebar = SidebarView(
             container=self.ui.left_slide_menu_frame,
             nav_list=self.ui.listWidget,
             settings_list=self.ui.listWidget_settings,
-            controller=self._controller,
+            shell_vm=self._shell_vm,
         )
 
         self.right_panel = RightPanelView(
             container=self.ui.right_slide_menu_frame,
             store=self._store,
-            controller=self._controller,
+            device_vm=self._device_vm,
+            shell_vm=self._shell_vm,
         )
 
         self.status_bar = StatusBarView(self.ui.statusbar)
@@ -224,8 +456,8 @@ class MainWindow(QMainWindow):
         logger.info("[MainWindow] Initializing workspace...")
 
         try:
-            dash_config = self._controller.get_layout_config("daboard_midle_frame_1")
-            orders_config = self._controller.get_layout_config("orders_midle_frame_1")
+            dash_config = self._shell_vm.get_layout_config("daboard_midle_frame_1")
+            orders_config = self._shell_vm.get_layout_config("orders_midle_frame_1")
 
             self.canvas_dashboard = self._embed(
                 self.ui.daboard_midle_frame_1,
@@ -253,7 +485,7 @@ class MainWindow(QMainWindow):
                 LegendWidget(self),
             )
 
-            # Connect signals: single click -> gantt, double click -> right panel
+            # Connect device click signals
             self.canvas_dashboard.device_clicked.connect(self._on_device_single_clicked)
             self.canvas_orders.device_clicked.connect(self._on_device_single_clicked)
 
@@ -265,8 +497,21 @@ class MainWindow(QMainWindow):
 
             self._components_ready = True
 
-            state = self._store.get_state()
-            self._on_state_changed(state)
+            # Update overlay excluded widgets now that canvases exist
+            self._overlay.set_excluded_widgets(
+                [
+                    self.ui.right_slide_menu_frame,
+                    self.canvas_dashboard,
+                    self.canvas_orders,
+                ]
+            )
+
+            devices = self._device_vm.devices
+            if devices:
+                is_dark = self._theme_manager.is_dark
+                devices_dict = {k: v.to_dict() if hasattr(v, "to_dict") else v for k, v in devices.items()}
+                self.canvas_dashboard.render_state(devices_dict, is_dark)
+                self.canvas_orders.render_state(devices_dict, is_dark)
 
             self.device_gantt_dashboard.show_placeholder()
             self.device_gantt_orders.show_placeholder()
@@ -274,10 +519,7 @@ class MainWindow(QMainWindow):
             logger.info("[MainWindow] Workspace initialized")
 
         except Exception as e:
-            logger.error(
-                f"[MainWindow] Workspace initialization failed: {e}",
-                exc_info=True,
-            )
+            logger.error(f"[MainWindow] Workspace init failed: {e}", exc_info=True)
 
     def _embed(self, parent: QWidget, widget: QWidget) -> QWidget:
         layout = parent.layout()
@@ -287,28 +529,6 @@ class MainWindow(QMainWindow):
             layout.setSpacing(0)
         layout.addWidget(widget)
         return widget
-
-    def _setup_shortcuts(self) -> None:
-        QShortcut(QKeySequence("Ctrl+T"), self).activated.connect(self._controller.toggle_theme)
-        QShortcut(QKeySequence("Ctrl+M"), self).activated.connect(self._controller.toggle_sidebar_menu)
-        QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(self._controller.toggle_details_panel)
-        QShortcut(QKeySequence("Escape"), self).activated.connect(self._on_escape_pressed)
-
-    def _on_escape_pressed(self) -> None:
-        state = self._store.get_state()
-
-        if select_right_panel_expanded(state):
-            self._controller.toggle_details_panel()
-
-        self._controller.deselect_device()
-        self._selected_device_id = None
-        self._current_gantt_segments = []
-
-        if self._components_ready:
-            self.device_gantt_dashboard.show_placeholder()
-            self.device_gantt_orders.show_placeholder()
-            self.legend_dashboard.clear_stats()
-            self.legend_orders.clear_stats()
 
     def _apply_theme(self, theme: str) -> None:
         self._theme_manager.set_theme(theme)
@@ -368,113 +588,6 @@ class MainWindow(QMainWindow):
                 """
                 )
 
-    def _on_device_single_clicked(self, device_id: str) -> None:
-        """Handle single click - show gantt and legend, don't open panel."""
-        logger.info(f"[MainWindow] Device single clicked: {device_id}")
-
-        if device_id == self._selected_device_id:
-            # Already selected - check cache
-            if self._gantt_controller:
-                cached = self._gantt_controller.get_cached_segments(device_id)
-                if cached:
-                    self._on_gantt_data_ready(device_id, cached)
-                    return
-
-        self._selected_device_id = device_id
-
-        if self._components_ready:
-            self._show_loading_gantt(device_id, self._store.get_state())
-
-        # Select device without opening panel
-        self._controller.select_device_without_panel(device_id)
-
-    def _on_device_double_clicked(self, device_id: str) -> None:
-        """Handle double click - show right panel."""
-        logger.info(f"[MainWindow] Device double clicked: {device_id}")
-
-        state = self._store.get_state()
-        is_panel_open = select_right_panel_expanded(state)
-
-        if device_id != self._selected_device_id:
-            self._selected_device_id = device_id
-            self._controller.select_device_without_panel(device_id)
-
-            if self._components_ready:
-                self._show_loading_gantt(device_id, self._store.get_state())
-
-        # Open panel if not already open
-        if not is_panel_open:
-            self._controller.toggle_details_panel()
-
-    def _show_loading_gantt(self, device_id: str, state: Dict[str, Any]) -> None:
-        devices = select_devices(state)
-        device_info = devices.get(device_id, {})
-
-        if isinstance(device_info, dict):
-            device_name = device_info.get("display_name") or device_info.get("equip_name") or device_id
-        else:
-            device_name = getattr(device_info, "display_name", None) or getattr(device_info, "equip_name", None) or device_id
-
-        now = datetime.now()
-        start = now - timedelta(hours=24)
-
-        self.device_gantt_dashboard.render_device_gantt(
-            device_code=device_id,
-            device_name=f"{device_name} (Loading...)",
-            segments=[],
-            start_time=start,
-            end_time=now,
-        )
-        self.device_gantt_orders.render_device_gantt(
-            device_code=device_id,
-            device_name=f"{device_name} (Loading...)",
-            segments=[],
-            start_time=start,
-            end_time=now,
-        )
-
-    def _on_state_changed(self, state: Dict[str, Any]) -> None:
-        theme = select_theme(state)
-        if theme != self._prev_state.get("theme"):
-            self._apply_theme(theme)
-
-        self.sidebar.render(state)
-        self.header.render(state)
-        self.right_panel.render(state)
-        self.status_bar.render(state)
-
-        page = select_current_page(state)
-        if page != self._prev_state.get("current_page"):
-            self._switch_page(page)
-
-        if not self._components_ready:
-            self._prev_state = state.copy()
-            return
-
-        devices = select_devices(state)
-        devices_changed = devices != self._prev_state.get("devices")
-        theme_changed = theme != self._prev_state.get("theme")
-
-        if devices_changed or theme_changed:
-            is_dark = self._theme_manager.is_dark
-            self.canvas_dashboard.render_state(devices, is_dark)
-            self.canvas_orders.render_state(devices, is_dark)
-
-        selected_device_id = select_selected_device_id(state)
-        prev_selected = self._prev_state.get("selected_device_id")
-
-        if selected_device_id != prev_selected:
-            if not selected_device_id and prev_selected:
-                self._selected_device_id = None
-                self._current_gantt_segments = []
-                self.device_gantt_dashboard.show_placeholder()
-                self.device_gantt_orders.show_placeholder()
-                self.legend_dashboard.clear_stats()
-                self.legend_orders.clear_stats()
-
-        self._update_lcd_displays(state)
-        self._prev_state = state.copy()
-
     def _switch_page(self, page: str) -> None:
         page_name = page.replace("dashboard", "daboard") if "dashboard" in page else page
         target = getattr(self.ui, page_name, None)
@@ -488,48 +601,28 @@ class MainWindow(QMainWindow):
         if hasattr(self.ui, "lcdNumber_15"):
             self.ui.lcdNumber_15.display(summary.get("yield_rate", 0))
 
-    def eventFilter(self, obj, event) -> bool:
-        if event.type() == QEvent.MouseButtonPress:
-            self._handle_click_outside(event.globalPosition().toPoint())
-        return super().eventFilter(obj, event)
+    def _on_state_changed(self, state: Dict[str, Any]) -> None:
+        """Handle store state changes (for shell components)."""
+        self.sidebar.render(state)
+        self.header.render(state)
+        self.right_panel.render(state)
+        self.status_bar.render(state)
+        self._update_lcd_displays(state)
+        self._prev_state = state.copy()
 
-    def _handle_click_outside(self, pos) -> None:
-        """Handle clicks outside panels."""
-        state = self._store.get_state()
+    # =========================================================================
+    # Window Events
+    # =========================================================================
 
-        # Handle sidebar
-        if select_sidebar_expanded(state):
-            if not self._is_inside(pos, self.ui.left_slide_menu_frame):
-                if not self._is_inside(pos, self.ui.title_frame):
-                    self._controller.toggle_sidebar_menu()
+    def resizeEvent(self, event) -> None:
+        """Handle window resize - update overlay size."""
+        super().resizeEvent(event)
+        if hasattr(self, "_overlay") and self._overlay.isVisible():
+            self._overlay.setGeometry(self.ui.centralwidget.rect())
 
-        # Handle right panel
-        if select_right_panel_expanded(state):
-            if self._is_inside(pos, self.ui.right_slide_menu_frame):
-                return
-
-            widget = QApplication.widgetAt(pos)
-
-            if widget:
-                widget_class = type(widget).__name__
-                if "QGraphicsView" in widget_class:
-                    return
-
-                parent = widget
-                while parent:
-                    if isinstance(parent, DeviceCanvasWidget):
-                        break
-                    parent = parent.parent() if hasattr(parent, "parent") else None
-
-            self._controller.toggle_details_panel()
-            self._controller.deselect_device()
-            self._selected_device_id = None
-
-    def _is_inside(self, pos, widget) -> bool:
-        if not widget or not widget.isVisible():
-            return False
-        rect = QRect(widget.mapToGlobal(widget.rect().topLeft()), widget.size())
-        return rect.contains(pos)
+    def closeEvent(self, event) -> None:
+        """Handle window close."""
+        super().closeEvent(event)
 
 
 __all__ = ["MainWindow"]

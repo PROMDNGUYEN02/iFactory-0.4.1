@@ -1,20 +1,37 @@
+"""
+Header View - MVVM Architecture.
+
+Binds to ShellViewModel for theme and sidebar state.
+Passive view that delegates all interactions to ViewModel.
+"""
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, Tuple
+import logging
+import os
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QIcon, QFont, QPixmap
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton
-
-from ...constants.layout import Layout
-from ...resources.themes import get_theme_manager
-from ...state.selectors import select_sidebar_expanded, select_theme
+from PySide6.QtCore import Qt, Slot, QSize
+from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton
 
 if TYPE_CHECKING:
-    from ...controllers.shell_controller import ShellController
+    from ...viewmodels import ShellViewModel
+
+logger = logging.getLogger(__name__)
 
 
 class HeaderView:
+    """
+    Header view component.
+
+    Passive view that:
+    - Binds to ShellViewModel signals
+    - Delegates user actions to ViewModel
+    - Renders based on state
+    - Displays logo and application title
+    """
+
     def __init__(
         self,
         container: QFrame,
@@ -22,168 +39,265 @@ class HeaderView:
         title_label: Optional[QLabel],
         title_icon: Optional[QLabel],
         window_buttons: Tuple[Optional[QPushButton], ...],
-        controller: "ShellController",
+        shell_vm: "ShellViewModel",
     ):
         self._container = container
-        self._ui_toggle_btn = toggle_btn
-        self._ui_title_label = title_label
-        self._ui_title_icon = title_icon
-        self._window_buttons = window_buttons
-        self._controller = controller
-        self._theme_manager = get_theme_manager()
-        self._current_theme = "light"
-        self._is_expanded = False
+        self._toggle_btn = toggle_btn
+        self._title_label = title_label
+        self._title_icon = title_icon
+        self._shell_vm = shell_vm
 
-        self._setup_header()
+        # Unpack window buttons safely
+        self._minimize_btn = window_buttons[0] if len(window_buttons) > 0 else None
+        self._restore_btn = window_buttons[1] if len(window_buttons) > 1 else None
+        self._close_btn = window_buttons[2] if len(window_buttons) > 2 else None
 
-    def _setup_header(self) -> None:
-        if not self._container:
-            return
+        # Initialize with current ViewModel state
+        self._current_theme = shell_vm.theme
+        self._current_expanded = shell_vm.sidebar_expanded
 
-        self._container.setFixedHeight(Layout.HEADER_HEIGHT)
-        self._container.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
+        # Setup logo and title first
+        self._setup_logo_and_title()
 
-        if self._ui_title_icon:
-            self._ui_title_icon.setText("")
-            icon_height = Layout.HEADER_HEIGHT - 12
-            self._ui_title_icon.setFixedHeight(icon_height)
-            self._ui_title_icon.setMinimumWidth(icon_height)
-            self._ui_title_icon.setMaximumWidth(int(icon_height * 2.5))
-            self._ui_title_icon.setScaledContents(False)
-            self._ui_title_icon.setAlignment(Qt.AlignCenter)
+        self._setup_connections()
+        self._bind_viewmodel()
 
-            original_pixmap = QPixmap(":/icon/logo.png")
-            if not original_pixmap.isNull():
-                scaled_pixmap = original_pixmap.scaledToHeight(icon_height, Qt.SmoothTransformation)
-                self._ui_title_icon.setPixmap(scaled_pixmap)
-                self._ui_title_icon.setFixedWidth(scaled_pixmap.width())
-
-            self._ui_title_icon.setStyleSheet("background: transparent;")
-            self._ui_title_icon.setVisible(False)
-
-        if self._ui_title_label:
-            self._ui_title_label.setText("iFactory")
-            self._ui_title_label.setFont(QFont("Segoe UI", 13, QFont.DemiBold))
-            self._ui_title_label.setStyleSheet("background: transparent; padding-left: 8px;")
-            self._ui_title_label.setVisible(False)
-
-        if self._ui_toggle_btn:
-            self._ui_toggle_btn.setText("")
-            self._ui_toggle_btn.setFixedSize(36, 36)
-            self._ui_toggle_btn.setCursor(Qt.PointingHandCursor)
-            self._ui_toggle_btn.setToolTip("Toggle Menu (Ctrl+M)")
-            self._ui_toggle_btn.setIconSize(QSize(20, 20))
-            self._ui_toggle_btn.clicked.connect(self._controller.toggle_sidebar_menu)
-
-        layout = self._container.layout()
-        if layout:
-            layout.setContentsMargins(8, 4, 8, 4)
-            layout.setSpacing(4)
-            layout.setDirection(QHBoxLayout.RightToLeft)
-
-        self._apply_styles()
+        # Apply initial state
+        self._update_visibility()
         self._update_toggle_icon()
 
-    def _apply_styles(self) -> None:
+    def _setup_logo_and_title(self) -> None:
+        """Setup logo icon and application title."""
+        # Setup logo
+        if self._title_icon:
+            self._load_logo()
+
+        # Setup title text
+        if self._title_label:
+            self._title_label.setText("iFactory")
+            self._title_label.setStyleSheet(
+                """
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                    padding-left: 4px;
+                }
+            """
+            )
+
+    def _load_logo(self) -> None:
+        """Load and set the logo image."""
+        if not self._title_icon:
+            return
+
+        logo_loaded = False
+
+        # Try loading from Qt resources first
+        try:
+            pixmap = QPixmap(":/icon/logo.png")
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self._title_icon.setPixmap(scaled)
+                self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                logo_loaded = True
+                logger.debug("[HeaderView] Logo loaded from resources")
+        except Exception as e:
+            logger.debug(f"[HeaderView] Could not load logo from resources: {e}")
+
+        # Try alternative paths if resource loading failed
+        if not logo_loaded:
+            alternative_paths = [
+                "src/iFactory/presentation/resources/icon/logo.png",
+                "iFactory/presentation/resources/icon/logo.png",
+                "resources/icon/logo.png",
+                "icon/logo.png",
+            ]
+
+            for path in alternative_paths:
+                if os.path.exists(path):
+                    try:
+                        pixmap = QPixmap(path)
+                        if not pixmap.isNull():
+                            scaled = pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                            self._title_icon.setPixmap(scaled)
+                            self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                            logo_loaded = True
+                            logger.debug(f"[HeaderView] Logo loaded from path: {path}")
+                            break
+                    except Exception as e:
+                        logger.debug(f"[HeaderView] Could not load logo from {path}: {e}")
+
+        # Fallback to emoji/text if no image found
+        if not logo_loaded:
+            self._title_icon.setText("🏭")
+            self._title_icon.setStyleSheet(
+                """
+                QLabel {
+                    font-size: 20px;
+                    padding: 4px;
+                }
+            """
+            )
+            self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            logger.warning("[HeaderView] Using fallback emoji for logo")
+
+    def _setup_connections(self) -> None:
+        """Connect UI events to ViewModel methods."""
+        if self._toggle_btn:
+            self._toggle_btn.clicked.connect(self._shell_vm.toggle_sidebar)
+
+        if self._minimize_btn:
+            self._minimize_btn.clicked.connect(self._on_minimize)
+
+        if self._restore_btn:
+            self._restore_btn.clicked.connect(self._on_restore)
+
+        if self._close_btn:
+            self._close_btn.clicked.connect(self._on_close)
+
+    def _bind_viewmodel(self) -> None:
+        """Bind to ViewModel signals."""
+        self._shell_vm.themeChanged.connect(self._on_theme_changed)
+        self._shell_vm.sidebarChanged.connect(self._on_sidebar_changed)
+
+    @Slot(str)
+    def _on_theme_changed(self, theme: str) -> None:
+        """Handle theme change from ViewModel."""
+        if theme != self._current_theme:
+            self._current_theme = theme
+            self._update_toggle_icon()
+            self._update_title_style()
+
+    @Slot(bool)
+    def _on_sidebar_changed(self, expanded: bool) -> None:
+        """Handle sidebar change from ViewModel."""
+        if expanded != self._current_expanded:
+            self._current_expanded = expanded
+            self._update_visibility()
+            self._update_toggle_icon()
+
+    def _on_minimize(self) -> None:
+        """Handle minimize button click."""
+        window = self._container.window()
+        if window:
+            window.showMinimized()
+
+    def _on_restore(self) -> None:
+        """Handle restore/maximize button click."""
+        window = self._container.window()
+        if window:
+            if window.isMaximized():
+                window.showNormal()
+            else:
+                window.showMaximized()
+
+    def _on_close(self) -> None:
+        """Handle close button click."""
+        window = self._container.window()
+        if window:
+            window.close()
+
+    def _update_visibility(self) -> None:
+        """Update title label and icon visibility based on sidebar state."""
+        if self._title_label:
+            self._title_label.setVisible(self._current_expanded)
+            logger.debug(f"[HeaderView] Title label visible: {self._current_expanded}")
+
+        if self._title_icon:
+            self._title_icon.setVisible(self._current_expanded)
+            logger.debug(f"[HeaderView] Title icon visible: {self._current_expanded}")
+
+    def _update_title_style(self) -> None:
+        """Update title label style based on theme."""
+        if not self._title_label:
+            return
+
         is_dark = self._current_theme == "dark"
+        text_color = "#F1F5F9" if is_dark else "#1E293B"
 
-        if is_dark:
-            bg = "rgba(30, 41, 59, 0.98)"
-            border = "rgba(51, 65, 85, 0.8)"
-            text_color = "#F1F5F9"
-            btn_hover = "rgba(71, 85, 105, 0.6)"
-        else:
-            bg = "rgba(255, 255, 255, 0.98)"
-            border = "rgba(226, 232, 240, 0.8)"
-            text_color = "#1E293B"
-            btn_hover = "rgba(241, 245, 249, 0.8)"
-
-        self._container.setStyleSheet(
+        self._title_label.setStyleSheet(
             f"""
-            QFrame#title_frame {{
-                background-color: {bg};
-                border: none;
-                border-bottom: 1px solid {border};
+            QLabel {{
+                font-size: 14px;
+                font-weight: bold;
+                padding-left: 4px;
+                color: {text_color};
             }}
         """
         )
 
-        if self._ui_title_label:
-            self._ui_title_label.setStyleSheet(
-                f"""
-                QLabel {{
-                    color: {text_color};
-                    background: transparent;
-                    font-size: 14px;
-                    font-weight: 600;
-                    padding-left: 8px;
-                }}
-            """
-            )
-
-        if self._ui_toggle_btn:
-            self._ui_toggle_btn.setStyleSheet(
-                f"""
-                QPushButton {{
-                    background-color: transparent;
-                    border: none;
-                    border-radius: 8px;
-                    padding: 6px;
-                }}
-                QPushButton:hover {{
-                    background-color: {btn_hover};
-                }}
-                QPushButton:pressed {{
-                    background-color: rgba(128, 128, 128, 0.3);
-                }}
-            """
-            )
-
     def _update_toggle_icon(self) -> None:
-        if not self._ui_toggle_btn:
-            return
-        icon_name = "left_panel_close" if self._is_expanded else "left_panel_open"
-        icon_path = self._theme_manager.get_icon_path(f":/icon/{icon_name}.svg")
-        self._ui_toggle_btn.setIcon(QIcon(icon_path))
-
-    def _reorder_layout(self) -> None:
-        layout = self._container.layout()
-        if not layout:
+        """Update toggle button icon based on state."""
+        if not self._toggle_btn:
             return
 
-        if self._is_expanded:
-            layout.setDirection(QHBoxLayout.LeftToRight)
+        is_dark = self._current_theme == "dark"
+        suffix = "-white" if is_dark else ""
+
+        if self._current_expanded:
+            icon_name = f"arrow_menu_close{suffix}.svg"
         else:
-            layout.setDirection(QHBoxLayout.RightToLeft)
+            icon_name = f"arrow_menu_open{suffix}.svg"
 
-    def render(self, state: dict) -> None:
-        theme = select_theme(state)
-        is_expanded = select_sidebar_expanded(state)
+        # Try to set icon from resources
+        icon = QIcon(f":/icon/{icon_name}")
+        if not icon.isNull():
+            self._toggle_btn.setIcon(icon)
+            self._toggle_btn.setIconSize(QSize(20, 20))
+            self._toggle_btn.setText("")  # Clear any text
+            self._toggle_btn.setStyleSheet(
+                """
+                QPushButton {
+                    border: none;
+                    background: transparent;
+                    padding: 4px;
+                }
+                QPushButton:hover {
+                    background: rgba(128, 128, 128, 0.1);
+                    border-radius: 4px;
+                }
+            """
+            )
+        else:
+            # Fallback to text-based indicator
+            arrow_text = "◀" if self._current_expanded else "▶"
+            self._toggle_btn.setText(arrow_text)
+            self._toggle_btn.setIcon(QIcon())  # Clear icon
+            self._toggle_btn.setStyleSheet(
+                """
+                QPushButton {
+                    border: none;
+                    background: transparent;
+                    padding: 4px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background: rgba(128, 128, 128, 0.1);
+                    border-radius: 4px;
+                }
+            """
+            )
 
+    def render(self, state: Dict[str, Any]) -> None:
+        """
+        Render header based on state.
+
+        Legacy compatibility method - state comes from Redux store.
+        Primary updates now come via ViewModel signals.
+        """
+        sidebar_expanded = state.get("sidebar_expanded", False)
+        theme = state.get("theme", "light")
+
+        # Update internal state if changed
         if theme != self._current_theme:
             self._current_theme = theme
-            self._apply_styles()
+            self._update_toggle_icon()
+            self._update_title_style()
 
-        if is_expanded != self._is_expanded:
-            self._is_expanded = is_expanded
-            self._reorder_layout()
-
-        self._update_toggle_icon()
-
-        width = Layout.SIDEBAR_EXPANDED_WIDTH if is_expanded else Layout.SIDEBAR_COLLAPSED_WIDTH
-        self._container.setFixedWidth(width)
-
-        if self._ui_title_icon:
-            self._ui_title_icon.setVisible(is_expanded)
-        if self._ui_title_label:
-            self._ui_title_label.setVisible(is_expanded)
-
-        layout = self._container.layout()
-        if layout:
-            if is_expanded:
-                layout.setContentsMargins(12, 4, 8, 4)
-            else:
-                layout.setContentsMargins(8, 4, 8, 4)
+        if sidebar_expanded != self._current_expanded:
+            self._current_expanded = sidebar_expanded
+            self._update_visibility()
+            self._update_toggle_icon()
 
 
 __all__ = ["HeaderView"]

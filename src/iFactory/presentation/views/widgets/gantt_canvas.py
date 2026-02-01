@@ -1,4 +1,9 @@
-# File: presentation/views/widgets/gantt_canvas.py
+"""
+Gantt Canvas Widget - MVVM Architecture.
+
+Multi-device and single-device Gantt chart components.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -36,7 +41,14 @@ from PySide6.QtWidgets import (
 
 from ...constants.status import Status
 from ...resources.themes import get_theme_manager
-from ...viewmodels.gantt import GanttChartViewModel, GanttSegmentViewModel
+
+# Import from models (new MVVM structure)
+from ...viewmodels.models.gantt_model import (
+    GanttSegmentModel,
+    GanttChartModel,
+    GanttStatsModel,
+    STATUS_GRADIENTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +138,13 @@ class GanttCanvasWidget(QWidget):
         available_height = rect.height() - self.RULER_HEIGHT - 4
 
         if num_devices > 0 and available_height > 0:
-            bar_height = max(4, min(self.BAR_HEIGHT, (available_height - (num_devices - 1) * self.BAR_SPACING) // num_devices))
+            bar_height = max(
+                4,
+                min(
+                    self.BAR_HEIGHT,
+                    (available_height - (num_devices - 1) * self.BAR_SPACING) // num_devices,
+                ),
+            )
         else:
             bar_height = self.BAR_HEIGHT
 
@@ -276,7 +294,13 @@ class GanttCanvasWidget(QWidget):
         if num_devices <= 0 or available_height <= 0:
             return
 
-        bar_height = max(4, min(self.BAR_HEIGHT, (available_height - (num_devices - 1) * self.BAR_SPACING) // num_devices))
+        bar_height = max(
+            4,
+            min(
+                self.BAR_HEIGHT,
+                (available_height - (num_devices - 1) * self.BAR_SPACING) // num_devices,
+            ),
+        )
 
         # Find which device row
         y = 4
@@ -370,7 +394,13 @@ class GanttCanvasWidget(QWidget):
         if num_devices <= 0 or available_height <= 0:
             return
 
-        bar_height = max(4, min(self.BAR_HEIGHT, (available_height - (num_devices - 1) * self.BAR_SPACING) // num_devices))
+        bar_height = max(
+            4,
+            min(
+                self.BAR_HEIGHT,
+                (available_height - (num_devices - 1) * self.BAR_SPACING) // num_devices,
+            ),
+        )
 
         y = 4
         for device_code in list(self._timeline_data.keys())[: self.MAX_DEVICES]:
@@ -522,7 +552,7 @@ class SingleDeviceGanttBar(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._theme_manager = get_theme_manager()
-        self._segments: List[GanttSegmentViewModel] = []
+        self._segments: List[GanttSegmentModel] = []
         self._start_time: Optional[datetime] = None
         self._end_time: Optional[datetime] = None
         self._hovered_index = -1
@@ -532,7 +562,7 @@ class SingleDeviceGanttBar(QWidget):
 
     def set_data(
         self,
-        segments: List[GanttSegmentViewModel],
+        segments: List[GanttSegmentModel],
         start_time: datetime,
         end_time: datetime,
     ) -> None:
@@ -573,7 +603,7 @@ class SingleDeviceGanttBar(QWidget):
     def _draw_segment(
         self,
         painter: QPainter,
-        seg: GanttSegmentViewModel,
+        seg: GanttSegmentModel,
         rect: QRectF,
         total_seconds: float,
         is_hovered: bool,
@@ -703,7 +733,7 @@ class DeviceGanttWidget(QFrame):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._theme_manager = get_theme_manager()
-        self._view_model: Optional[GanttChartViewModel] = None
+        self._chart_model: Optional[GanttChartModel] = None
 
         self._setup_ui()
         self._apply_style()
@@ -874,37 +904,38 @@ class DeviceGanttWidget(QFrame):
         """
         )
 
-    def render(self, view_model: GanttChartViewModel) -> None:
-        self._view_model = view_model
+    def render(self, chart_model: GanttChartModel) -> None:
+        """Render from GanttChartModel (from ViewModel)."""
+        self._chart_model = chart_model
 
-        self._device_code_label.setText(view_model.device_code)
+        self._device_code_label.setText(chart_model.device_code)
 
-        self._status_badge.setText(view_model.current_status.upper())
+        self._status_badge.setText(chart_model.current_status.upper())
         self._status_badge.setStyleSheet(
             f"""
             padding: 3px 8px;
             border-radius: 10px;
             font-size: 9px;
             font-weight: 600;
-            background: {view_model.current_status_color};
+            background: {chart_model.current_status_color};
             color: white;
         """
         )
 
-        stats = view_model.stats
+        stats = chart_model.stats
         self._running_card.set_data(stats.running_display, stats.running_percent)
         self._stopped_card.set_data(stats.stopped_display, stats.stopped_percent)
         self._alarm_card.set_data(stats.alarm_display, stats.alarm_percent)
         self._oee_card.set_data(f"{stats.oee_estimate:.0f}%", stats.oee_estimate)
 
         self._gantt_bar.set_data(
-            view_model.segments,
-            view_model.start_time,
-            view_model.end_time,
+            chart_model.segments,
+            chart_model.start_time,
+            chart_model.end_time,
         )
 
-        self._start_label.setText(view_model.start_time.strftime("%H:%M"))
-        self._end_label.setText(view_model.end_time.strftime("%H:%M"))
+        self._start_label.setText(chart_model.start_time.strftime("%H:%M"))
+        self._end_label.setText(chart_model.end_time.strftime("%H:%M"))
 
     def render_from_segments(
         self,
@@ -913,21 +944,139 @@ class DeviceGanttWidget(QFrame):
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        from ...presenters.gantt_presenter import GanttPresenter
+        """Render from raw segments (legacy compatibility)."""
+        # Create segment models from raw data
+        segment_models = self._create_segment_models(segments, start_time, end_time)
 
-        presenter = GanttPresenter()
-        view_model = presenter.present_device_chart(
+        # Calculate stats
+        stats = self._calculate_stats(segment_models, start_time, end_time)
+
+        # Get current status
+        current_status, current_color = self._get_current_status(segment_models)
+
+        # Create chart model
+        chart_model = GanttChartModel(
             device_code=device_code,
             device_name=device_code,
-            segments_dto=segments,
-            window_start=start_time,
-            window_end=end_time,
+            segments=segment_models,
+            hour_marks=[],
+            start_time=start_time,
+            end_time=end_time,
+            total_duration_seconds=(end_time - start_time).total_seconds(),
+            stats=stats,
+            current_status=current_status,
+            current_status_color=current_color,
         )
-        self.render(view_model)
 
-    def _on_segment_clicked(self, segment: GanttSegmentViewModel) -> None:
-        if self._view_model:
-            self.segment_clicked.emit(self._view_model.device_code, segment)
+        self.render(chart_model)
+
+    def _create_segment_models(self, segments: List[Any], start_time: datetime, end_time: datetime) -> List[GanttSegmentModel]:
+        """Convert raw segments to GanttSegmentModel list."""
+        models = []
+        total_seconds = (end_time - start_time).total_seconds()
+        now = datetime.now()
+
+        for seg in segments:
+            if isinstance(seg, dict):
+                seg_start = seg.get("start_time")
+                seg_end = seg.get("end_time")
+                status_code = seg.get("status_code", 0)
+            else:
+                seg_start = getattr(seg, "start_time", None)
+                seg_end = getattr(seg, "end_time", None)
+                status_code = getattr(seg, "status_code", 0)
+
+            if not seg_start or not seg_end:
+                continue
+
+            duration = (seg_end - seg_start).total_seconds()
+            width_percent = duration / total_seconds if total_seconds > 0 else 0
+
+            gradient = STATUS_GRADIENTS.get(status_code, STATUS_GRADIENTS[0])
+            is_current = seg_start <= now <= seg_end
+
+            model = GanttSegmentModel(
+                start_time=seg_start,
+                end_time=seg_end,
+                status_code=status_code,
+                status_name=Status.get_name(status_code),
+                status_color=Status.get_color(status_code),
+                duration_seconds=duration,
+                duration_display=self._format_duration(duration),
+                width_percent=width_percent,
+                gradient_start=gradient[0],
+                gradient_end=gradient[1],
+                is_current=is_current,
+            )
+            models.append(model)
+
+        return models
+
+    def _calculate_stats(self, segments: List[GanttSegmentModel], start_time: datetime, end_time: datetime) -> GanttStatsModel:
+        """Calculate stats from segments."""
+        total_seconds = (end_time - start_time).total_seconds()
+        running = stopped = alarm = maintenance = shutdown = 0.0
+
+        for seg in segments:
+            duration = seg.duration_seconds
+            if seg.status_code == 1:
+                running += duration
+            elif seg.status_code == 2:
+                shutdown += duration
+            elif seg.status_code == 3:
+                stopped += duration
+            elif seg.status_code == 4:
+                maintenance += duration
+            elif seg.status_code == 5:
+                alarm += duration
+
+        running_pct = (running / total_seconds * 100) if total_seconds > 0 else 0
+        stopped_pct = (stopped / total_seconds * 100) if total_seconds > 0 else 0
+        alarm_pct = (alarm / total_seconds * 100) if total_seconds > 0 else 0
+
+        available = total_seconds - shutdown - maintenance
+        oee = (running / available * 100) if available > 0 else 0
+
+        return GanttStatsModel(
+            total_running_seconds=running,
+            total_stopped_seconds=stopped,
+            total_alarm_seconds=alarm,
+            total_maintenance_seconds=maintenance,
+            total_shutdown_seconds=shutdown,
+            running_percent=running_pct,
+            stopped_percent=stopped_pct,
+            alarm_percent=alarm_pct,
+            oee_estimate=oee,
+        )
+
+    def _get_current_status(self, segments: List[GanttSegmentModel]) -> tuple[str, str]:
+        """Get current status from segments."""
+        now = datetime.now()
+
+        for seg in reversed(segments):
+            if seg.is_current or seg.end_time >= now:
+                return seg.status_name, seg.status_color
+
+        if segments:
+            last = segments[-1]
+            return last.status_name, last.status_color
+
+        return "Unknown", "#64748B"
+
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration in human-readable format."""
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        if seconds < 3600:
+            m, s = divmod(int(seconds), 60)
+            return f"{m}m {s}s"
+        h, rem = divmod(int(seconds), 3600)
+        m = rem // 60
+        return f"{h}h {m}m"
+
+    def _on_segment_clicked(self, segment: GanttSegmentModel) -> None:
+        if self._chart_model:
+            self.segment_clicked.emit(self._chart_model.device_code, segment)
 
 
 __all__ = [
