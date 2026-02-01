@@ -186,7 +186,7 @@ class MssqlAdapter(IRemoteDataSource):
     async def fetch_latest_history_records(
         self,
         equip_code: str,
-        limit: int = 2,
+        limit: int = 1,
     ) -> List[Dict[str, Any]]:
         """Fetch the N most recent history records for a device."""
         if self._is_disposed or not self._engine:

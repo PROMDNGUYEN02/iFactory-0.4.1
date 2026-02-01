@@ -46,7 +46,7 @@ class DeviceIconItem(QGraphicsObject):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFlag(QGraphicsItem.ItemIsSelectable, False)
 
-        self._status_color = QColor("#9E9E9E")  # Default gray
+        self._status_color = QColor("Transparent")
         self._is_hovered = False
         self._pixmap: Optional[QPixmap] = None
         self._is_dark = False

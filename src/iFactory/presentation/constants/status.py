@@ -19,12 +19,12 @@ class Status:
 
     # Modern color palette matching Gantt widget
     COLORS: Final[Dict[int, str]] = {
-        StatusCode.UNKNOWN: "#64748B",  # Slate gray
-        StatusCode.RUNNING: "#10B981",  # Emerald green
-        StatusCode.SHUTDOWN: "#3B82F6",  # Blue
-        StatusCode.STOPPED: "#F59E0B",  # Amber/Orange
-        StatusCode.MAINTENANCE: "#8B5CF6",  # Violet
-        StatusCode.ALARM: "#EF4444",  # Red
+        StatusCode.UNKNOWN: "Transparent",
+        StatusCode.RUNNING: "#2ECC71",
+        StatusCode.SHUTDOWN: "#7F8C8D",
+        StatusCode.STOPPED: "#E74C3C",
+        StatusCode.MAINTENANCE: "#9B59B6",
+        StatusCode.ALARM: "#F1C40F",
     }
 
     NAMES: Final[Dict[int, str]] = {
@@ -39,10 +39,10 @@ class Status:
     EMOJIS: Final[Dict[int, str]] = {
         StatusCode.UNKNOWN: "❓",
         StatusCode.RUNNING: "🟢",
-        StatusCode.SHUTDOWN: "🔵",
-        StatusCode.STOPPED: "🟡",
+        StatusCode.SHUTDOWN: "⚫",
+        StatusCode.STOPPED: "🔴",
         StatusCode.MAINTENANCE: "🟣",
-        StatusCode.ALARM: "🔴",
+        StatusCode.ALARM: "🟡",
     }
 
     @classmethod

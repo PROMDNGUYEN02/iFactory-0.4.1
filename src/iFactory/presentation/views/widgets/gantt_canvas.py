@@ -42,7 +42,6 @@ from PySide6.QtWidgets import (
 from ...constants.status import Status
 from ...resources.themes import get_theme_manager
 
-# Import from models (new MVVM structure)
 from ...viewmodels.models.gantt_model import (
     GanttSegmentModel,
     GanttChartModel,
@@ -54,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Compact Multi-Device Bar Chart (for daboard_midle_frame_2 - 50px height)
+# Compact Multi-Device Bar Chart (for daboard_midle_frame_2 - 60px height)
 # =============================================================================
 
 
@@ -69,7 +68,7 @@ class GanttCanvasWidget(QWidget):
     - Bottom: Time ruler
     """
 
-    device_clicked = Signal(str)  # device_code
+    device_clicked = Signal(str)
 
     LABEL_WIDTH = 70
     RULER_HEIGHT = 14
@@ -859,10 +858,11 @@ class DeviceGanttWidget(QFrame):
         layout.setSpacing(10)
 
         statuses = [
-            ("Run", "#10B981"),
-            ("Stop", "#F59E0B"),
-            ("Alarm", "#EF4444"),
-            ("Maint", "#8B5CF6"),
+            ("Run", "#2ECC71"),
+            ("Stop", "#E74C3C"),
+            ("Alarm", "#F1C40F"),
+            ("Maint", "#9B59B6"),
+            ("Shut", "#7F8C8D"),
         ]
 
         for name, color in statuses:

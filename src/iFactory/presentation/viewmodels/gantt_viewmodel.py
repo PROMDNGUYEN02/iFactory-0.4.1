@@ -426,7 +426,7 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
             last = segments[-1]
             return last.status_name, last.status_color
 
-        return "Unknown", "#64748B"
+        return "Unknown", "Transperant"
 
     def _format_duration(self, seconds: float) -> str:
         if seconds < 60:

@@ -105,7 +105,7 @@ class GanttChartModel:
     total_duration_seconds: float
     stats: GanttStatsModel = field(default_factory=GanttStatsModel)
     current_status: str = "Unknown"
-    current_status_color: str = "#64748B"
+    current_status_color: str = "Transparent"
 
     @property
     def segment_count(self) -> int:
@@ -148,12 +148,12 @@ class GanttLoadingState:
 
 # Color palette with gradients for status visualization
 STATUS_GRADIENTS: dict[int, Tuple[str, str]] = {
-    0: ("#94A3B8", "#64748B"),  # Unknown - Slate
-    1: ("#34D399", "#059669"),  # Running - Emerald
-    2: ("#60A5FA", "#3B82F6"),  # Shutdown - Blue
-    3: ("#FBBF24", "#D97706"),  # Stopped - Amber
-    4: ("#A78BFA", "#7C3AED"),  # Maintenance - Violet
-    5: ("#F87171", "#DC2626"),  # Alarm - Red
+    0: ("Transparent", "Transparent"),
+    1: ("#2ECC71", "#2ECC71"),
+    2: ("#7F8C8D", "#7F8C8D"),
+    3: ("#E74C3C", "#E74C3C"),
+    4: ("#9B59B6", "#9B59B6"),
+    5: ("#F1C40F", "#F1C40F"),
 }
 
 STATUS_NAMES: dict[int, str] = {

@@ -235,9 +235,9 @@ class HeaderView:
         suffix = "-white" if is_dark else ""
 
         if self._current_expanded:
-            icon_name = f"arrow_menu_close{suffix}.svg"
+            icon_name = f"left_panel_close{suffix}.svg"
         else:
-            icon_name = f"arrow_menu_open{suffix}.svg"
+            icon_name = f"left_panel_open{suffix}.svg"
 
         # Try to set icon from resources
         icon = QIcon(f":/icon/{icon_name}")

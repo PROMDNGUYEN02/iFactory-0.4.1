@@ -31,12 +31,12 @@ logger = logging.getLogger(__name__)
 
 
 STATUS_CONFIG = {
-    0: {"name": "Unknown", "color": "#64748B", "gradient": ("#94A3B8", "#64748B")},
+    0: {"name": "Unknown", "color": "Transparent", "gradient": ("Transparent", "Transparent")},
     1: {"name": "Running", "color": "#10B981", "gradient": ("#34D399", "#059669")},
-    2: {"name": "Shutdown", "color": "#3B82F6", "gradient": ("#60A5FA", "#3B82F6")},
-    3: {"name": "Stopped", "color": "#F59E0B", "gradient": ("#FBBF24", "#D97706")},
+    2: {"name": "Shutdown", "color": "#64748B", "gradient": ("#94A3B8", "#64748B")},
+    3: {"name": "Stopped", "color": "#EF4444", "gradient": ("#F87171", "#DC2626")},
     4: {"name": "Maintenance", "color": "#8B5CF6", "gradient": ("#A78BFA", "#7C3AED")},
-    5: {"name": "Alarm", "color": "#EF4444", "gradient": ("#F87171", "#DC2626")},
+    5: {"name": "Alarm", "color": "#F59E0B", "gradient": ("#FBBF24", "#D97706")},
 }
 
 
