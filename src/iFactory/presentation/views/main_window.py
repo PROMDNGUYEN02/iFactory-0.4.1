@@ -5,7 +5,7 @@ The View is a passive consumer that:
 - Binds to ViewModel signals
 - Delegates all user interactions to ViewModels
 - Contains no business logic
-- Handles click-outside detection for panels using overlay
+- Handles click-outside detection for panels using eventFilter
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ from __future__ import annotations
 import logging
 import sys
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from PySide6.QtCore import QEvent, QRect, QTimer, Slot, QPoint, Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut, QMouseEvent, QPainter, QColor
-from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QGraphicsView, QFrame
+from PySide6.QtCore import QEvent, QRect, QTimer, Slot, QPoint, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 
 import iFactory.presentation.resources.resources_rc as resources_rc
 
@@ -58,69 +58,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ClickOutsideOverlay(QWidget):
-    """
-    Transparent overlay widget that captures clicks outside the right panel.
-    When clicked, it signals to close the panel.
-    """
-
-    clicked_outside = Signal()
-
-    def __init__(self, parent: QWidget = None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setStyleSheet("background: transparent;")
-        self.hide()
-        self._excluded_widgets: List[QWidget] = []
-
-    def set_excluded_widgets(self, widgets: List[QWidget]) -> None:
-        """Set widgets that should not trigger close when clicked."""
-        self._excluded_widgets = widgets
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Handle mouse press - check if click should close panel."""
-        global_pos = event.globalPosition().toPoint()
-
-        # Check if click is on excluded widgets
-        for widget in self._excluded_widgets:
-            if widget and widget.isVisible():
-                widget_rect = self._get_widget_global_rect(widget)
-                if widget_rect.contains(global_pos):
-                    # Click on excluded widget - don't close, pass event through
-                    event.ignore()
-                    return
-
-        # Click on overlay (outside excluded widgets) - close panel
-        logger.info("[Overlay] Click outside detected - emitting signal")
-        self.clicked_outside.emit()
-        event.accept()
-
-    def _get_widget_global_rect(self, widget: QWidget) -> QRect:
-        """Get global rect of a widget."""
-        if not widget or not widget.isVisible():
-            return QRect()
-        try:
-            top_left = widget.mapToGlobal(QPoint(0, 0))
-            return QRect(top_left, widget.size())
-        except Exception:
-            return QRect()
-
-    def show_overlay(self) -> None:
-        """Show the overlay."""
-        if self.parent():
-            # Resize to cover the entire parent
-            self.setGeometry(self.parent().rect())
-            self.raise_()  # Bring to front but below excluded widgets
-        self.show()
-        logger.debug("[Overlay] Shown")
-
-    def hide_overlay(self) -> None:
-        """Hide the overlay."""
-        self.hide()
-        logger.debug("[Overlay] Hidden")
-
-
 class MainWindow(QMainWindow):
     """
     Main application window - PASSIVE VIEW.
@@ -128,7 +65,12 @@ class MainWindow(QMainWindow):
     Binds to ViewModel signals for state updates.
     Delegates user actions to ViewModels.
     Contains no business logic.
-    Uses overlay for click-outside detection.
+    Uses eventFilter for click-outside detection.
+
+    Click-outside behavior:
+    - Click on device widget → update panel content (handled by device click signals)
+    - Click inside right panel → do nothing (allow interaction)
+    - Click ANYWHERE else (stack widget, pages, frames, etc.) → CLOSE panel
     """
 
     def __init__(
@@ -152,16 +94,15 @@ class MainWindow(QMainWindow):
         self._prev_state: Dict[str, Any] = {}
         self._components_ready = False
 
-        # Click handling flags
-        self._device_click_in_progress = False
+        # Click handling - track if a device was just clicked
+        self._device_click_pending = False
+
+        # Store pending click position for deferred processing
+        self._pending_click_pos: Optional[QPoint] = None
 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.setWindowTitle("iFactory Production Monitor")
-
-        # Create click-outside overlay
-        self._overlay = ClickOutsideOverlay(self.ui.centralwidget)
-        self._overlay.clicked_outside.connect(self._on_overlay_clicked)
 
         self._apply_initial_layout()
         self._init_shell()
@@ -174,36 +115,107 @@ class MainWindow(QMainWindow):
 
         self._store.state_changed.connect(self._on_state_changed)
 
+        # Install event filter on QApplication to catch ALL mouse events
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+            logger.info("[MainWindow] Event filter installed on QApplication")
+
         logger.info("[MainWindow] Initialized with MVVM")
 
     # =========================================================================
-    # Overlay Click Handler
+    # Event Filter for Click-Outside Detection
     # =========================================================================
 
-    def _on_overlay_clicked(self) -> None:
-        """Handle click on overlay - close right panel."""
-        logger.info("[MainWindow] Overlay clicked - closing right panel")
+    def eventFilter(self, watched, event) -> bool:
+        """
+        Global event filter to detect clicks outside the right panel.
+
+        Logic:
+        - Capture click position immediately (before event is invalidated)
+        - Defer processing to allow device signals to fire first
+        - If device click pending → skip closing
+        - If click inside right panel → skip closing
+        - All other clicks → close panel
+        """
+        if event.type() == QEvent.Type.MouseButtonPress:
+            # Only handle left clicks
+            if hasattr(event, "button") and event.button() == Qt.MouseButton.LeftButton:
+                # Capture position NOW before event is invalidated
+                try:
+                    if hasattr(event, "globalPosition"):
+                        global_pos = event.globalPosition().toPoint()
+                    elif hasattr(event, "globalPos"):
+                        global_pos = event.globalPos()
+                    else:
+                        return False
+
+                    # Store position and defer processing
+                    self._pending_click_pos = QPoint(global_pos)
+                    QTimer.singleShot(10, self._handle_global_click_deferred)
+
+                except Exception as e:
+                    logger.debug(f"[MainWindow] Error capturing click position: {e}")
+
+        return False  # Never consume the event
+
+    def _handle_global_click_deferred(self) -> None:
+        """Handle global mouse click after device signals have processed."""
+        global_pos = self._pending_click_pos
+        self._pending_click_pos = None
+
+        if global_pos is None:
+            return
+
+        # Check if a device click just happened
+        if self._device_click_pending:
+            self._device_click_pending = False
+            logger.debug("[MainWindow] Click ignored - device click was processed")
+            return
+
+        # Check if right panel is open
+        if not self._shell_vm.right_panel_expanded:
+            logger.debug("[MainWindow] Panel not expanded - ignoring click")
+            return
+
+        # ONLY exclude: Right panel
+        # Everything else (stack widget, pages, frames, canvas empty space, etc.) should close the panel
+
+        # Check if click is inside right panel → allow interaction
+        right_panel_rect = self._get_widget_global_rect(self.ui.right_slide_menu_frame)
+        if right_panel_rect.isValid() and right_panel_rect.contains(global_pos):
+            logger.debug("[MainWindow] Click inside right panel - ignoring")
+            return
+
+        # ALL OTHER CLICKS → close panel
+        logger.info(f"[MainWindow] Click outside detected at {global_pos} - closing panel")
+        self._close_panel_and_deselect()
+
+    def _get_widget_global_rect(self, widget: Optional[QWidget]) -> QRect:
+        """Get widget's global rectangle."""
+        if not widget:
+            return QRect()
+
+        try:
+            if not widget.isVisible():
+                return QRect()
+
+            top_left = widget.mapToGlobal(QPoint(0, 0))
+            return QRect(top_left, widget.size())
+        except Exception as e:
+            logger.debug(f"[MainWindow] Error getting widget rect: {e}")
+            return QRect()
+
+    def _close_panel_and_deselect(self) -> None:
+        """Close right panel and deselect device."""
         self._shell_vm.close_right_panel()
         self._device_vm.deselect_device()
-        self._overlay.hide_overlay()
+        logger.info("[MainWindow] Panel closed and device deselected")
 
-    def _update_overlay_state(self) -> None:
-        """Update overlay visibility based on right panel state."""
-        if self._shell_vm.right_panel_expanded:
-            # Set excluded widgets (right panel and device canvases)
-            excluded = [self.ui.right_slide_menu_frame]
-            if hasattr(self, "canvas_dashboard"):
-                excluded.append(self.canvas_dashboard)
-            if hasattr(self, "canvas_orders"):
-                excluded.append(self.canvas_orders)
-
-            self._overlay.set_excluded_widgets(excluded)
-            self._overlay.show_overlay()
-
-            # Make sure right panel is above overlay
-            self.ui.right_slide_menu_frame.raise_()
-        else:
-            self._overlay.hide_overlay()
+    def _mark_device_clicked(self) -> None:
+        """Mark that a device was just clicked (to ignore click-outside)."""
+        self._device_click_pending = True
+        logger.debug("[MainWindow] Device click marked as pending")
 
     # =========================================================================
     # ViewModel Bindings
@@ -359,11 +371,7 @@ class MainWindow(QMainWindow):
     def _on_right_panel_changed(self, expanded: bool) -> None:
         width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
         self.ui.right_slide_menu_frame.setFixedWidth(width)
-
-        # Update overlay state
-        self._update_overlay_state()
-
-        logger.debug(f"[MainWindow] Right panel changed: expanded={expanded}, width={width}")
+        logger.info(f"[MainWindow] Right panel changed: expanded={expanded}, width={width}")
 
     # =========================================================================
     # Canvas Event Handlers (User Interactions -> ViewModel)
@@ -371,27 +379,23 @@ class MainWindow(QMainWindow):
 
     def _on_device_single_clicked(self, device_id: str) -> None:
         """Handle single click on device - select device, update panel content."""
-        logger.debug(f"[MainWindow] Device single clicked: {device_id}")
+        logger.info(f"[MainWindow] Device single clicked: {device_id}")
 
-        self._device_click_in_progress = True
+        # Mark device click to prevent immediate click-outside closing panel
+        self._mark_device_clicked()
 
         # Select device - this will update panel content if different device
         self._device_vm.select_device(device_id, open_panel=False)
 
-        # Reset flag
-        QTimer.singleShot(100, lambda: setattr(self, "_device_click_in_progress", False))
-
     def _on_device_double_clicked(self, device_id: str) -> None:
         """Handle double click on device - select device and toggle panel."""
-        logger.debug(f"[MainWindow] Device double clicked: {device_id}")
+        logger.info(f"[MainWindow] Device double clicked: {device_id}")
 
-        self._device_click_in_progress = True
+        # Mark device click to prevent immediate click-outside closing panel
+        self._mark_device_clicked()
 
         # Double click opens/toggles panel
         self._device_vm.select_device(device_id, open_panel=True)
-
-        # Reset flag
-        QTimer.singleShot(100, lambda: setattr(self, "_device_click_in_progress", False))
 
     # =========================================================================
     # Keyboard Shortcuts
@@ -496,15 +500,6 @@ class MainWindow(QMainWindow):
             self.ui.orders_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
 
             self._components_ready = True
-
-            # Update overlay excluded widgets now that canvases exist
-            self._overlay.set_excluded_widgets(
-                [
-                    self.ui.right_slide_menu_frame,
-                    self.canvas_dashboard,
-                    self.canvas_orders,
-                ]
-            )
 
             devices = self._device_vm.devices
             if devices:
@@ -614,14 +609,15 @@ class MainWindow(QMainWindow):
     # Window Events
     # =========================================================================
 
-    def resizeEvent(self, event) -> None:
-        """Handle window resize - update overlay size."""
-        super().resizeEvent(event)
-        if hasattr(self, "_overlay") and self._overlay.isVisible():
-            self._overlay.setGeometry(self.ui.centralwidget.rect())
-
     def closeEvent(self, event) -> None:
-        """Handle window close."""
+        """Handle window close - cleanup event filter."""
+        try:
+            app = QApplication.instance()
+            if app:
+                app.removeEventFilter(self)
+        except Exception as e:
+            logger.debug(f"[MainWindow] Error removing event filter: {e}")
+
         super().closeEvent(event)
 
 

@@ -43,15 +43,17 @@ class DeviceIconItem(QGraphicsObject):
         self.setPos(x, y)
 
         self.setAcceptHoverEvents(True)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFlag(QGraphicsItem.ItemIsSelectable, False)
 
         self._status_color = QColor("#9E9E9E")  # Default gray
         self._is_hovered = False
         self._pixmap: Optional[QPixmap] = None
         self._is_dark = False
-        self._click_count = 0
-        self._double_click_timer: Optional[QTimer] = None
+
+        # Click detection
+        self._click_timer: Optional[QTimer] = None
+        self._pending_single_click = False
 
         lbl_text = device_data.get("label_text", self.equip_code)
         self.label = QGraphicsSimpleTextItem(lbl_text, self)
@@ -59,7 +61,7 @@ class DeviceIconItem(QGraphicsObject):
         self.label.setBrush(QBrush(QColor("#2c3e50")))
 
         self.output_badge = QGraphicsSimpleTextItem("", self)
-        self.output_badge.setFont(QFont("Segoe UI", 6, QFont.Bold))
+        self.output_badge.setFont(QFont("Segoe UI", 6, QFont.Weight.Bold))
         self.output_badge.setBrush(QBrush(QColor("#2c3e50")))
         self.output_badge.setVisible(False)
 
@@ -82,7 +84,7 @@ class DeviceIconItem(QGraphicsObject):
         )
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget=None) -> None:
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         bg_rect = QRectF(0, 0, self.w, self.h)
         corner_radius = 6
@@ -118,7 +120,7 @@ class DeviceIconItem(QGraphicsObject):
             target_w = self.device_data.get("width", 40)
             target_h = self.device_data.get("height", 40)
 
-            scaled_pm = pm.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            scaled_pm = pm.scaled(target_w, target_h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
 
             if self.w != scaled_pm.width() or self.h != scaled_pm.height():
                 self.prepareGeometryChange()
@@ -219,39 +221,42 @@ class DeviceIconItem(QGraphicsObject):
         super().hoverLeaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        """Handle mouse press - detect single vs double click."""
-        if event.button() == Qt.LeftButton:
-            self._click_count += 1
+        """Handle mouse press - start click detection."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pending_single_click = True
 
-            if self._click_count == 1:
-                if self._double_click_timer is None:
-                    self._double_click_timer = QTimer()
-                    self._double_click_timer.setSingleShot(True)
-                    self._double_click_timer.timeout.connect(self._on_single_click_confirmed)
+            # Start timer to detect single vs double click
+            if self._click_timer is None:
+                self._click_timer = QTimer()
+                self._click_timer.setSingleShot(True)
+                self._click_timer.timeout.connect(self._emit_single_click)
 
-                self._double_click_timer.start(250)
-
+            self._click_timer.start(300)  # 300ms to wait for double click
             event.accept()
-        super().mousePressEvent(event)
+        else:
+            super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
         """Handle double click - open right panel."""
-        if event.button() == Qt.LeftButton:
-            self._click_count = 0
-            if self._double_click_timer:
-                self._double_click_timer.stop()
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Cancel pending single click
+            self._pending_single_click = False
+            if self._click_timer:
+                self._click_timer.stop()
 
+            # Emit double click
             self._parent_canvas.device_double_clicked.emit(self.equip_code)
             logger.debug(f"[DeviceIcon] Double clicked: {self.equip_code}")
             event.accept()
-        super().mouseDoubleClickEvent(event)
+        else:
+            super().mouseDoubleClickEvent(event)
 
-    def _on_single_click_confirmed(self) -> None:
-        """Called when single click is confirmed."""
-        if self._click_count == 1:
+    def _emit_single_click(self) -> None:
+        """Emit single click signal after timer expires."""
+        if self._pending_single_click:
+            self._pending_single_click = False
             self._parent_canvas.device_clicked.emit(self.equip_code)
             logger.debug(f"[DeviceIcon] Single clicked: {self.equip_code}")
-        self._click_count = 0
 
 
 class DeviceCanvasWidget(QWidget):
@@ -284,13 +289,14 @@ class DeviceCanvasWidget(QWidget):
 
         self.scene = QGraphicsScene()
         self.view = QGraphicsView(self.scene)
+        self.view.setObjectName(f"canvas_view_{self.area_key}")
         self.view.setStyleSheet("background-color: transparent; border: none;")
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.view.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.view.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)  # Force full update
-        self.view.setCacheMode(QGraphicsView.CacheNone)  # Disable cache for live updates
+        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        self.view.setCacheMode(QGraphicsView.CacheModeFlag.CacheNone)
 
         layout.addWidget(self.view)
 
@@ -310,12 +316,12 @@ class DeviceCanvasWidget(QWidget):
                 bg_pixmap = bg_pixmap.scaled(
                     self._ref_width,
                     self._ref_height,
-                    Qt.IgnoreAspectRatio,
-                    Qt.SmoothTransformation,
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
                 )
                 self._bg_item = self.scene.addPixmap(bg_pixmap)
                 self._bg_item.setZValue(-10)
-                self._bg_item.setFlag(QGraphicsItem.ItemIsSelectable, False)
+                self._bg_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
                 self._bg_item.setAcceptHoverEvents(False)
 
             for dev in self._layout_config.get("devices", []):
@@ -335,8 +341,6 @@ class DeviceCanvasWidget(QWidget):
 
     def render_state(self, devices_state: Dict[str, Any], is_dark: bool) -> None:
         """Render device states with proper color updates."""
-        logger.debug(f"[Canvas] render_state called with {len(devices_state)} devices, is_dark={is_dark}")
-
         # Update theme if changed
         if is_dark != self._is_dark:
             self._is_dark = is_dark
@@ -348,8 +352,8 @@ class DeviceCanvasWidget(QWidget):
                         pixmap.scaled(
                             self._ref_width,
                             self._ref_height,
-                            Qt.IgnoreAspectRatio,
-                            Qt.SmoothTransformation,
+                            Qt.AspectRatioMode.IgnoreAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
                         )
                     )
             for item in self._device_items.values():
@@ -360,7 +364,6 @@ class DeviceCanvasWidget(QWidget):
             item = self._device_items.get(dev_id)
             if item:
                 item.update_live_data(vm)
-                logger.debug(f"[Canvas] Updated device {dev_id}")
 
         # Force scene update
         self.scene.update()
@@ -368,11 +371,11 @@ class DeviceCanvasWidget(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self.view.fitInView(self.scene.sceneRect(), Qt.IgnoreAspectRatio)
+        self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.IgnoreAspectRatio)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self.view.fitInView(self.scene.sceneRect(), Qt.IgnoreAspectRatio)
+        self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.IgnoreAspectRatio)
 
 
 __all__ = ["DeviceCanvasWidget"]

@@ -6,9 +6,7 @@ This is a TRUE ViewModel that:
 - Exposes reactive signals for Views to bind
 - Orchestrates Use Cases (SyncOrchestrator)
 - Transforms DTOs to Display Models
-- Contains ZERO business rules
-
-Replaces: DeviceController + DevicePresenter
+- Coordinates with ShellViewModel for panel state
 """
 
 from __future__ import annotations
@@ -32,6 +30,7 @@ if TYPE_CHECKING:
     from ..services.page_device_manager import PageDeviceManager
     from iFactory.application.ports.remote import IRemoteDataSource
     from iFactory.application.services.sync_orchestrator import SyncOrchestrator
+    from .shell_viewmodel import ShellViewModel
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +44,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     - Handle device sync operations
     - Transform data for display
     - Manage device selection
+    - Coordinate with ShellViewModel for panel state
 
     Signals:
     - devicesChanged: Emitted when device list updates
@@ -62,6 +62,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         page_manager: Optional["PageDeviceManager"] = None,
         remote_source: Optional["IRemoteDataSource"] = None,
         sync_orchestrator: Optional["SyncOrchestrator"] = None,
+        shell_vm: Optional["ShellViewModel"] = None,
         parent=None,
     ):
         BaseViewModel.__init__(self, parent)
@@ -70,6 +71,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         self._page_manager = page_manager
         self._remote_source = remote_source
         self._sync_orchestrator = sync_orchestrator
+        self._shell_vm = shell_vm
 
         # Internal state
         self._devices: Dict[str, DeviceDisplayModel] = {}
@@ -95,6 +97,11 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     # =========================================================================
     # Configuration (Dependency Injection)
     # =========================================================================
+
+    def set_shell_viewmodel(self, shell_vm: "ShellViewModel") -> None:
+        """Set shell viewmodel for panel coordination."""
+        self._shell_vm = shell_vm
+        logger.info("[DeviceListViewModel] ShellViewModel configured")
 
     def set_remote_source(self, source: "IRemoteDataSource") -> None:
         """Set remote data source for fetching."""
@@ -194,34 +201,91 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         if self._is_disposed:
             return
 
+        logger.info(f"[DeviceListViewModel] select_device: {device_id}, open_panel={open_panel}")
+
+        # Check if selecting the same device
+        is_same_device = self._selection.selected_device_id == device_id
+
+        # Determine panel state
+        should_panel_be_open = self._selection.is_panel_open
+
+        if open_panel:
+            if is_same_device:
+                # Double-click on same device - toggle panel
+                should_panel_be_open = not self._selection.is_panel_open
+                logger.info(f"[DeviceListViewModel] Toggle panel: {should_panel_be_open}")
+            else:
+                # Double-click on different device - open panel
+                should_panel_be_open = True
+                logger.info(f"[DeviceListViewModel] Opening panel for new device")
+
+        # Update selection model
         new_selection = DeviceSelectionModel(
             selected_device_id=device_id,
-            is_panel_open=open_panel or self._selection.is_panel_open,
+            is_panel_open=should_panel_be_open,
         )
 
-        if new_selection != self._selection:
+        # Always emit if device changed or panel state changed
+        selection_changed = (
+            new_selection.selected_device_id != self._selection.selected_device_id or new_selection.is_panel_open != self._selection.is_panel_open
+        )
+
+        if selection_changed:
             self._selection = new_selection
             self.selectionChanged.emit(new_selection)
-            logger.debug(f"[DeviceListViewModel] Selected: {device_id}, panel: {open_panel}")
+            logger.debug(f"[DeviceListViewModel] Selection changed: {device_id}, panel: {should_panel_be_open}")
+
+        # Coordinate with ShellViewModel for actual panel visibility
+        if self._shell_vm:
+            current_panel_expanded = self._shell_vm.right_panel_expanded
+
+            if should_panel_be_open and not current_panel_expanded:
+                # Need to open panel
+                self._shell_vm.open_right_panel()
+                logger.info(f"[DeviceListViewModel] Requested ShellVM to open panel")
+            elif not should_panel_be_open and current_panel_expanded:
+                # Need to close panel
+                self._shell_vm.close_right_panel()
+                logger.info(f"[DeviceListViewModel] Requested ShellVM to close panel")
+        else:
+            logger.warning("[DeviceListViewModel] No ShellViewModel set - cannot control panel")
 
     def deselect_device(self) -> None:
         """Deselect current device."""
         if self._is_disposed:
             return
 
+        was_panel_open = self._selection.is_panel_open
+
         self._selection = DeviceSelectionModel()
         self.selectionChanged.emit(self._selection)
+
+        logger.info("[DeviceListViewModel] Device deselected")
+
+        # Close panel if it was open
+        if was_panel_open and self._shell_vm:
+            self._shell_vm.close_right_panel()
+            logger.info("[DeviceListViewModel] Closed panel after deselection")
 
     def toggle_panel(self) -> None:
         """Toggle details panel for selected device."""
         if not self._selection.has_selection:
             return
 
+        new_panel_state = not self._selection.is_panel_open
+
         self._selection = DeviceSelectionModel(
             selected_device_id=self._selection.selected_device_id,
-            is_panel_open=not self._selection.is_panel_open,
+            is_panel_open=new_panel_state,
         )
         self.selectionChanged.emit(self._selection)
+
+        # Coordinate with ShellViewModel
+        if self._shell_vm:
+            if new_panel_state:
+                self._shell_vm.open_right_panel()
+            else:
+                self._shell_vm.close_right_panel()
 
     # =========================================================================
     # Properties - UI can bind to these
@@ -383,7 +447,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         self._set_error(f"Sync failed: {error_msg}")
 
     # =========================================================================
-    # Internal - Data Transformation (Presenter logic merged here)
+    # Internal - Data Transformation
     # =========================================================================
 
     def _transform_to_display_model(
@@ -481,6 +545,14 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             return
 
         logger.info(f"[DeviceListViewModel] Page changed: {page_name}, {len(device_codes)} devices")
+
+        # Close panel and deselect when changing pages
+        if self._selection.has_selection:
+            self._selection = DeviceSelectionModel()
+            self.selectionChanged.emit(self._selection)
+
+            if self._shell_vm and self._shell_vm.right_panel_expanded:
+                self._shell_vm.close_right_panel()
 
         # Reset and load new page devices
         self._mark_operation_completed("sync")

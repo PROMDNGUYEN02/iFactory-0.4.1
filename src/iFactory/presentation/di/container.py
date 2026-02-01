@@ -8,6 +8,7 @@ Features:
 - Auto-refresh every 3 seconds for latest status
 - Initial history sync on startup
 - Proper shutdown handling
+- Proper ViewModel dependency injection
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ class UIContainer(QObject):
     - ViewModels own UI state and orchestrate Use Cases
     - Views bind to ViewModel signals (passive consumers)
     - Redux Store for cross-cutting state (theme, selection)
+    - Proper dependency injection between ViewModels
     """
 
     def __init__(self, app_container: "AppContainer"):
@@ -82,6 +84,7 @@ class UIContainer(QObject):
         self._init_page_manager()
         self._init_sync_orchestrator()
         self._init_viewmodels()
+        self._wire_viewmodel_dependencies()  # NEW: Wire up dependencies
         self._init_main_window()
         self._connect_signals()
         self._init_auto_refresh()
@@ -156,7 +159,7 @@ class UIContainer(QObject):
         return lambda: NullUnitOfWork()
 
     def _init_viewmodels(self) -> None:
-        """Initialize all ViewModels with proper dependencies."""
+        """Initialize all ViewModels with basic dependencies."""
         config_path = None
         mssql_url = None
         remote_source = None
@@ -177,26 +180,34 @@ class UIContainer(QObject):
         except Exception as e:
             logger.warning(f"[UIContainer] Could not get remote config: {e}")
 
-        # Shell ViewModel
+        # 1. Shell ViewModel (no dependencies on other VMs)
         self._shell_vm = ShellViewModel(
             config_path=config_path,
             page_manager=self._page_manager,
         )
         self._shell_vm.initialize()
 
-        # Device List ViewModel
+        # 2. Device List ViewModel (will need shell_vm later)
         self._device_vm = DeviceListViewModel(
             page_manager=self._page_manager,
             remote_source=remote_source,
             sync_orchestrator=self._sync_orchestrator,
+            shell_vm=None,  # Set later in _wire_viewmodel_dependencies
         )
         self._device_vm.initialize()
 
-        # Gantt Chart ViewModel
+        # 3. Gantt Chart ViewModel
         self._gantt_vm = GanttChartViewModel(mssql_url=mssql_url)
         self._gantt_vm.initialize()
 
         logger.info("[UIContainer] ViewModels initialized")
+
+    def _wire_viewmodel_dependencies(self) -> None:
+        """Wire up cross-ViewModel dependencies after initial creation."""
+        # DeviceListViewModel needs ShellViewModel for panel control
+        if self._device_vm and self._shell_vm:
+            self._device_vm.set_shell_viewmodel(self._shell_vm)
+            logger.info("[UIContainer] Wired DeviceVM -> ShellVM")
 
     def _init_main_window(self) -> None:
         """Initialize main window with ViewModels."""
@@ -241,14 +252,11 @@ class UIContainer(QObject):
         self._store.dispatch(load_devices(devices))
 
     def _on_selection_changed(self, selection) -> None:
-        from ..state.actions import select_device_only, deselect_device, toggle_right_panel
+        from ..state.actions import select_device_only, deselect_device
 
         if selection.has_selection:
             self._store.dispatch(select_device_only(selection.selected_device_id))
-            if selection.is_panel_open:
-                state = self._store.get_state()
-                if not state.get("right_panel_expanded"):
-                    self._store.dispatch(toggle_right_panel())
+            # Panel state is now managed by ShellViewModel, not here
         else:
             self._store.dispatch(deselect_device())
 
@@ -283,26 +291,15 @@ class UIContainer(QObject):
 
     def _on_right_panel_changed(self, expanded: bool) -> None:
         """Sync right panel state to store."""
-        from ..state.actions import Action, ActionType
-
         state = self._store.get_state()
         current_expanded = state.get("right_panel_expanded", False)
 
         # Only dispatch if state actually changed
         if current_expanded != expanded:
-            # Create action to directly set the state (not toggle)
-            if expanded:
-                # Need to ensure panel is open
-                if not current_expanded:
-                    from ..state.actions import toggle_right_panel
+            from ..state.actions import toggle_right_panel
 
-                    self._store.dispatch(toggle_right_panel())
-            else:
-                # Need to ensure panel is closed
-                if current_expanded:
-                    from ..state.actions import toggle_right_panel
-
-                    self._store.dispatch(toggle_right_panel())
+            self._store.dispatch(toggle_right_panel())
+            logger.debug(f"[UIContainer] Store right_panel_expanded -> {expanded}")
 
     def _on_chart_ready(self, chart) -> None:
         from ..state.actions import set_selected_device_gantt
