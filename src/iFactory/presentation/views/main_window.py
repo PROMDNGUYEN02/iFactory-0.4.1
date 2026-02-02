@@ -4,6 +4,7 @@ Main Window - MVVM Architecture (Optimized).
 
 Click-outside detection using focused approach instead of global event filter.
 Uses ThemeService for centralized theming.
+Uses IconService for icon management.
 """
 
 from __future__ import annotations
@@ -52,12 +53,12 @@ class MainWindow(QMainWindow):
     """
     Main application window - PASSIVE VIEW.
 
-    Optimized click-outside detection:
-    - Uses mousePressEvent on specific widgets instead of global filter
+    Optimized features:
+    - Click-outside detection using mousePressEvent
     - Immediate response without timer delays
     - Clean separation of device clicks vs outside clicks
-
-    Uses ThemeService for all theming needs - no more scattered theme logic.
+    - ThemeService for all theming needs
+    - Consistent styling via design tokens
     """
 
     def __init__(
@@ -82,27 +83,31 @@ class MainWindow(QMainWindow):
         self._prev_state: Dict[str, Any] = {}
         self._components_ready = False
 
+        # Setup UI
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.setWindowTitle("iFactory Production Monitor")
 
+        # Initialize
         self._apply_initial_layout()
         self._init_shell()
 
+        # Deferred workspace initialization
         QTimer.singleShot(Timing.DEFERRED_LOAD_DELAY_MS, self._init_workspace)
 
         self._setup_shortcuts()
         self._bind_viewmodels()
 
-        # Apply initial theme using ThemeService
+        # Apply initial theme
         self._apply_theme(self._theme_service.current_theme)
 
+        # Legacy store binding
         self._store.state_changed.connect(self._on_state_changed)
 
         logger.info("[MainWindow] Initialized with MVVM and ThemeService")
 
     # =========================================================================
-    # Click-Outside Detection (Optimized)
+    # Click-Outside Detection
     # =========================================================================
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -116,6 +121,7 @@ class MainWindow(QMainWindow):
         if not self._shell_vm.right_panel_expanded:
             return
 
+        # Don't close if clicking inside right panel
         if self._is_point_in_widget(global_pos, self.ui.right_slide_menu_frame):
             return
 
@@ -149,13 +155,16 @@ class MainWindow(QMainWindow):
 
     def _bind_viewmodels(self) -> None:
         """Bind to ViewModel signals."""
+        # Device ViewModel
         self._device_vm.devicesChanged.connect(self._on_devices_updated)
         self._device_vm.selectionChanged.connect(self._on_selection_changed)
         self._device_vm.stateChanged.connect(self._on_device_state_changed)
 
+        # Gantt ViewModel
         self._gantt_vm.chartReady.connect(self._on_chart_ready)
         self._gantt_vm.loadingStateChanged.connect(self._on_gantt_loading_changed)
 
+        # Shell ViewModel
         self._shell_vm.themeChanged.connect(self._on_theme_changed)
         self._shell_vm.pageChanged.connect(self._on_page_changed)
         self._shell_vm.sidebarChanged.connect(self._on_sidebar_changed)
@@ -174,6 +183,7 @@ class MainWindow(QMainWindow):
 
         is_dark = self._theme_service.is_dark
 
+        # Convert to dict if needed
         devices_dict = {}
         for code, device in devices.items():
             if hasattr(device, "to_dict"):
@@ -234,6 +244,7 @@ class MainWindow(QMainWindow):
             for seg in chart.segments
         ]
 
+        # Update both gantt widgets
         self.device_gantt_dashboard.render_device_gantt(
             device_code=chart.device_code,
             device_name=chart.device_name,
@@ -249,6 +260,7 @@ class MainWindow(QMainWindow):
             end_time=chart.end_time,
         )
 
+        # Update legends
         gantt_data = {chart.device_code: segments}
         self.legend_dashboard.render_stats(gantt_data, chart.start_time, chart.end_time)
         self.legend_orders.render_stats(gantt_data, chart.start_time, chart.end_time)
@@ -317,12 +329,14 @@ class MainWindow(QMainWindow):
     # =========================================================================
 
     def _setup_shortcuts(self) -> None:
+        """Setup keyboard shortcuts."""
         QShortcut(QKeySequence("Ctrl+T"), self).activated.connect(self._shell_vm.toggle_theme)
         QShortcut(QKeySequence("Ctrl+M"), self).activated.connect(self._shell_vm.toggle_sidebar)
         QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(self._shell_vm.toggle_right_panel)
         QShortcut(QKeySequence("Escape"), self).activated.connect(self._on_escape_pressed)
 
     def _on_escape_pressed(self) -> None:
+        """Handle Escape key."""
         if self._shell_vm.right_panel_expanded:
             self._shell_vm.close_right_panel()
         self._device_vm.deselect_device()
@@ -332,10 +346,12 @@ class MainWindow(QMainWindow):
     # =========================================================================
 
     def _apply_initial_layout(self) -> None:
+        """Apply initial layout dimensions."""
         self.ui.right_slide_menu_frame.setFixedWidth(Layout.RIGHT_PANEL_COLLAPSED_WIDTH)
         self.ui.left_slide_menu_frame.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
         self.ui.title_frame.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
 
+        # Set initial page
         if hasattr(self.ui, "dashboard_page"):
             self.ui.stackedWidget.setCurrentWidget(self.ui.dashboard_page)
         elif hasattr(self.ui, "daboard_page"):
@@ -380,59 +396,64 @@ class MainWindow(QMainWindow):
         )
 
     def _init_workspace(self) -> None:
+        """Initialize workspace widgets (deferred)."""
         logger.info("[MainWindow] Initializing workspace...")
 
         try:
             dash_config = self._shell_vm.get_layout_config("daboard_midle_frame_1")
             orders_config = self._shell_vm.get_layout_config("orders_midle_frame_1")
 
+            # Dashboard page widgets - inject ThemeService
             self.canvas_dashboard = self._embed(
                 self.ui.daboard_midle_frame_1,
                 DeviceCanvasWidget(
                     area_key="dashboard",
                     layout_config=dash_config,
-                    theme_service=self._theme_service,  # <-- FIXED
+                    theme_service=self._theme_service,
                     parent=self,
                 ),
             )
             self.device_gantt_dashboard = self._embed(
                 self.ui.daboard_midle_frame_2,
-                DeviceGanttDisplayWidget(self),
+                DeviceGanttDisplayWidget(theme_service=self._theme_service, parent=self),  # NEW
             )
             self.legend_dashboard = self._embed(
                 self.ui.daboard_bottom_frame,
-                LegendWidget(self),
+                LegendWidget(theme_service=self._theme_service, parent=self),  # NEW
             )
 
+            # Orders page widgets - inject ThemeService
             self.canvas_orders = self._embed(
                 self.ui.orders_midle_frame_1,
                 DeviceCanvasWidget(
                     area_key="orders",
                     layout_config=orders_config,
-                    theme_service=self._theme_service,  # <-- FIXED
+                    theme_service=self._theme_service,
                     parent=self,
                 ),
             )
             self.device_gantt_orders = self._embed(
                 self.ui.orders_midle_frame_2,
-                DeviceGanttDisplayWidget(self),
+                DeviceGanttDisplayWidget(theme_service=self._theme_service, parent=self),  # NEW
             )
             self.legend_orders = self._embed(
                 self.ui.orders_bottom_frame,
-                LegendWidget(self),
+                LegendWidget(theme_service=self._theme_service, parent=self),  # NEW
             )
 
+            # Connect canvas signals
             self.canvas_dashboard.device_clicked.connect(self._on_device_single_clicked)
             self.canvas_orders.device_clicked.connect(self._on_device_single_clicked)
-
             self.canvas_dashboard.device_double_clicked.connect(self._on_device_double_clicked)
             self.canvas_orders.device_double_clicked.connect(self._on_device_double_clicked)
 
+            # Apply constraints
             self.ui.daboard_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
             self.ui.orders_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
 
             self._components_ready = True
 
+            # Initial render
             devices = self._device_vm.devices
             if devices:
                 is_dark = self._theme_service.is_dark
@@ -440,6 +461,7 @@ class MainWindow(QMainWindow):
                 self.canvas_dashboard.render_state(devices_dict, is_dark)
                 self.canvas_orders.render_state(devices_dict, is_dark)
 
+            # Show placeholders
             self.device_gantt_dashboard.show_placeholder()
             self.device_gantt_orders.show_placeholder()
 
@@ -449,6 +471,7 @@ class MainWindow(QMainWindow):
             logger.error(f"[MainWindow] Workspace init failed: {e}", exc_info=True)
 
     def _embed(self, parent: QWidget, widget: QWidget) -> QWidget:
+        """Embed widget into parent container."""
         layout = parent.layout()
         if not layout:
             layout = QVBoxLayout(parent)
@@ -457,18 +480,25 @@ class MainWindow(QMainWindow):
         layout.addWidget(widget)
         return widget
 
+    # =========================================================================
+    # Theme Application
+    # =========================================================================
+
     def _apply_theme(self, theme: str) -> None:
         """Apply theme using ThemeService."""
         self._theme_service.set_theme(theme)
 
+        # Apply global stylesheet
         stylesheet = self._theme_service.get_stylesheet()
         if stylesheet:
             self.setStyleSheet(stylesheet)
             self.style().unpolish(self)
             self.style().polish(self)
 
+        # Apply page-specific styles
         self._apply_page_theme()
 
+        # Update widgets that need explicit theme update
         if self._components_ready:
             is_dark = self._theme_service.is_dark
             self.device_gantt_dashboard.set_theme(is_dark)
@@ -478,44 +508,49 @@ class MainWindow(QMainWindow):
         """Apply page theme using ThemeService tokens."""
         tokens = self._theme_service.tokens
 
+        # Page backgrounds
+        page_style = f"background-color: {tokens.surface_app};"
         for page_name in ["daboard_page", "orders_page"]:
             page = getattr(self.ui, page_name, None)
             if page:
-                page.setStyleSheet(f"background-color: {tokens.stack_bg};")
+                page.setStyleSheet(page_style)
 
+        # Top frames
+        top_frame_style = f"""
+            QFrame {{
+                background-color: {tokens.surface_card};
+                border: none;
+                border-bottom: 1px solid {tokens.border_default};
+            }}
+        """
         for frame_name in ["daboard_top_frame", "orders_top_frame"]:
             frame = getattr(self.ui, frame_name, None)
             if frame:
-                frame.setStyleSheet(
-                    f"""
-                    QFrame {{
-                        background-color: {tokens.get_rgba("frame.bg", 0.8)};
-                        border: none;
-                        border-bottom: 1px solid {tokens.get_rgba("border", 0.6)};
-                    }}
-                """
-                )
+                frame.setStyleSheet(top_frame_style)
 
+        # Bottom frames
+        bottom_frame_style = f"""
+            QFrame {{
+                background-color: {tokens.surface_card};
+                border: none;
+                border-top: 1px solid {tokens.border_default};
+            }}
+        """
         for frame_name in ["daboard_bottom_frame", "orders_bottom_frame"]:
             frame = getattr(self.ui, frame_name, None)
             if frame:
-                frame.setStyleSheet(
-                    f"""
-                    QFrame {{
-                        background-color: {tokens.get_rgba("frame.bg", 0.8)};
-                        border: none;
-                        border-top: 1px solid {tokens.get_rgba("border", 0.6)};
-                    }}
-                """
-                )
+                frame.setStyleSheet(bottom_frame_style)
 
     def _switch_page(self, page: str) -> None:
+        """Switch to specified page."""
+        # Handle legacy naming
         page_name = page.replace("dashboard", "daboard") if "dashboard" in page else page
         target = getattr(self.ui, page_name, None)
         if target and self.ui.stackedWidget.currentWidget() != target:
             self.ui.stackedWidget.setCurrentWidget(target)
 
     def _update_lcd_displays(self, state: Dict[str, Any]) -> None:
+        """Update LCD displays with factory summary."""
         summary = select_factory_summary(state)
         if hasattr(self.ui, "lcdNumber_20"):
             self.ui.lcdNumber_20.display(summary.get("total_output", 0))
@@ -523,7 +558,7 @@ class MainWindow(QMainWindow):
             self.ui.lcdNumber_15.display(summary.get("yield_rate", 0))
 
     def _on_state_changed(self, state: Dict[str, Any]) -> None:
-        """Handle store state changes (for shell components)."""
+        """Handle store state changes (for shell components - legacy)."""
         self.sidebar.render(state)
         self.header.render(state)
         self.right_panel.render(state)

@@ -2,17 +2,18 @@
 """
 Icon Provider - Application-level icon caching.
 
-Eliminates:
-- Redundant QIcon loading
-- Per-widget icon instantiation
-- Memory waste from duplicate icons
+Responsibilities:
+- Load and cache QIcon/QPixmap instances
+- Resolve theme-appropriate paths
+- Invalidate cache on theme change
+- Provide fallbacks for missing icons
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QIcon, QPixmap
@@ -34,10 +35,11 @@ class IconProvider:
     - Theme-aware icon resolution
     - Automatic cache invalidation on theme change
     - Size-specific pixmap caching
+    - Fallback handling for missing icons
     - Backward compatible with string paths
     """
 
-    # Default icon sizes
+    # Default sizes
     DEFAULT_SIZE = QSize(24, 24)
     SMALL_SIZE = QSize(16, 16)
     LARGE_SIZE = QSize(32, 32)
@@ -51,7 +53,7 @@ class IconProvider:
     def __init__(self, theme_service: "ThemeService"):
         self._theme_service = theme_service
 
-        # Cache: (resolved_path) -> QIcon
+        # Cache: resolved_path -> QIcon
         self._icon_cache: Dict[str, QIcon] = {}
 
         # Pixmap cache: (resolved_path, width, height) -> QPixmap
@@ -60,21 +62,33 @@ class IconProvider:
         # Track theme for cache invalidation
         self._cached_theme: str = theme_service.current_theme
 
+        # Track failed loads to avoid repeated attempts
+        self._failed_paths: set = set()
+
         # Connect to theme changes
         theme_service.themeChanged.connect(self._on_theme_changed)
 
     def _on_theme_changed(self, new_theme: str) -> None:
         """Clear caches when theme changes."""
         if new_theme != self._cached_theme:
-            logger.debug(f"[IconProvider] Theme changed to {new_theme}, clearing {len(self._icon_cache)} cached icons")
+            icon_count = len(self._icon_cache)
+            pixmap_count = len(self._pixmap_cache)
+
             self._icon_cache.clear()
             self._pixmap_cache.clear()
+            self._failed_paths.clear()
             self._cached_theme = new_theme
+
+            logger.debug(f"[IconProvider] Theme changed to {new_theme}, " f"cleared {icon_count} icons and {pixmap_count} pixmaps")
 
     @property
     def is_dark(self) -> bool:
         """Check if dark theme is active."""
         return self._theme_service.is_dark
+
+    # =========================================================================
+    # Path Resolution
+    # =========================================================================
 
     def resolve_path(self, icon: Union[Icons, DeviceIcons, str]) -> str:
         """
@@ -94,19 +108,17 @@ class IconProvider:
     def _resolve_enum(self, icon: Union[Icons, DeviceIcons]) -> str:
         """Resolve enum-based icon."""
         definition = icon.value
-
-        if self.is_dark and definition.has_themed_variant:
-            return definition.dark_path
-        return definition.light_path
+        return definition.get_path(self.is_dark)
 
     def _resolve_legacy_path(self, path: str) -> str:
         """
         Resolve legacy string path (backward compatibility).
 
-        Handles:
+        Handles various input formats:
         - ":/icon/dashboard.svg"
         - ":/icon/dashboard-white.svg"
         - "dashboard"
+        - "/icon/devices/ACL.svg"
         """
         # Strip existing theme suffix for normalization
         if self._THEME_SUFFIX_PATTERN.search(path):
@@ -116,6 +128,7 @@ class IconProvider:
         match = self._RESOURCE_PATH_PATTERN.match(path)
         if match:
             base_name = match.group(1)
+            ext = match.group(2)
 
             # Try Icons enum
             for icon in Icons:
@@ -144,6 +157,10 @@ class IconProvider:
 
         return path
 
+    # =========================================================================
+    # Icon Loading
+    # =========================================================================
+
     def get_icon(self, icon: Union[Icons, DeviceIcons, str]) -> QIcon:
         """
         Get cached QIcon for the given icon.
@@ -152,17 +169,29 @@ class IconProvider:
             icon: Icon enum or legacy path string
 
         Returns:
-            Cached QIcon instance
+            Cached QIcon instance (may be null if load failed)
         """
         path = self.resolve_path(icon)
 
-        if path not in self._icon_cache:
-            qicon = QIcon(path)
-            if qicon.isNull():
-                logger.warning(f"[IconProvider] Failed to load icon: {path}")
-            self._icon_cache[path] = qicon
+        if path in self._icon_cache:
+            return self._icon_cache[path]
 
-        return self._icon_cache[path]
+        # Try to load
+        qicon = QIcon(path)
+
+        if qicon.isNull():
+            if path not in self._failed_paths:
+                logger.warning(f"[IconProvider] Failed to load icon: {path}")
+                self._failed_paths.add(path)
+
+            # Try fallback
+            fallback = self._get_fallback_icon(icon)
+            if fallback and not fallback.isNull():
+                self._icon_cache[path] = fallback
+                return fallback
+
+        self._icon_cache[path] = qicon
+        return qicon
 
     def get_pixmap(self, icon: Union[Icons, DeviceIcons, str], size: Optional[QSize] = None) -> QPixmap:
         """
@@ -179,12 +208,26 @@ class IconProvider:
         path = self.resolve_path(icon)
         cache_key = (path, size.width(), size.height())
 
-        if cache_key not in self._pixmap_cache:
-            qicon = self.get_icon(icon)
-            pixmap = qicon.pixmap(size)
-            self._pixmap_cache[cache_key] = pixmap
+        if cache_key in self._pixmap_cache:
+            return self._pixmap_cache[cache_key]
 
-        return self._pixmap_cache[cache_key]
+        qicon = self.get_icon(icon)
+        pixmap = qicon.pixmap(size)
+        self._pixmap_cache[cache_key] = pixmap
+        return pixmap
+
+    def _get_fallback_icon(self, icon: Union[Icons, DeviceIcons, str]) -> Optional[QIcon]:
+        """Get fallback icon for missing icons."""
+        # For device icons, use logo as fallback
+        if isinstance(icon, DeviceIcons):
+            logo_path = Icons.LOGO.value.light_path
+            return QIcon(logo_path)
+
+        return None
+
+    # =========================================================================
+    # Device Icons
+    # =========================================================================
 
     def get_device_icon(self, equipment_code: str) -> QIcon:
         """Get icon for a device by equipment code."""
@@ -192,7 +235,6 @@ class IconProvider:
         if device_icon:
             return self.get_icon(device_icon)
 
-        # Fallback for unknown devices
         logger.warning(f"[IconProvider] Unknown device code: {equipment_code}")
         return self.get_icon(Icons.LOGO)
 
@@ -201,20 +243,41 @@ class IconProvider:
         device_icon = DeviceIcons.from_code(equipment_code)
         if device_icon:
             return self.get_pixmap(device_icon, size)
-
         return self.get_pixmap(Icons.LOGO, size)
 
-    def preload(self, icons: list) -> None:
-        """Preload icons into cache for faster access."""
+    # =========================================================================
+    # Batch Operations
+    # =========================================================================
+
+    def preload(self, icons: List[Union[Icons, DeviceIcons]]) -> int:
+        """
+        Preload icons into cache for faster access.
+
+        Args:
+            icons: List of icons to preload
+
+        Returns:
+            Number of icons successfully loaded
+        """
+        loaded = 0
         for icon in icons:
-            self.get_icon(icon)
-        logger.debug(f"[IconProvider] Preloaded {len(icons)} icons")
+            qicon = self.get_icon(icon)
+            if not qicon.isNull():
+                loaded += 1
+
+        logger.debug(f"[IconProvider] Preloaded {loaded}/{len(icons)} icons")
+        return loaded
 
     def clear_cache(self) -> None:
         """Clear all caches."""
         self._icon_cache.clear()
         self._pixmap_cache.clear()
-        logger.debug("[IconProvider] Cache cleared")
+        self._failed_paths.clear()
+        logger.debug("[IconProvider] All caches cleared")
+
+    # =========================================================================
+    # Statistics
+    # =========================================================================
 
     @property
     def cache_stats(self) -> Dict[str, int]:
@@ -222,6 +285,7 @@ class IconProvider:
         return {
             "icon_cache_size": len(self._icon_cache),
             "pixmap_cache_size": len(self._pixmap_cache),
+            "failed_paths": len(self._failed_paths),
         }
 
 
@@ -251,4 +315,13 @@ def get_icon_provider(theme_service: Optional["ThemeService"] = None) -> IconPro
     return _provider_instance
 
 
-__all__ = ["IconProvider", "get_icon_provider"]
+def create_icon_provider(theme_service: "ThemeService") -> IconProvider:
+    """Create a new IconProvider instance (for testing)."""
+    return IconProvider(theme_service)
+
+
+__all__ = [
+    "IconProvider",
+    "get_icon_provider",
+    "create_icon_provider",
+]

@@ -9,8 +9,8 @@ Features:
 - Auto-refresh every 3 seconds for latest status
 - Initial history sync on startup
 - Proper shutdown handling
-- Proper ViewModel dependency injection
 - Centralized ThemeService management
+- Centralized IconService management
 - Icon preloading for faster startup
 """
 
@@ -23,8 +23,8 @@ from PySide6.QtCore import QObject, QTimer
 
 from ..constants.timing import Timing
 from ..resources.icons import Icons, DeviceIcons
-from ..services.page_device_manager import PageDeviceManager
 from ..services.theme_service import ThemeService, get_theme_service
+from ..services.icon_service import IconService, get_icon_service
 from ..state.reducers import INITIAL_STATE
 from ..state.store import Store
 from ..viewmodels import (
@@ -37,6 +37,7 @@ from ..views.main_window import MainWindow
 if TYPE_CHECKING:
     from iFactory.shared.di.app_container import AppContainer
     from iFactory.application.services.sync_orchestrator import SyncOrchestrator
+    from ..services.page_device_manager import PageDeviceManager
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +52,9 @@ class UIContainer(QObject):
     - Uses MVVM pattern with reactive signals
     - ViewModels own UI state and orchestrate Use Cases
     - Views bind to ViewModel signals (passive consumers)
-    - Redux Store for cross-cutting state (theme, selection)
-    - Proper dependency injection between ViewModels
-    - Centralized ThemeService for all theming needs
-    - Centralized icon management with caching
+    - Redux Store for cross-cutting state
+    - Centralized ThemeService for theming
+    - Centralized IconService for icon management
     """
 
     def __init__(self, app_container: "AppContainer"):
@@ -64,10 +64,11 @@ class UIContainer(QObject):
         self._initial_load_done = False
         self._is_shutting_down = False
 
-        # Core components
+        # Core services
         self._store: Optional[Store] = None
-        self._page_manager: Optional[PageDeviceManager] = None
+        self._page_manager: Optional["PageDeviceManager"] = None
         self._theme_service: Optional[ThemeService] = None
+        self._icon_service: Optional[IconService] = None
         self._main_window: Optional[MainWindow] = None
 
         # ViewModels
@@ -88,14 +89,17 @@ class UIContainer(QObject):
 
         logger.info("[UIContainer] Initializing with MVVM architecture...")
 
-        # Initialize ThemeService FIRST - it's needed by ViewModels and Views
+        # Initialize services FIRST
         self._init_theme_service()
+        self._init_icon_service()
 
-        # Preload commonly used icons
+        # Preload icons for faster startup
         self._preload_icons()
 
+        # Initialize remaining components
         self._init_store()
         self._init_page_manager()
+        self._preload_device_icons()
         self._init_sync_orchestrator()
         self._init_viewmodels()
         self._wire_viewmodel_dependencies()
@@ -111,25 +115,20 @@ class UIContainer(QObject):
         self._theme_service = get_theme_service()
         logger.info("[UIContainer] ThemeService initialized")
 
+    def _init_icon_service(self) -> None:
+        """Initialize the centralized icon service."""
+        self._icon_service = get_icon_service(self._theme_service)
+        logger.info("[UIContainer] IconService initialized")
+
     def _preload_icons(self) -> None:
         """Preload commonly used icons for faster startup."""
-        if not self._theme_service:
+        if not self._icon_service:
             return
 
         # Preload navigation icons
-        nav_icons = [
-            Icons.DASHBOARD,
-            Icons.ORDERS,
-            Icons.SETTINGS,
-            Icons.LEFT_PANEL_OPEN,
-            Icons.LEFT_PANEL_CLOSE,
-            Icons.LOGO,
-            Icons.DASHBOARD_LAYOUT,
-            Icons.ORDERS_LAYOUT,
-        ]
-
-        self._theme_service.preload_icons(nav_icons)
-        logger.info(f"[UIContainer] Preloaded {len(nav_icons)} navigation icons")
+        count = self._icon_service.preload_navigation_icons()
+        count += self._icon_service.preload_action_icons()
+        logger.info(f"[UIContainer] Preloaded {count} navigation/action icons")
 
     def _init_store(self) -> None:
         """Initialize Redux-like store for cross-cutting state."""
@@ -137,6 +136,8 @@ class UIContainer(QObject):
 
     def _init_page_manager(self) -> None:
         """Initialize page device manager."""
+        from ..services.page_device_manager import PageDeviceManager
+
         config_path = None
         try:
             from iFactory.infrastructure.configuration.paths import PATHS
@@ -149,37 +150,29 @@ class UIContainer(QObject):
         all_devices = self._page_manager.get_all_devices()
         logger.info(f"[UIContainer] PageDeviceManager: {len(all_devices)} devices")
 
-        # Preload device icons based on available devices
-        self._preload_device_icons()
-
     def _preload_device_icons(self) -> None:
         """Preload device icons based on page manager devices."""
-        if not self._theme_service or not self._page_manager:
+        if not self._icon_service or not self._page_manager:
             return
 
         try:
-            # Get all device IDs from page manager
             all_devices = self._page_manager.get_all_devices()
 
-            # Extract equipment codes (first 3 characters typically)
+            # Extract unique equipment codes
             device_codes = set()
             for device_id in all_devices:
-                # Extract base code (e.g., "AMX" from "AMX01")
                 if len(device_id) >= 3:
-                    base_code = "".join(c for c in device_id[:3] if c.isalpha())
-                    if base_code:
-                        device_codes.add(base_code.upper())
+                    # Handle special cases like CA1, CA2
+                    if device_id.startswith("CA1") or device_id.startswith("CA2"):
+                        device_codes.add(device_id[:3])
+                    else:
+                        base_code = "".join(c for c in device_id[:3] if c.isalpha())
+                        if base_code:
+                            device_codes.add(base_code.upper())
 
-            # Filter to valid device icons that exist in DeviceIcons enum
-            device_icons = []
-            for code in device_codes:
-                device_icon = DeviceIcons.from_code(code)
-                if device_icon:
-                    device_icons.append(device_icon)
-
-            if device_icons:
-                self._theme_service.preload_icons(device_icons)
-                logger.info(f"[UIContainer] Preloaded {len(device_icons)} device icons")
+            # Preload
+            count = self._icon_service.preload_device_icons(list(device_codes))
+            logger.info(f"[UIContainer] Preloaded {count} device icons")
 
         except Exception as e:
             logger.warning(f"[UIContainer] Failed to preload device icons: {e}")
@@ -254,7 +247,7 @@ class UIContainer(QObject):
         except Exception as e:
             logger.warning(f"[UIContainer] Could not get remote config: {e}")
 
-        # 1. Shell ViewModel - inject ThemeService
+        # 1. Shell ViewModel
         self._shell_vm = ShellViewModel(
             theme_service=self._theme_service,
             config_path=config_path,
@@ -262,12 +255,12 @@ class UIContainer(QObject):
         )
         self._shell_vm.initialize()
 
-        # 2. Device List ViewModel (will need shell_vm later)
+        # 2. Device List ViewModel
         self._device_vm = DeviceListViewModel(
             page_manager=self._page_manager,
             remote_source=remote_source,
             sync_orchestrator=self._sync_orchestrator,
-            shell_vm=None,  # Set later in _wire_viewmodel_dependencies
+            shell_vm=None,
         )
         self._device_vm.initialize()
 
@@ -278,13 +271,13 @@ class UIContainer(QObject):
         logger.info("[UIContainer] ViewModels initialized")
 
     def _wire_viewmodel_dependencies(self) -> None:
-        """Wire up cross-ViewModel dependencies after initial creation."""
+        """Wire up cross-ViewModel dependencies."""
         if self._device_vm and self._shell_vm:
             self._device_vm.set_shell_viewmodel(self._shell_vm)
             logger.info("[UIContainer] Wired DeviceVM -> ShellVM")
 
     def _init_main_window(self) -> None:
-        """Initialize main window with ViewModels and ThemeService."""
+        """Initialize main window."""
         self._main_window = MainWindow(
             store=self._store,
             shell_vm=self._shell_vm,
@@ -295,7 +288,7 @@ class UIContainer(QObject):
         )
 
     def _connect_signals(self) -> None:
-        """Connect ViewModel signals to Store for cross-cutting state."""
+        """Connect ViewModel signals to Store."""
         if self._device_vm and self._store:
             self._device_vm.devicesChanged.connect(self._on_devices_changed)
             self._device_vm.selectionChanged.connect(self._on_selection_changed)
@@ -311,14 +304,14 @@ class UIContainer(QObject):
             self._gantt_vm.chartReady.connect(self._on_chart_ready)
 
     def _init_auto_refresh(self) -> None:
-        """Initialize auto-refresh timer for latest status."""
+        """Initialize auto-refresh timer."""
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(AUTO_REFRESH_INTERVAL_MS)
         self._refresh_timer.timeout.connect(self._on_auto_refresh)
         logger.info(f"[UIContainer] Auto-refresh: {AUTO_REFRESH_INTERVAL_MS}ms")
 
     # =========================================================================
-    # Signal Handlers (ViewModel -> Store sync)
+    # Signal Handlers
     # =========================================================================
 
     def _on_devices_changed(self, devices: dict) -> None:
@@ -364,11 +357,8 @@ class UIContainer(QObject):
             self._store.dispatch(toggle_sidebar())
 
     def _on_right_panel_changed(self, expanded: bool) -> None:
-        """Sync right panel state to store."""
         state = self._store.get_state()
-        current_expanded = state.get("right_panel_expanded", False)
-
-        if current_expanded != expanded:
+        if state.get("right_panel_expanded") != expanded:
             from ..state.actions import toggle_right_panel
 
             self._store.dispatch(toggle_right_panel())
@@ -390,9 +380,11 @@ class UIContainer(QObject):
     # =========================================================================
 
     def schedule_deferred_data_load(self) -> None:
+        """Schedule deferred data loading."""
         QTimer.singleShot(Timing.DEFERRED_LOAD_DELAY_MS, self._start_data_loading)
 
     def _start_data_loading(self) -> None:
+        """Start initial data loading."""
         if self._initial_load_done:
             return
         self._initial_load_done = True
@@ -417,21 +409,25 @@ class UIContainer(QObject):
     def get_shell_viewmodel(self) -> Optional[ShellViewModel]:
         return self._shell_vm
 
-    def get_page_manager(self) -> Optional[PageDeviceManager]:
+    def get_page_manager(self) -> Optional["PageDeviceManager"]:
         return self._page_manager
 
     def get_store(self) -> Optional[Store]:
         return self._store
 
     def get_theme_service(self) -> Optional[ThemeService]:
-        """Get the centralized theme service."""
         return self._theme_service
+
+    def get_icon_service(self) -> Optional[IconService]:
+        """Get the centralized icon service."""
+        return self._icon_service
 
     # =========================================================================
     # Lifecycle
     # =========================================================================
 
     def shutdown(self) -> None:
+        """Shutdown all components."""
         if not self._is_initialized:
             return
 
@@ -451,6 +447,10 @@ class UIContainer(QObject):
 
         if self._shell_vm:
             self._shell_vm.dispose()
+
+        # Clear icon cache
+        if self._icon_service:
+            self._icon_service.clear_cache()
 
         if self._main_window:
             self._main_window.close()

@@ -1,14 +1,15 @@
 # File: presentation/views/widgets/device_gantt_widget.py
 """
 Optimized Device Gantt Widget - Reduced animation overhead.
+Uses ThemeService for theming.
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QRectF, Signal, QTimer
+from PySide6.QtCore import Qt, QRectF, Signal, QTimer, Slot
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -26,6 +27,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+if TYPE_CHECKING:
+    from ...services.theme_service import ThemeService
 
 logger = logging.getLogger(__name__)
 
@@ -101,28 +105,37 @@ class GanttSegmentItem(QGraphicsRectItem):
 
 class DeviceGanttDisplayWidget(QWidget):
     """
-    Optimized Gantt widget.
+    Optimized Gantt widget with ThemeService.
 
-    Changes:
+    Features:
     - Reduced animation FPS (10 FPS instead of 20)
     - Stop animation when not visible
     - Batch scene updates
+    - ThemeService injection
     """
 
     device_clicked = Signal(str)
 
     # Animation settings
-    LOADING_FPS = 10  # Reduced from 20
+    LOADING_FPS = 10
     LOADING_INTERVAL_MS = 1000 // LOADING_FPS
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, theme_service: Optional["ThemeService"] = None, parent: Optional[QWidget] = None):
         super().__init__(parent)
+
+        # Get theme service
+        if theme_service is None:
+            from ...services.theme_service import get_theme_service
+
+            theme_service = get_theme_service()
+
+        self._theme_service = theme_service
         self._device_code: Optional[str] = None
         self._device_name: str = ""
         self._segments: List[Dict[str, Any]] = []
         self._start_time: Optional[datetime] = None
         self._end_time: Optional[datetime] = None
-        self._is_dark_theme: bool = False
+        self._is_dark_theme: bool = self._theme_service.is_dark
         self._is_loading: bool = False
         self._rendered_count: int = 0
 
@@ -131,6 +144,20 @@ class DeviceGanttDisplayWidget(QWidget):
         self._loading_timer: Optional[QTimer] = None
 
         self._setup_ui()
+        self._theme_service.themeChanged.connect(self._on_theme_changed)
+
+    @Slot(str)
+    def _on_theme_changed(self, theme: str) -> None:
+        """Handle theme change."""
+        self._is_dark_theme = self._theme_service.is_dark
+        self._apply_theme()
+        if self._device_code and self._segments:
+            self._render_timeline()
+
+    @property
+    def tokens(self):
+        """Get current theme tokens."""
+        return self._theme_service.tokens
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -147,8 +174,6 @@ class DeviceGanttDisplayWidget(QWidget):
         self._view.setMinimumHeight(20)
         self._view.setMaximumHeight(40)
         self._view.setMouseTracking(True)
-
-        # Optimize rendering
         self._view.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
         self._view.setCacheMode(QGraphicsView.CacheModeFlag.CacheBackground)
 
@@ -156,31 +181,25 @@ class DeviceGanttDisplayWidget(QWidget):
         self._apply_theme()
 
     def _apply_theme(self) -> None:
-        if self._is_dark_theme:
-            view_bg = "#1E293B"
-            border = "#334155"
-        else:
-            view_bg = "#F1F5F9"
-            border = "#E2E8F0"
+        """Apply theme styles."""
+        tokens = self.tokens
 
         self._view.setStyleSheet(
             f"""
             QGraphicsView#gantt_timeline_view {{
-                background-color: {view_bg};
-                border: 1px solid {border};
-                border-radius: 4px;
+                background-color: {tokens.surface_card};
+                border: 1px solid {tokens.border_default};
+                border-radius: {tokens.radius_sm};
             }}
         """
         )
 
     def set_theme(self, is_dark: bool) -> None:
-        if is_dark != self._is_dark_theme:
-            self._is_dark_theme = is_dark
-            self._apply_theme()
-            if self._device_code and self._segments:
-                self._render_timeline()
+        """Legacy method - now handled by themeChanged signal."""
+        pass  # Theme is now auto-updated via signal
 
     def show_placeholder(self) -> None:
+        """Show placeholder state."""
         self._stop_loading_animation()
         self._device_code = None
         self._segments = []
@@ -192,8 +211,9 @@ class DeviceGanttDisplayWidget(QWidget):
         view_height = max(self._view.viewport().height(), 20)
         self._scene.setSceneRect(0, 0, view_width, view_height)
 
-        text_color = QColor("#64748B")
-        font = QFont("Segoe UI", 9)
+        tokens = self.tokens
+        text_color = QColor(tokens.text_muted)
+        font = QFont(tokens.font_family, 9)
         text_item = self._scene.addSimpleText("Click device to view timeline", font)
         text_item.setBrush(QBrush(text_color))
         text_rect = text_item.boundingRect()
@@ -207,6 +227,7 @@ class DeviceGanttDisplayWidget(QWidget):
         start_time: datetime,
         end_time: datetime,
     ) -> None:
+        """Render device gantt chart."""
         logger.info(f"[GanttWidget] render: {device_code}, {len(segments)} segments")
 
         self._device_code = device_code
@@ -223,15 +244,13 @@ class DeviceGanttDisplayWidget(QWidget):
             self._render_timeline()
 
     def _start_loading_animation(self) -> None:
-        """Start loading shimmer animation (optimized FPS)."""
+        """Start loading shimmer animation."""
         if self._loading_timer is None:
             self._loading_timer = QTimer(self)
             self._loading_timer.timeout.connect(self._update_loading_animation)
 
         self._loading_offset = 0
         self._loading_timer.start(self.LOADING_INTERVAL_MS)
-
-        # Render initial loading state
         self._render_timeline()
 
     def _stop_loading_animation(self) -> None:
@@ -242,14 +261,14 @@ class DeviceGanttDisplayWidget(QWidget):
     def _update_loading_animation(self) -> None:
         """Update loading animation frame."""
         if not self.isVisible():
-            return  # Skip if not visible
+            return
 
         self._loading_offset = (self._loading_offset + 0.05) % 1.0
         if self._is_loading and not self._segments:
             self._render_loading_only()
 
     def _render_loading_only(self) -> None:
-        """Render only loading bar (optimized for animation)."""
+        """Render only loading bar."""
         view_width = self._view.viewport().width() - 2
         view_height = self._view.viewport().height() - 2
 
@@ -258,7 +277,6 @@ class DeviceGanttDisplayWidget(QWidget):
         if view_height < 10:
             view_height = 30
 
-        # Clear and re-render loading bar only
         self._scene.clear()
         self._scene.setSceneRect(0, 0, view_width, view_height)
 
@@ -268,6 +286,7 @@ class DeviceGanttDisplayWidget(QWidget):
         self._render_loading_bar(view_width, bar_height, bar_y)
 
     def _render_timeline(self) -> None:
+        """Render the timeline."""
         self._scene.clear()
         self._rendered_count = 0
 
@@ -290,7 +309,8 @@ class DeviceGanttDisplayWidget(QWidget):
         self._scene.setSceneRect(0, 0, view_width, view_height)
 
         # Background
-        bg_color = QColor("#1E293B" if self._is_dark_theme else "#F8FAFC")
+        tokens = self.tokens
+        bg_color = QColor(tokens.surface_card)
         self._scene.addRect(
             QRectF(0, 0, view_width, view_height),
             QPen(Qt.PenStyle.NoPen),
@@ -313,18 +333,15 @@ class DeviceGanttDisplayWidget(QWidget):
         self._render_current_time_indicator(view_width, view_height, total_seconds)
 
     def _render_loading_bar(self, view_width: float, bar_height: float, bar_y: float) -> None:
-        """Render animated loading state bar."""
+        """Render animated loading bar."""
+        tokens = self.tokens
         gradient = QLinearGradient(0, 0, view_width, 0)
 
         shimmer_pos = self._loading_offset
         shimmer_width = 0.3
 
-        if self._is_dark_theme:
-            base_color = QColor("#334155")
-            highlight_color = QColor("#475569")
-        else:
-            base_color = QColor("#E2E8F0")
-            highlight_color = QColor("#CBD5E1")
+        base_color = QColor(tokens.border_default)
+        highlight_color = QColor(tokens.border_strong)
 
         gradient.setColorAt(0, base_color)
         if shimmer_pos > shimmer_width:
@@ -337,8 +354,8 @@ class DeviceGanttDisplayWidget(QWidget):
         loading_rect = QRectF(0, bar_y, view_width, bar_height)
         self._scene.addRect(loading_rect, QPen(Qt.PenStyle.NoPen), QBrush(gradient))
 
-        text_color = QColor("#94A3B8")
-        font = QFont("Segoe UI", 8)
+        text_color = QColor(tokens.text_muted)
+        font = QFont(tokens.font_family, 8)
         text_item = self._scene.addSimpleText("Loading timeline...", font)
         text_item.setBrush(QBrush(text_color))
         text_rect = text_item.boundingRect()
@@ -346,11 +363,12 @@ class DeviceGanttDisplayWidget(QWidget):
 
     def _render_no_data_bar(self, view_width: float, bar_height: float, bar_y: float) -> None:
         """Render no-data state bar."""
+        tokens = self.tokens
         no_data_rect = QRectF(0, bar_y, view_width, bar_height)
         no_data_item = self._scene.addRect(
             no_data_rect,
             QPen(Qt.PenStyle.NoPen),
-            QBrush(QColor("#475569" if self._is_dark_theme else "#CBD5E1")),
+            QBrush(QColor(tokens.text_muted)),
         )
         no_data_item.setToolTip(f"<b>{self._device_name}</b><br>" f"<small>No history data available for the last 24 hours.</small>")
 
@@ -362,6 +380,7 @@ class DeviceGanttDisplayWidget(QWidget):
         bar_y: float,
         total_seconds: float,
     ) -> None:
+        """Render a segment."""
         start = segment.get("start_time")
         end = segment.get("end_time")
         status_code = segment.get("status_code", 0)
@@ -416,10 +435,12 @@ class DeviceGanttDisplayWidget(QWidget):
         view_height: float,
         total_seconds: float,
     ) -> None:
+        """Render hour markers."""
         if not self._start_time or not self._end_time:
             return
 
-        marker_color = QColor("#475569" if self._is_dark_theme else "#CBD5E1")
+        tokens = self.tokens
+        marker_color = QColor(tokens.border_default)
         marker_color.setAlpha(80)
 
         current = self._start_time.replace(minute=0, second=0, microsecond=0)
@@ -442,6 +463,7 @@ class DeviceGanttDisplayWidget(QWidget):
         view_height: float,
         total_seconds: float,
     ) -> None:
+        """Render current time indicator."""
         now = datetime.now()
         if not self._start_time or not self._end_time:
             return
@@ -450,7 +472,8 @@ class DeviceGanttDisplayWidget(QWidget):
             offset = (now - self._start_time).total_seconds()
             x = (offset / total_seconds) * view_width
 
-            pen = QPen(QColor("#EF4444"))
+            tokens = self.tokens
+            pen = QPen(QColor(tokens.error))
             pen.setWidth(2)
             line = self._scene.addLine(x, 0, x, view_height, pen)
             line.setToolTip(f"Now: {now.strftime('%H:%M:%S')}")

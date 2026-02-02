@@ -1,97 +1,188 @@
 # File: presentation/views/widgets/legend_widget.py
+"""
+Legend Widget - Status statistics display.
+
+Uses ThemeService for consistent theming.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ...constants.status import Status, StatusCode
-from ...resources.themes import get_theme_manager
+
+if TYPE_CHECKING:
+    from ...services.theme_service import ThemeService
+
+
+class LegendItem(QWidget):
+    """Individual legend item with color indicator and stats."""
+
+    def __init__(self, label: str, status_code: int, color: str, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._label = label
+        self._status_code = status_code
+        self._color = color
+        self._theme_service = theme_service
+
+        self._setup_ui()
+        self._theme_service.themeChanged.connect(self._on_theme_changed)
+        self._apply_theme()
+
+    def _setup_ui(self) -> None:
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        # Color indicator
+        self._color_box = QFrame()
+        self._color_box.setFixedSize(14, 14)
+        layout.addWidget(self._color_box)
+
+        # Text container
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(0)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Label
+        self._name_label = QLabel(self._label)
+        text_layout.addWidget(self._name_label)
+
+        # Stat value
+        self._stat_label = QLabel("0.0%")
+        text_layout.addWidget(self._stat_label)
+
+        layout.addLayout(text_layout)
+
+    @Slot(str)
+    def _on_theme_changed(self, theme: str) -> None:
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        tokens = self._theme_service.tokens
+        is_dark = self._theme_service.is_dark
+
+        # Color box
+        self._color_box.setStyleSheet(
+            f"""
+            background-color: {self._color};
+            border-radius: {tokens.radius_sm};
+            border: 1px solid {tokens.border_default};
+        """
+        )
+
+        # Name label
+        name_color = tokens.text_secondary if is_dark else tokens.text_primary
+        self._name_label.setStyleSheet(
+            f"""
+            font-size: {tokens.font_size_sm};
+            font-weight: {tokens.font_weight_semibold};
+            color: {name_color};
+        """
+        )
+
+        # Stat label
+        self._stat_label.setStyleSheet(
+            f"""
+            font-size: {tokens.font_size_xs};
+            color: {tokens.text_muted};
+        """
+        )
+
+    def set_value(self, percent: float) -> None:
+        """Update the percentage value."""
+        self._stat_label.setText(f"{percent:.1f}%")
+
+    def clear(self) -> None:
+        """Reset to default value."""
+        self._stat_label.setText("0.0%")
 
 
 class LegendWidget(QWidget):
-    def __init__(self, parent: QWidget = None):
+    """
+    Status legend with statistics.
+
+    Shows status distribution for the visible time range.
+    Uses ThemeService for consistent theming.
+    """
+
+    # Status configuration: (label, status_code)
+    STATUS_CONFIG = [
+        ("RUN", StatusCode.RUNNING),
+        ("STOP", StatusCode.STOPPED),
+        ("MAINT", StatusCode.MAINTENANCE),
+        ("ALARM", StatusCode.ALARM),
+        ("OFF", StatusCode.SHUTDOWN),
+    ]
+
+    def __init__(self, theme_service: Optional["ThemeService"] = None, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self._theme_manager = get_theme_manager()
-        self.setStyleSheet("background-color: transparent;")
-        self._stats_labels: Dict[str, QLabel] = {}
-        self._status_names_labels: Dict[str, QLabel] = {}
+
+        # Get theme service
+        if theme_service is None:
+            from ...services.theme_service import get_theme_service
+
+            theme_service = get_theme_service()
+
+        self._theme_service = theme_service
+        self._legend_items: Dict[str, LegendItem] = {}
+
         self._setup_ui()
+        self._theme_service.themeChanged.connect(self._on_theme_changed)
+        self._apply_theme()
 
     def _setup_ui(self) -> None:
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 5, 10, 5)
         layout.setSpacing(15)
-        layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-        title = QLabel("Status\n(24h)")
-        title.setStyleSheet("font-weight: bold; background-color: #64748b; color: white; " "padding: 2px 5px; border-radius: 3px; font-size: 10px;")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        # Title badge
+        self._title = QLabel("Status\n(24h)")
+        self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._title)
 
-        # Use Status class colors for consistency
-        status_map = [
-            ("RUN", Status.get_color(StatusCode.RUNNING), StatusCode.RUNNING),
-            ("STOP", Status.get_color(StatusCode.STOPPED), StatusCode.STOPPED),
-            ("MAINT", Status.get_color(StatusCode.MAINTENANCE), StatusCode.MAINTENANCE),
-            ("ALARM", Status.get_color(StatusCode.ALARM), StatusCode.ALARM),
-            ("OFF", Status.get_color(StatusCode.SHUTDOWN), StatusCode.SHUTDOWN),
-        ]
-
-        for label_text, color, status_code in status_map:
-            item = self._create_legend_item(label_text, color, status_code)
+        # Create legend items
+        for label, status_code in self.STATUS_CONFIG:
+            color = Status.get_color(status_code)
+            item = LegendItem(label=label, status_code=status_code, color=color, theme_service=self._theme_service, parent=self)
+            self._legend_items[label] = item
             layout.addWidget(item)
 
-    def _create_legend_item(self, label_text: str, color: str, status_code: int) -> QWidget:
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.addStretch()
 
-        color_box = QFrame()
-        color_box.setFixedSize(14, 14)
-        color_box.setStyleSheet(f"background-color: {color}; border-radius: 2px; border: 1px solid #555;")
+    @Slot(str)
+    def _on_theme_changed(self, theme: str) -> None:
+        self._apply_theme()
 
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(0)
+    def _apply_theme(self) -> None:
+        tokens = self._theme_service.tokens
 
-        lbl_name = QLabel(label_text)
-        lbl_name.setStyleSheet("font-size: 11px; font-weight: bold; color: #555;")
-        lbl_name.setProperty("status_code", status_code)
-        self._status_names_labels[label_text] = lbl_name
+        # Container
+        self.setStyleSheet("background-color: transparent;")
 
-        lbl_stat = QLabel("0.0%")
-        lbl_stat.setStyleSheet("font-size: 10px; color: #888;")
-        lbl_stat.setProperty("status_code", status_code)
-        self._stats_labels[label_text] = lbl_stat
-
-        text_layout.addWidget(lbl_name)
-        text_layout.addWidget(lbl_stat)
-
-        layout.addWidget(color_box)
-        layout.addLayout(text_layout)
-
-        return container
-
-    def _get_val(self, obj: Any, key: str) -> Any:
-        if isinstance(obj, dict):
-            return obj.get(key)
-        return getattr(obj, key, None)
+        # Title badge
+        self._title.setStyleSheet(
+            f"""
+            QLabel {{
+                font-weight: {tokens.font_weight_bold};
+                background-color: {tokens.text_muted};
+                color: {tokens.text_inverse};
+                padding: 2px 5px;
+                border-radius: {tokens.radius_sm};
+                font-size: {tokens.font_size_xs};
+            }}
+        """
+        )
 
     def clear_stats(self) -> None:
         """Clear all statistics to default values."""
-        is_dark = self._theme_manager.is_dark
-        name_color = "#E0E0E0" if is_dark else "#555555"
-        stat_color = "#B0B0B0" if is_dark else "#888888"
-
-        for key, lbl in self._status_names_labels.items():
-            lbl.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {name_color};")
-
-        for key, lbl in self._stats_labels.items():
-            lbl.setText("0.0%")
-            lbl.setStyleSheet(f"font-size: 10px; color: {stat_color};")
+        for item in self._legend_items.values():
+            item.clear()
 
     def render_stats(
         self,
@@ -99,24 +190,21 @@ class LegendWidget(QWidget):
         start: datetime,
         end: datetime,
     ) -> None:
-        """Render statistics from timeline data."""
-        is_dark = self._theme_manager.is_dark
-        name_color = "#E0E0E0" if is_dark else "#555555"
-        stat_color = "#B0B0B0" if is_dark else "#888888"
+        """
+        Render statistics from timeline data.
 
-        for key, lbl in self._status_names_labels.items():
-            lbl.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {name_color};")
-
-        for lbl in self._stats_labels.values():
-            lbl.setStyleSheet(f"font-size: 10px; color: {stat_color};")
-
+        Args:
+            timeline_data: Dict of device_id -> list of segments
+            start: Start time of the range
+            end: End time of the range
+        """
         total_duration = (end - start).total_seconds()
         if total_duration <= 0:
             self.clear_stats()
             return
 
         # Initialize stats by status code
-        stats_by_code = {
+        stats_by_code: Dict[int, float] = {
             StatusCode.RUNNING: 0.0,
             StatusCode.SHUTDOWN: 0.0,
             StatusCode.STOPPED: 0.0,
@@ -127,14 +215,15 @@ class LegendWidget(QWidget):
         # Calculate durations from segments
         for segments in timeline_data.values():
             for seg in segments:
-                s_start = self._get_val(seg, "start_time")
-                s_end = self._get_val(seg, "end_time")
+                seg_start = self._get_val(seg, "start_time")
+                seg_end = self._get_val(seg, "end_time")
 
-                if not (isinstance(s_start, datetime) and isinstance(s_end, datetime)):
+                if not (isinstance(seg_start, datetime) and isinstance(seg_end, datetime)):
                     continue
 
-                eff_start = max(start, s_start)
-                eff_end = min(end, s_end)
+                # Clip to range
+                eff_start = max(start, seg_start)
+                eff_end = min(end, seg_end)
 
                 if eff_end > eff_start:
                     duration = (eff_end - eff_start).total_seconds()
@@ -163,9 +252,15 @@ class LegendWidget(QWidget):
 
         for code, duration in stats_by_code.items():
             label_key = code_to_label.get(code)
-            if label_key and label_key in self._stats_labels:
+            if label_key and label_key in self._legend_items:
                 pct = (duration / grand_total) * 100
-                self._stats_labels[label_key].setText(f"{pct:.1f}%")
+                self._legend_items[label_key].set_value(pct)
+
+    def _get_val(self, obj: Any, key: str) -> Any:
+        """Get value from dict or object."""
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
 
 
 __all__ = ["LegendWidget"]

@@ -1,14 +1,16 @@
+# File: presentation/views/widgets/gantt_canvas.py
 """
 Gantt Canvas Widget - MVVM Architecture.
 
 Multi-device and single-device Gantt chart components.
+Uses ThemeService for consistent theming.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from PySide6.QtCore import (
     Property,
@@ -18,6 +20,7 @@ from PySide6.QtCore import (
     QRectF,
     Qt,
     Signal,
+    Slot,
 )
 from PySide6.QtGui import (
     QBrush,
@@ -40,27 +43,37 @@ from PySide6.QtWidgets import (
 )
 
 from ...constants.status import Status
-from ...resources.themes import get_theme_manager
 
-from ...viewmodels.models.gantt_model import (
-    GanttSegmentModel,
-    GanttChartModel,
-    GanttStatsModel,
-    STATUS_GRADIENTS,
-)
+if TYPE_CHECKING:
+    from ...services.theme_service import ThemeService
+    from ...viewmodels.models.gantt_model import (
+        GanttSegmentModel,
+        GanttChartModel,
+        GanttStatsModel,
+    )
 
 logger = logging.getLogger(__name__)
 
 
+# Status gradient colors for gantt bars
+STATUS_GRADIENTS = {
+    0: ("#9E9E9E", "#757575"),  # Unknown
+    1: ("#34D399", "#059669"),  # Running
+    2: ("#94A3B8", "#64748B"),  # Shutdown
+    3: ("#F87171", "#DC2626"),  # Stopped
+    4: ("#A78BFA", "#7C3AED"),  # Maintenance
+    5: ("#FBBF24", "#D97706"),  # Alarm
+}
+
+
 # =============================================================================
-# Compact Multi-Device Bar Chart (for daboard_midle_frame_2 - 60px height)
+# Compact Multi-Device Bar Chart
 # =============================================================================
 
 
 class GanttCanvasWidget(QWidget):
     """
     Compact stacked bar chart showing multiple devices.
-    Designed for daboard_midle_frame_2 (50px max height).
 
     Layout:
     - Left: Device labels (compact)
@@ -76,9 +89,16 @@ class GanttCanvasWidget(QWidget):
     BAR_SPACING = 2
     MAX_DEVICES = 5
 
-    def __init__(self, parent: Optional[QWidget] = None, is_compact: bool = False):
+    def __init__(self, theme_service: Optional["ThemeService"] = None, parent: Optional[QWidget] = None, is_compact: bool = False):
         super().__init__(parent)
-        self._theme_manager = get_theme_manager()
+
+        # Get theme service
+        if theme_service is None:
+            from ...services.theme_service import get_theme_service
+
+            theme_service = get_theme_service()
+
+        self._theme_service = theme_service
         self._timeline_data: Dict[str, List[Dict[str, Any]]] = {}
         self._start_time: Optional[datetime] = None
         self._end_time: Optional[datetime] = None
@@ -86,7 +106,25 @@ class GanttCanvasWidget(QWidget):
 
         self.setMinimumHeight(40)
         self.setMouseTracking(True)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        # Connect to theme changes
+        self._theme_service.themeChanged.connect(self._on_theme_changed)
+
+    @Slot(str)
+    def _on_theme_changed(self, theme: str) -> None:
+        """Handle theme change."""
+        self.update()
+
+    @property
+    def tokens(self):
+        """Get current theme tokens."""
+        return self._theme_service.tokens
+
+    @property
+    def is_dark(self) -> bool:
+        """Check if dark theme is active."""
+        return self._theme_service.is_dark
 
     def render_timeline(
         self,
@@ -106,21 +144,20 @@ class GanttCanvasWidget(QWidget):
         self._end_time = end
 
         logger.debug(f"GanttCanvas: rendering {len(self._timeline_data)} devices")
-
         self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = self.rect()
-        is_dark = self._theme_manager.is_dark
+        tokens = self.tokens
 
-        # Colors
-        bg_color = QColor("#0F172A") if is_dark else QColor("#F8FAFC")
-        text_color = QColor("#94A3B8") if is_dark else QColor("#64748B")
-        grid_color = QColor("#334155") if is_dark else QColor("#CBD5E1")
-        track_color = QColor("#1E293B") if is_dark else QColor("#E2E8F0")
+        # Colors from theme
+        bg_color = QColor(tokens.surface_app)
+        text_color = QColor(tokens.text_muted)
+        grid_color = QColor(tokens.border_default)
+        track_color = QColor(tokens.interactive_hover)
 
         # Background
         painter.fillRect(rect, bg_color)
@@ -128,8 +165,8 @@ class GanttCanvasWidget(QWidget):
         # If no data, show placeholder
         if not self._timeline_data or not self._start_time or not self._end_time:
             painter.setPen(text_color)
-            painter.setFont(QFont("Segoe UI", 9))
-            painter.drawText(rect, Qt.AlignCenter, "📊 Loading timeline...")
+            painter.setFont(QFont(tokens.font_family, 9))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "📊 Loading timeline...")
             return
 
         # Calculate layout
@@ -171,7 +208,7 @@ class GanttCanvasWidget(QWidget):
             painter.setPen(text_color)
             label_rect = QRectF(4, y, self.LABEL_WIDTH - 8, bar_height)
             display_label = device_code[:8] if len(device_code) > 8 else device_code
-            painter.drawText(label_rect, Qt.AlignVCenter | Qt.AlignLeft, display_label)
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, display_label)
 
             # Bar track background
             bar_rect = QRectF(chart_left, y, chart_width, bar_height)
@@ -198,7 +235,8 @@ class GanttCanvasWidget(QWidget):
         bar_height: float,
         total_seconds: float,
     ) -> None:
-        # Get segment data - handle both dict and object
+        """Draw a single segment."""
+        # Get segment data
         if isinstance(seg, dict):
             seg_start = seg.get("start_time")
             seg_end = seg.get("end_time")
@@ -245,6 +283,7 @@ class GanttCanvasWidget(QWidget):
         grid_color: QColor,
     ) -> None:
         """Draw time ruler at bottom."""
+        tokens = self.tokens
         painter.setFont(QFont("Consolas", 7))
 
         # Draw ruler line
@@ -273,7 +312,7 @@ class GanttCanvasWidget(QWidget):
             if current.hour % 6 == 0:
                 painter.setPen(text_color)
                 time_str = current.strftime("%H:%M")
-                painter.drawText(int(x) - 15, int(ruler_y + 4), 30, 10, Qt.AlignCenter, time_str)
+                painter.drawText(int(x) - 15, int(ruler_y + 4), 30, 10, Qt.AlignmentFlag.AlignCenter, time_str)
 
             current += timedelta(hours=1)
 
@@ -368,6 +407,7 @@ class GanttCanvasWidget(QWidget):
         return f"📍 {device_code}"
 
     def _format_duration(self, seconds: float) -> str:
+        """Format duration in human-readable format."""
         if seconds < 60:
             return f"{int(seconds)}s"
         if seconds < 3600:
@@ -379,7 +419,7 @@ class GanttCanvasWidget(QWidget):
 
     def mousePressEvent(self, event) -> None:
         """Handle click to select device."""
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
 
         if not self._timeline_data:
@@ -415,21 +455,30 @@ class GanttCanvasWidget(QWidget):
 
 
 # =============================================================================
-# Single Device Gantt Widget (for right_slide_menu_frame - detail panel)
+# Animated Progress Bar (for stat cards)
 # =============================================================================
 
 
 class AnimatedProgressBar(QWidget):
     """Animated progress bar for statistics."""
 
-    def __init__(self, color: str, parent: Optional[QWidget] = None):
+    def __init__(self, color: str, theme_service: Optional["ThemeService"] = None, parent: Optional[QWidget] = None):
         super().__init__(parent)
+
+        if theme_service is None:
+            from ...services.theme_service import get_theme_service
+
+            theme_service = get_theme_service()
+
+        self._theme_service = theme_service
         self._color = QColor(color)
         self._value = 0.0
         self._animation: Optional[QPropertyAnimation] = None
 
         self.setFixedHeight(4)
         self.setMinimumWidth(60)
+
+        self._theme_service.themeChanged.connect(lambda _: self.update())
 
     def get_value(self) -> float:
         return self._value
@@ -441,6 +490,7 @@ class AnimatedProgressBar(QWidget):
     value = Property(float, get_value, set_value)
 
     def animate_to(self, target: float) -> None:
+        """Animate to target value."""
         target = min(max(target, 0), 100)
 
         if self._animation:
@@ -450,21 +500,23 @@ class AnimatedProgressBar(QWidget):
         self._animation.setDuration(500)
         self._animation.setStartValue(self._value)
         self._animation.setEndValue(target)
-        self._animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._animation.start()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = self.rect()
-        is_dark = get_theme_manager().is_dark
+        tokens = self._theme_service.tokens
 
-        track_color = QColor("#334155") if is_dark else QColor("#E2E8F0")
+        # Track
+        track_color = QColor(tokens.interactive_hover)
         painter.setBrush(QBrush(track_color))
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, 2, 2)
 
+        # Fill
         if self._value > 0:
             fill_width = rect.width() * (self._value / 100)
             fill_rect = QRectF(0, 0, fill_width, rect.height())
@@ -477,69 +529,105 @@ class AnimatedProgressBar(QWidget):
             painter.drawRoundedRect(fill_rect, 2, 2)
 
 
+# =============================================================================
+# Compact Stat Card
+# =============================================================================
+
+
 class CompactStatCard(QFrame):
     """Compact stat card for right panel."""
 
-    def __init__(self, title: str, color: str, parent: Optional[QWidget] = None):
+    def __init__(self, title: str, color: str, theme_service: Optional["ThemeService"] = None, parent: Optional[QWidget] = None):
         super().__init__(parent)
+
+        if theme_service is None:
+            from ...services.theme_service import get_theme_service
+
+            theme_service = get_theme_service()
+
         self._title = title
         self._color = color
-        self._theme_manager = get_theme_manager()
+        self._theme_service = theme_service
 
         self._setup_ui()
+        self._theme_service.themeChanged.connect(self._on_theme_changed)
+        self._apply_style()
 
     def _setup_ui(self) -> None:
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(8)
 
+        # Color indicator
         indicator = QFrame()
         indicator.setFixedSize(3, 24)
         indicator.setStyleSheet(f"background-color: {self._color}; border-radius: 1px;")
         layout.addWidget(indicator)
 
+        # Content
         content = QVBoxLayout()
         content.setSpacing(2)
 
+        # Title and value row
         row = QHBoxLayout()
         row.setSpacing(4)
 
         self._title_label = QLabel(self._title)
-        self._title_label.setStyleSheet("font-size: 10px; color: #94A3B8;")
         row.addWidget(self._title_label)
 
         self._value_label = QLabel("--")
-        self._value_label.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {self._color};")
-        self._value_label.setAlignment(Qt.AlignRight)
+        self._value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         row.addWidget(self._value_label)
 
         content.addLayout(row)
 
-        self._progress = AnimatedProgressBar(self._color)
+        # Progress bar
+        self._progress = AnimatedProgressBar(self._color, self._theme_service)
         content.addWidget(self._progress)
 
         layout.addLayout(content, 1)
 
+    @Slot(str)
+    def _on_theme_changed(self, theme: str) -> None:
         self._apply_style()
 
     def _apply_style(self) -> None:
-        is_dark = self._theme_manager.is_dark
-        bg = "rgba(30, 41, 59, 0.5)" if is_dark else "rgba(248, 250, 252, 0.8)"
-        border = "rgba(51, 65, 85, 0.3)" if is_dark else "rgba(226, 232, 240, 0.6)"
+        tokens = self._theme_service.tokens
 
         self.setStyleSheet(
             f"""
             CompactStatCard {{
-                background: {bg};
-                border: 1px solid {border};
-                border-radius: 6px;
+                background: {tokens.surface_card};
+                border: 1px solid {tokens.border_default};
+                border-radius: {tokens.radius_base};
             }}
         """
         )
 
+        self._title_label.setStyleSheet(
+            f"""
+            font-size: {tokens.font_size_xs};
+            color: {tokens.text_muted};
+        """
+        )
+
+        self._value_label.setStyleSheet(
+            f"""
+            font-size: {tokens.font_size_sm};
+            font-weight: {tokens.font_weight_bold};
+            color: {self._color};
+        """
+        )
+
     def set_data(self, value: str, percent: float) -> None:
+        """Update the stat value and progress."""
         self._value_label.setText(value)
         self._progress.animate_to(percent)
+
+
+# =============================================================================
+# Single Device Gantt Bar
+# =============================================================================
 
 
 class SingleDeviceGanttBar(QWidget):
@@ -548,10 +636,16 @@ class SingleDeviceGanttBar(QWidget):
     segment_hovered = Signal(object)
     segment_clicked = Signal(object)
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, theme_service: Optional["ThemeService"] = None, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self._theme_manager = get_theme_manager()
-        self._segments: List[GanttSegmentModel] = []
+
+        if theme_service is None:
+            from ...services.theme_service import get_theme_service
+
+            theme_service = get_theme_service()
+
+        self._theme_service = theme_service
+        self._segments: List["GanttSegmentModel"] = []
         self._start_time: Optional[datetime] = None
         self._end_time: Optional[datetime] = None
         self._hovered_index = -1
@@ -559,12 +653,19 @@ class SingleDeviceGanttBar(QWidget):
         self.setFixedHeight(32)
         self.setMouseTracking(True)
 
+        self._theme_service.themeChanged.connect(lambda _: self.update())
+
+    @property
+    def tokens(self):
+        return self._theme_service.tokens
+
     def set_data(
         self,
-        segments: List[GanttSegmentModel],
+        segments: List["GanttSegmentModel"],
         start_time: datetime,
         end_time: datetime,
     ) -> None:
+        """Set segment data."""
         self._segments = segments if segments else []
         self._start_time = start_time
         self._end_time = end_time
@@ -572,12 +673,13 @@ class SingleDeviceGanttBar(QWidget):
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = self.rect()
-        is_dark = self._theme_manager.is_dark
+        tokens = self.tokens
 
-        track_color = QColor("#1E293B") if is_dark else QColor("#F1F5F9")
+        # Track background
+        track_color = QColor(tokens.interactive_hover)
         track_rect = QRectF(0, 4, rect.width(), rect.height() - 8)
 
         path = QPainterPath()
@@ -585,28 +687,31 @@ class SingleDeviceGanttBar(QWidget):
         painter.fillPath(path, track_color)
 
         if not self._segments or not self._start_time or not self._end_time:
-            painter.setPen(QColor("#64748B"))
-            painter.setFont(QFont("Segoe UI", 9))
-            painter.drawText(track_rect, Qt.AlignCenter, "No data")
+            painter.setPen(QColor(tokens.text_muted))
+            painter.setFont(QFont(tokens.font_family, 9))
+            painter.drawText(track_rect, Qt.AlignmentFlag.AlignCenter, "No data")
             return
 
         total_seconds = (self._end_time - self._start_time).total_seconds()
         if total_seconds <= 0:
             return
 
+        # Draw segments
         for i, seg in enumerate(self._segments):
             self._draw_segment(painter, seg, rect, total_seconds, i == self._hovered_index)
 
+        # Draw now indicator
         self._draw_now_indicator(painter, rect, total_seconds)
 
     def _draw_segment(
         self,
         painter: QPainter,
-        seg: GanttSegmentModel,
+        seg: "GanttSegmentModel",
         rect: QRectF,
         total_seconds: float,
         is_hovered: bool,
     ) -> None:
+        """Draw a single segment."""
         start_offset = (seg.start_time - self._start_time).total_seconds()
         end_offset = (seg.end_time - self._start_time).total_seconds()
 
@@ -622,8 +727,8 @@ class SingleDeviceGanttBar(QWidget):
 
         seg_rect = QRectF(x, y, width, height)
 
+        # Gradient
         gradient = QLinearGradient(seg_rect.topLeft(), seg_rect.bottomLeft())
-
         base_color = QColor(seg.gradient_start or seg.status_color)
         end_color = QColor(seg.gradient_end or seg.status_color)
 
@@ -638,6 +743,7 @@ class SingleDeviceGanttBar(QWidget):
         path.addRoundedRect(seg_rect, 3, 3)
         painter.fillPath(path, QBrush(gradient))
 
+        # Current indicator
         if seg.is_current:
             painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
             painter.drawPath(path)
@@ -648,6 +754,7 @@ class SingleDeviceGanttBar(QWidget):
         rect: QRectF,
         total_seconds: float,
     ) -> None:
+        """Draw current time indicator."""
         now = datetime.now()
         if not self._start_time or not self._end_time:
             return
@@ -657,11 +764,15 @@ class SingleDeviceGanttBar(QWidget):
         now_offset = (now - self._start_time).total_seconds()
         x = (now_offset / total_seconds) * rect.width()
 
-        painter.setPen(QPen(QColor("#EF4444"), 1.5))
+        tokens = self.tokens
+
+        # Line
+        painter.setPen(QPen(QColor(tokens.error), 1.5))
         painter.drawLine(int(x), 2, int(x), int(rect.height() - 2))
 
-        painter.setBrush(QBrush(QColor("#EF4444")))
-        painter.setPen(Qt.NoPen)
+        # Triangle marker
+        painter.setBrush(QBrush(QColor(tokens.error)))
+        painter.setPen(Qt.PenStyle.NoPen)
 
         marker_path = QPainterPath()
         marker_path.moveTo(x, 0)
@@ -671,6 +782,7 @@ class SingleDeviceGanttBar(QWidget):
         painter.drawPath(marker_path)
 
     def mouseMoveEvent(self, event) -> None:
+        """Handle hover."""
         pos = event.position()
         new_index = self._hit_test(pos)
 
@@ -683,21 +795,24 @@ class SingleDeviceGanttBar(QWidget):
                 self.segment_hovered.emit(seg)
                 QToolTip.showText(
                     event.globalPosition().toPoint(),
-                    f"{seg.status_name}\n{seg.duration_display}\n{seg.start_display} - {seg.end_display}",
+                    f"{seg.status_name}\n{seg.duration_display}\n" f"{seg.start_display} - {seg.end_display}",
                     self,
                 )
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
+        """Handle click."""
+        if event.button() == Qt.MouseButton.LeftButton:
             index = self._hit_test(event.position())
             if 0 <= index < len(self._segments):
                 self.segment_clicked.emit(self._segments[index])
 
     def leaveEvent(self, event) -> None:
+        """Handle mouse leave."""
         self._hovered_index = -1
         self.update()
 
     def _hit_test(self, pos: QPointF) -> int:
+        """Find segment at position."""
         if not self._segments or not self._start_time or not self._end_time:
             return -1
 
@@ -721,24 +836,35 @@ class SingleDeviceGanttBar(QWidget):
         return -1
 
 
+# =============================================================================
+# Device Gantt Widget (Single device detail)
+# =============================================================================
+
+
 class DeviceGanttWidget(QFrame):
     """
     Single-device Gantt chart widget for right panel.
-    Designed for right_slide_menu_frame (~300px width).
     """
 
     segment_clicked = Signal(str, object)
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, theme_service: Optional["ThemeService"] = None, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self._theme_manager = get_theme_manager()
-        self._chart_model: Optional[GanttChartModel] = None
+
+        if theme_service is None:
+            from ...services.theme_service import get_theme_service
+
+            theme_service = get_theme_service()
+
+        self._theme_service = theme_service
+        self._chart_model: Optional["GanttChartModel"] = None
 
         self._setup_ui()
+        self._theme_service.themeChanged.connect(self._on_theme_changed)
         self._apply_style()
 
     def _setup_ui(self) -> None:
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -761,42 +887,35 @@ class DeviceGanttWidget(QFrame):
         layout.addWidget(legend)
 
     def _create_header(self) -> QWidget:
+        """Create header with device code and status."""
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
 
         self._device_code_label = QLabel("--")
-        self._device_code_label.setStyleSheet("font-size: 14px; font-weight: 700; color: #F1F5F9;")
         header_layout.addWidget(self._device_code_label)
 
         header_layout.addStretch()
 
         self._status_badge = QLabel("--")
-        self._status_badge.setStyleSheet(
-            """
-            padding: 3px 8px;
-            border-radius: 10px;
-            font-size: 9px;
-            font-weight: 600;
-            background: #64748B;
-            color: white;
-        """
-        )
         header_layout.addWidget(self._status_badge)
 
         return header
 
     def _create_stats_section(self) -> QWidget:
+        """Create stats cards grid."""
         container = QWidget()
         layout = QGridLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        self._running_card = CompactStatCard("Running", "#10B981")
-        self._stopped_card = CompactStatCard("Stopped", "#F59E0B")
-        self._alarm_card = CompactStatCard("Alarm", "#EF4444")
-        self._oee_card = CompactStatCard("OEE", "#6366F1")
+        tokens = self._theme_service.tokens
+
+        self._running_card = CompactStatCard("Running", tokens.success, self._theme_service)
+        self._stopped_card = CompactStatCard("Stopped", tokens.warning, self._theme_service)
+        self._alarm_card = CompactStatCard("Alarm", tokens.error, self._theme_service)
+        self._oee_card = CompactStatCard("OEE", tokens.primary, self._theme_service)
 
         layout.addWidget(self._running_card, 0, 0)
         layout.addWidget(self._stopped_card, 0, 1)
@@ -806,43 +925,32 @@ class DeviceGanttWidget(QFrame):
         return container
 
     def _create_timeline_section(self) -> QWidget:
+        """Create timeline section with gantt bar."""
         container = QFrame()
-
-        is_dark = self._theme_manager.is_dark
-        bg = "rgba(15, 23, 42, 0.5)" if is_dark else "rgba(248, 250, 252, 0.8)"
-        border = "rgba(51, 65, 85, 0.3)" if is_dark else "rgba(226, 232, 240, 0.6)"
-
-        container.setStyleSheet(
-            f"""
-            QFrame {{
-                background: {bg};
-                border: 1px solid {border};
-                border-radius: 6px;
-            }}
-        """
-        )
+        container.setObjectName("timeline_container")
 
         layout = QVBoxLayout(container)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(4)
 
         title = QLabel("📊 24h Timeline")
-        title.setStyleSheet("font-size: 10px; font-weight: 600; color: #94A3B8;")
+        title.setObjectName("timeline_title")
         layout.addWidget(title)
 
-        self._gantt_bar = SingleDeviceGanttBar()
+        self._gantt_bar = SingleDeviceGanttBar(self._theme_service)
         self._gantt_bar.segment_clicked.connect(self._on_segment_clicked)
         layout.addWidget(self._gantt_bar)
 
+        # Time labels
         time_labels = QHBoxLayout()
         time_labels.setContentsMargins(0, 0, 0, 0)
 
         self._start_label = QLabel("00:00")
-        self._start_label.setStyleSheet("font-size: 9px; color: #64748B;")
+        self._start_label.setObjectName("time_label")
 
         self._end_label = QLabel("Now")
-        self._end_label.setStyleSheet("font-size: 9px; color: #64748B;")
-        self._end_label.setAlignment(Qt.AlignRight)
+        self._end_label.setObjectName("time_label")
+        self._end_label.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         time_labels.addWidget(self._start_label)
         time_labels.addStretch()
@@ -852,6 +960,7 @@ class DeviceGanttWidget(QFrame):
         return container
 
     def _create_legend(self) -> QWidget:
+        """Create status legend."""
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 2, 0, 0)
@@ -875,7 +984,7 @@ class DeviceGanttWidget(QFrame):
             item.addWidget(dot)
 
             label = QLabel(name)
-            label.setStyleSheet("font-size: 8px; color: #64748B;")
+            label.setObjectName("legend_label")
             item.addWidget(label)
 
             layout.addLayout(item)
@@ -884,197 +993,128 @@ class DeviceGanttWidget(QFrame):
 
         return container
 
+    @Slot(str)
+    def _on_theme_changed(self, theme: str) -> None:
+        self._apply_style()
+
     def _apply_style(self) -> None:
-        is_dark = self._theme_manager.is_dark
+        """Apply theme styles."""
+        tokens = self._theme_service.tokens
 
-        if is_dark:
-            bg = "rgba(30, 41, 59, 0.8)"
-            border = "rgba(51, 65, 85, 0.5)"
-        else:
-            bg = "rgba(255, 255, 255, 0.9)"
-            border = "rgba(226, 232, 240, 0.8)"
-
+        # Main frame
         self.setStyleSheet(
             f"""
             DeviceGanttWidget {{
-                background: {bg};
-                border: 1px solid {border};
-                border-radius: 10px;
+                background: {tokens.surface_card};
+                border: 1px solid {tokens.border_default};
+                border-radius: {tokens.radius_lg};
             }}
         """
         )
 
-    def render(self, chart_model: GanttChartModel) -> None:
-        """Render from GanttChartModel (from ViewModel)."""
-        self._chart_model = chart_model
+        # Device code label
+        self._device_code_label.setStyleSheet(
+            f"""
+            font-size: {tokens.font_size_md};
+            font-weight: {tokens.font_weight_bold};
+            color: {tokens.text_primary};
+        """
+        )
 
+        # Status badge
+        self._status_badge.setStyleSheet(
+            f"""
+            padding: 3px 8px;
+            border-radius: {tokens.radius_full};
+            font-size: {tokens.font_size_xs};
+            font-weight: {tokens.font_weight_semibold};
+            background: {tokens.text_muted};
+            color: {tokens.text_inverse};
+        """
+        )
+
+        # Timeline container
+        timeline = self.findChild(QFrame, "timeline_container")
+        if timeline:
+            timeline.setStyleSheet(
+                f"""
+                QFrame#timeline_container {{
+                    background: {tokens.surface_app};
+                    border: 1px solid {tokens.border_default};
+                    border-radius: {tokens.radius_base};
+                }}
+            """
+            )
+
+        # Timeline title
+        title = self.findChild(QLabel, "timeline_title")
+        if title:
+            title.setStyleSheet(
+                f"""
+                font-size: {tokens.font_size_xs};
+                font-weight: {tokens.font_weight_semibold};
+                color: {tokens.text_muted};
+            """
+            )
+
+        # Time labels
+        for label in self.findChildren(QLabel, "time_label"):
+            label.setStyleSheet(
+                f"""
+                font-size: {tokens.font_size_xs};
+                color: {tokens.text_muted};
+            """
+            )
+
+        # Legend labels
+        for label in self.findChildren(QLabel, "legend_label"):
+            label.setStyleSheet(
+                f"""
+                font-size: {tokens.font_size_xs};
+                color: {tokens.text_muted};
+            """
+            )
+
+    def render(self, chart_model: "GanttChartModel") -> None:
+        """Render from GanttChartModel."""
+        self._chart_model = chart_model
+        tokens = self._theme_service.tokens
+
+        # Header
         self._device_code_label.setText(chart_model.device_code)
 
         self._status_badge.setText(chart_model.current_status.upper())
         self._status_badge.setStyleSheet(
             f"""
             padding: 3px 8px;
-            border-radius: 10px;
-            font-size: 9px;
-            font-weight: 600;
+            border-radius: {tokens.radius_full};
+            font-size: {tokens.font_size_xs};
+            font-weight: {tokens.font_weight_semibold};
             background: {chart_model.current_status_color};
-            color: white;
+            color: {tokens.text_inverse};
         """
         )
 
+        # Stats
         stats = chart_model.stats
         self._running_card.set_data(stats.running_display, stats.running_percent)
         self._stopped_card.set_data(stats.stopped_display, stats.stopped_percent)
         self._alarm_card.set_data(stats.alarm_display, stats.alarm_percent)
         self._oee_card.set_data(f"{stats.oee_estimate:.0f}%", stats.oee_estimate)
 
+        # Gantt bar
         self._gantt_bar.set_data(
             chart_model.segments,
             chart_model.start_time,
             chart_model.end_time,
         )
 
+        # Time labels
         self._start_label.setText(chart_model.start_time.strftime("%H:%M"))
         self._end_label.setText(chart_model.end_time.strftime("%H:%M"))
 
-    def render_from_segments(
-        self,
-        device_code: str,
-        segments: List[Any],
-        start_time: datetime,
-        end_time: datetime,
-    ) -> None:
-        """Render from raw segments (legacy compatibility)."""
-        # Create segment models from raw data
-        segment_models = self._create_segment_models(segments, start_time, end_time)
-
-        # Calculate stats
-        stats = self._calculate_stats(segment_models, start_time, end_time)
-
-        # Get current status
-        current_status, current_color = self._get_current_status(segment_models)
-
-        # Create chart model
-        chart_model = GanttChartModel(
-            device_code=device_code,
-            device_name=device_code,
-            segments=segment_models,
-            hour_marks=[],
-            start_time=start_time,
-            end_time=end_time,
-            total_duration_seconds=(end_time - start_time).total_seconds(),
-            stats=stats,
-            current_status=current_status,
-            current_status_color=current_color,
-        )
-
-        self.render(chart_model)
-
-    def _create_segment_models(self, segments: List[Any], start_time: datetime, end_time: datetime) -> List[GanttSegmentModel]:
-        """Convert raw segments to GanttSegmentModel list."""
-        models = []
-        total_seconds = (end_time - start_time).total_seconds()
-        now = datetime.now()
-
-        for seg in segments:
-            if isinstance(seg, dict):
-                seg_start = seg.get("start_time")
-                seg_end = seg.get("end_time")
-                status_code = seg.get("status_code", 0)
-            else:
-                seg_start = getattr(seg, "start_time", None)
-                seg_end = getattr(seg, "end_time", None)
-                status_code = getattr(seg, "status_code", 0)
-
-            if not seg_start or not seg_end:
-                continue
-
-            duration = (seg_end - seg_start).total_seconds()
-            width_percent = duration / total_seconds if total_seconds > 0 else 0
-
-            gradient = STATUS_GRADIENTS.get(status_code, STATUS_GRADIENTS[0])
-            is_current = seg_start <= now <= seg_end
-
-            model = GanttSegmentModel(
-                start_time=seg_start,
-                end_time=seg_end,
-                status_code=status_code,
-                status_name=Status.get_name(status_code),
-                status_color=Status.get_color(status_code),
-                duration_seconds=duration,
-                duration_display=self._format_duration(duration),
-                width_percent=width_percent,
-                gradient_start=gradient[0],
-                gradient_end=gradient[1],
-                is_current=is_current,
-            )
-            models.append(model)
-
-        return models
-
-    def _calculate_stats(self, segments: List[GanttSegmentModel], start_time: datetime, end_time: datetime) -> GanttStatsModel:
-        """Calculate stats from segments."""
-        total_seconds = (end_time - start_time).total_seconds()
-        running = stopped = alarm = maintenance = shutdown = 0.0
-
-        for seg in segments:
-            duration = seg.duration_seconds
-            if seg.status_code == 1:
-                running += duration
-            elif seg.status_code == 2:
-                shutdown += duration
-            elif seg.status_code == 3:
-                stopped += duration
-            elif seg.status_code == 4:
-                maintenance += duration
-            elif seg.status_code == 5:
-                alarm += duration
-
-        running_pct = (running / total_seconds * 100) if total_seconds > 0 else 0
-        stopped_pct = (stopped / total_seconds * 100) if total_seconds > 0 else 0
-        alarm_pct = (alarm / total_seconds * 100) if total_seconds > 0 else 0
-
-        available = total_seconds - shutdown - maintenance
-        oee = (running / available * 100) if available > 0 else 0
-
-        return GanttStatsModel(
-            total_running_seconds=running,
-            total_stopped_seconds=stopped,
-            total_alarm_seconds=alarm,
-            total_maintenance_seconds=maintenance,
-            total_shutdown_seconds=shutdown,
-            running_percent=running_pct,
-            stopped_percent=stopped_pct,
-            alarm_percent=alarm_pct,
-            oee_estimate=oee,
-        )
-
-    def _get_current_status(self, segments: List[GanttSegmentModel]) -> tuple[str, str]:
-        """Get current status from segments."""
-        now = datetime.now()
-
-        for seg in reversed(segments):
-            if seg.is_current or seg.end_time >= now:
-                return seg.status_name, seg.status_color
-
-        if segments:
-            last = segments[-1]
-            return last.status_name, last.status_color
-
-        return "Unknown", "#64748B"
-
-    def _format_duration(self, seconds: float) -> str:
-        """Format duration in human-readable format."""
-        if seconds < 60:
-            return f"{int(seconds)}s"
-        if seconds < 3600:
-            m, s = divmod(int(seconds), 60)
-            return f"{m}m {s}s"
-        h, rem = divmod(int(seconds), 3600)
-        m = rem // 60
-        return f"{h}h {m}m"
-
-    def _on_segment_clicked(self, segment: GanttSegmentModel) -> None:
+    def _on_segment_clicked(self, segment: "GanttSegmentModel") -> None:
+        """Handle segment click."""
         if self._chart_model:
             self.segment_clicked.emit(self._chart_model.device_code, segment)
 
@@ -1082,4 +1122,8 @@ class DeviceGanttWidget(QFrame):
 __all__ = [
     "GanttCanvasWidget",
     "DeviceGanttWidget",
+    "AnimatedProgressBar",
+    "CompactStatCard",
+    "SingleDeviceGanttBar",
+    "STATUS_GRADIENTS",
 ]
