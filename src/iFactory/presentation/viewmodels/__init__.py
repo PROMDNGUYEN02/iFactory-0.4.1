@@ -1,3 +1,4 @@
+# File: presentation/viewmodels/__init__.py
 """
 ViewModels Package.
 
@@ -6,11 +7,6 @@ MVVM ViewModels that:
 - Expose reactive signals
 - Orchestrate Use Cases
 - Contain zero business rules
-
-Structure:
-- viewmodels/base.py - Base classes and UiState
-- viewmodels/models/ - Pure data models (immutable)
-- viewmodels/*_viewmodel.py - Actual ViewModels with signals
 """
 
 # Base classes

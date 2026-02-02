@@ -1,8 +1,9 @@
+# File: presentation/views/shell/header.py
 """
 Header View - MVVM Architecture.
 
 Binds to ShellViewModel for theme and sidebar state.
-Passive view that delegates all interactions to ViewModel.
+Uses ThemeService for styling.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import QFrame, QLabel, QPushButton
 
 if TYPE_CHECKING:
+    from ...services.theme_service import ThemeService
     from ...viewmodels import ShellViewModel
 
 logger = logging.getLogger(__name__)
@@ -27,9 +29,8 @@ class HeaderView:
 
     Passive view that:
     - Binds to ShellViewModel signals
+    - Uses ThemeService for styling
     - Delegates user actions to ViewModel
-    - Renders based on state
-    - Displays logo and application title
     """
 
     def __init__(
@@ -40,50 +41,35 @@ class HeaderView:
         title_icon: Optional[QLabel],
         window_buttons: Tuple[Optional[QPushButton], ...],
         shell_vm: "ShellViewModel",
+        theme_service: "ThemeService",
     ):
         self._container = container
         self._toggle_btn = toggle_btn
         self._title_label = title_label
         self._title_icon = title_icon
         self._shell_vm = shell_vm
+        self._theme_service = theme_service
 
-        # Unpack window buttons safely
         self._minimize_btn = window_buttons[0] if len(window_buttons) > 0 else None
         self._restore_btn = window_buttons[1] if len(window_buttons) > 1 else None
         self._close_btn = window_buttons[2] if len(window_buttons) > 2 else None
 
-        # Initialize with current ViewModel state
-        self._current_theme = shell_vm.theme
         self._current_expanded = shell_vm.sidebar_expanded
 
-        # Setup logo and title first
         self._setup_logo_and_title()
-
         self._setup_connections()
         self._bind_viewmodel()
-
-        # Apply initial state
         self._update_visibility()
         self._update_toggle_icon()
 
     def _setup_logo_and_title(self) -> None:
         """Setup logo icon and application title."""
-        # Setup logo
         if self._title_icon:
             self._load_logo()
 
-        # Setup title text
         if self._title_label:
             self._title_label.setText("iFactory")
-            self._title_label.setStyleSheet(
-                """
-                QLabel {
-                    font-size: 14px;
-                    font-weight: bold;
-                    padding-left: 4px;
-                }
-            """
-            )
+            self._update_title_style()
 
     def _load_logo(self) -> None:
         """Load and set the logo image."""
@@ -92,7 +78,6 @@ class HeaderView:
 
         logo_loaded = False
 
-        # Try loading from Qt resources first
         try:
             pixmap = QPixmap(":/icon/logo.png")
             if not pixmap.isNull():
@@ -100,17 +85,14 @@ class HeaderView:
                 self._title_icon.setPixmap(scaled)
                 self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 logo_loaded = True
-                logger.debug("[HeaderView] Logo loaded from resources")
         except Exception as e:
             logger.debug(f"[HeaderView] Could not load logo from resources: {e}")
 
-        # Try alternative paths if resource loading failed
         if not logo_loaded:
             alternative_paths = [
                 "src/iFactory/presentation/resources/icon/logo.png",
                 "iFactory/presentation/resources/icon/logo.png",
                 "resources/icon/logo.png",
-                "icon/logo.png",
             ]
 
             for path in alternative_paths:
@@ -122,24 +104,14 @@ class HeaderView:
                             self._title_icon.setPixmap(scaled)
                             self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
                             logo_loaded = True
-                            logger.debug(f"[HeaderView] Logo loaded from path: {path}")
                             break
-                    except Exception as e:
-                        logger.debug(f"[HeaderView] Could not load logo from {path}: {e}")
+                    except Exception:
+                        pass
 
-        # Fallback to emoji/text if no image found
         if not logo_loaded:
             self._title_icon.setText("🏭")
-            self._title_icon.setStyleSheet(
-                """
-                QLabel {
-                    font-size: 20px;
-                    padding: 4px;
-                }
-            """
-            )
+            self._title_icon.setStyleSheet("QLabel { font-size: 20px; padding: 4px; }")
             self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            logger.warning("[HeaderView] Using fallback emoji for logo")
 
     def _setup_connections(self) -> None:
         """Connect UI events to ViewModel methods."""
@@ -163,10 +135,8 @@ class HeaderView:
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
         """Handle theme change from ViewModel."""
-        if theme != self._current_theme:
-            self._current_theme = theme
-            self._update_toggle_icon()
-            self._update_title_style()
+        self._update_toggle_icon()
+        self._update_title_style()
 
     @Slot(bool)
     def _on_sidebar_changed(self, expanded: bool) -> None:
@@ -177,13 +147,11 @@ class HeaderView:
             self._update_toggle_icon()
 
     def _on_minimize(self) -> None:
-        """Handle minimize button click."""
         window = self._container.window()
         if window:
             window.showMinimized()
 
     def _on_restore(self) -> None:
-        """Handle restore/maximize button click."""
         window = self._container.window()
         if window:
             if window.isMaximized():
@@ -192,28 +160,24 @@ class HeaderView:
                 window.showMaximized()
 
     def _on_close(self) -> None:
-        """Handle close button click."""
         window = self._container.window()
         if window:
             window.close()
 
     def _update_visibility(self) -> None:
-        """Update title label and icon visibility based on sidebar state."""
+        """Update title label and icon visibility."""
         if self._title_label:
             self._title_label.setVisible(self._current_expanded)
-            logger.debug(f"[HeaderView] Title label visible: {self._current_expanded}")
 
         if self._title_icon:
             self._title_icon.setVisible(self._current_expanded)
-            logger.debug(f"[HeaderView] Title icon visible: {self._current_expanded}")
 
     def _update_title_style(self) -> None:
-        """Update title label style based on theme."""
+        """Update title label style using ThemeService tokens."""
         if not self._title_label:
             return
 
-        is_dark = self._current_theme == "dark"
-        text_color = "#F1F5F9" if is_dark else "#1E293B"
+        tokens = self._theme_service.tokens
 
         self._title_label.setStyleSheet(
             f"""
@@ -221,7 +185,7 @@ class HeaderView:
                 font-size: 14px;
                 font-weight: bold;
                 padding-left: 4px;
-                color: {text_color};
+                color: {tokens.app_fg};
             }}
         """
         )
@@ -231,38 +195,37 @@ class HeaderView:
         if not self._toggle_btn:
             return
 
-        is_dark = self._current_theme == "dark"
-        suffix = "-white" if is_dark else ""
-
         if self._current_expanded:
-            icon_name = f"left_panel_close{suffix}.svg"
+            base_icon = ":/icon/left_panel_close.svg"
         else:
-            icon_name = f"left_panel_open{suffix}.svg"
+            base_icon = ":/icon/left_panel_open.svg"
 
-        # Try to set icon from resources
-        icon = QIcon(f":/icon/{icon_name}")
+        icon_path = self._theme_service.get_icon_path(base_icon)
+        icon = QIcon(icon_path)
+
+        tokens = self._theme_service.tokens
+
         if not icon.isNull():
             self._toggle_btn.setIcon(icon)
             self._toggle_btn.setIconSize(QSize(20, 20))
-            self._toggle_btn.setText("")  # Clear any text
+            self._toggle_btn.setText("")
             self._toggle_btn.setStyleSheet(
-                """
-                QPushButton {
+                f"""
+                QPushButton {{
                     border: none;
                     background: transparent;
                     padding: 4px;
-                }
-                QPushButton:hover {
-                    background: rgba(128, 128, 128, 0.1);
+                }}
+                QPushButton:hover {{
+                    background: {tokens.get_rgba("hover", 0.5)};
                     border-radius: 4px;
-                }
+                }}
             """
             )
         else:
-            # Fallback to text-based indicator
             arrow_text = "◀" if self._current_expanded else "▶"
             self._toggle_btn.setText(arrow_text)
-            self._toggle_btn.setIcon(QIcon())  # Clear icon
+            self._toggle_btn.setIcon(QIcon())
             self._toggle_btn.setStyleSheet(
                 """
                 QPushButton {
@@ -279,20 +242,8 @@ class HeaderView:
             )
 
     def render(self, state: Dict[str, Any]) -> None:
-        """
-        Render header based on state.
-
-        Legacy compatibility method - state comes from Redux store.
-        Primary updates now come via ViewModel signals.
-        """
+        """Render header based on state (legacy compatibility)."""
         sidebar_expanded = state.get("sidebar_expanded", False)
-        theme = state.get("theme", "light")
-
-        # Update internal state if changed
-        if theme != self._current_theme:
-            self._current_theme = theme
-            self._update_toggle_icon()
-            self._update_title_style()
 
         if sidebar_expanded != self._current_expanded:
             self._current_expanded = sidebar_expanded

@@ -1,12 +1,8 @@
+# File: presentation/views/shell/right_panel.py
 """
 Right Panel - Device details view.
 
-MVVM Architecture:
-- Binds to DeviceListViewModel for selection
-- Binds to ShellViewModel for panel state
-- Displays selected device details
-- Auto-closes when clicking outside (except on devices)
-- Updates content when different device selected without close/reopen
+Uses ThemeService for all styling.
 """
 
 from __future__ import annotations
@@ -18,15 +14,14 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout
 
 from ...constants.layout import Layout
-from ...resources.themes import get_theme_manager
 from ...state.selectors import (
     select_right_panel_expanded,
     select_selected_device_id,
-    select_theme,
     select_devices,
 )
 
 if TYPE_CHECKING:
+    from ...services.theme_service import ThemeService
     from ...state.store import Store
     from ...viewmodels import DeviceListViewModel, ShellViewModel
 
@@ -34,15 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 class RightPanelView:
-    """
-    Right panel showing device details.
-
-    Passive view that:
-    - Binds to ViewModel signals
-    - Displays selected device information
-    - Renders based on state
-    - Supports seamless device switching without panel flicker
-    """
+    """Right panel showing device details using ThemeService."""
 
     def __init__(
         self,
@@ -50,19 +37,20 @@ class RightPanelView:
         store: "Store",
         device_vm: "DeviceListViewModel",
         shell_vm: "ShellViewModel",
+        theme_service: "ThemeService",
     ):
         self._container = container
         self._store = store
         self._device_vm = device_vm
         self._shell_vm = shell_vm
-        self._theme_manager = get_theme_manager()
-        self._current_theme = "light"
+        self._theme_service = theme_service
         self._last_device_id: Optional[str] = None
         self._last_render_data: Optional[Dict] = None
         self._is_panel_open = False
 
         self._layout: Optional[QVBoxLayout] = None
         self._setup()
+        self._apply_theme_styles()
         self._bind_viewmodels()
 
     def _bind_viewmodels(self) -> None:
@@ -73,23 +61,13 @@ class RightPanelView:
 
     @Slot(object)
     def _on_selection_changed(self, selection) -> None:
-        """
-        Handle device selection change from ViewModel.
-
-        Key behavior:
-        - If panel is open and different device selected: update content only
-        - If panel is closed and device selected: open panel with content
-        - If no selection: show placeholder (panel state unchanged)
-        """
+        """Handle device selection change."""
         if selection.has_selection:
             device_id = selection.selected_device_id
-
-            # Check if this is a different device than currently shown
             is_different_device = device_id != self._last_device_id
 
             device = self._device_vm.selected_device
             if device:
-                # Update content - panel state handled by ViewModel
                 self._render_device_from_model(device)
                 self._last_device_id = device_id
 
@@ -104,9 +82,7 @@ class RightPanelView:
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
         """Handle theme change."""
-        if theme != self._current_theme:
-            self._current_theme = theme
-            self._apply_theme_styles()
+        self._apply_theme_styles()
 
     @Slot(bool)
     def _on_panel_changed(self, expanded: bool) -> None:
@@ -116,23 +92,10 @@ class RightPanelView:
         self._container.setFixedWidth(width)
 
         if not expanded:
-            # Panel closing - clear last device to allow fresh render on reopen
             self._last_device_id = None
-            logger.debug("[RightPanelView] Panel closed")
-        else:
-            logger.debug("[RightPanelView] Panel opened")
-
-    @property
-    def is_open(self) -> bool:
-        """Check if panel is currently open."""
-        return self._is_panel_open
-
-    @property
-    def current_device_id(self) -> Optional[str]:
-        """Get the currently displayed device ID."""
-        return self._last_device_id
 
     def _setup(self) -> None:
+        """Setup UI structure."""
         if not self._container:
             return
 
@@ -141,7 +104,6 @@ class RightPanelView:
             self._layout = QVBoxLayout(self._container)
 
         self._clear_layout()
-
         self._layout.setContentsMargins(16, 20, 16, 20)
         self._layout.setSpacing(12)
 
@@ -216,9 +178,9 @@ class RightPanelView:
         self._layout.addWidget(self._error)
 
         self._layout.addStretch()
-        self._apply_theme_styles()
 
     def _clear_layout(self) -> None:
+        """Clear existing layout items."""
         if not self._layout:
             return
         while self._layout.count():
@@ -227,75 +189,51 @@ class RightPanelView:
                 item.widget().deleteLater()
 
     def _apply_theme_styles(self) -> None:
-        is_dark = self._current_theme == "dark"
+        """Apply theme styles using ThemeService tokens."""
+        tokens = self._theme_service.tokens
 
-        if is_dark:
-            bg = "rgba(15, 23, 42, 0.98)"
-            border = "rgba(51, 65, 85, 0.5)"
-            text_primary = "#F1F5F9"
-            text_secondary = "#94A3B8"
-            text_muted = "#64748B"
-            card_bg = "rgba(30, 41, 59, 0.8)"
-            card_border = "rgba(51, 65, 85, 0.6)"
-        else:
-            bg = "rgba(255, 255, 255, 0.98)"
-            border = "rgba(226, 232, 240, 0.5)"
-            text_primary = "#1E293B"
-            text_secondary = "#475569"
-            text_muted = "#64748B"
-            card_bg = "rgba(248, 250, 252, 0.8)"
-            card_border = "rgba(226, 232, 240, 0.6)"
-
+        # Panel container
         self._container.setStyleSheet(
             f"""
             QFrame#right_slide_menu_frame {{
-                background-color: {bg};
+                background-color: {tokens.get_rgba("slide.bg", 0.98)};
                 border: none;
-                border-left: 1px solid {border};
+                border-left: 1px solid {tokens.get_rgba("border", 0.5)};
             }}
         """
         )
 
-        self._title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {text_primary};")
-        self._desc.setStyleSheet(f"font-size: 11px; color: {text_secondary};")
-        self._last_update.setStyleSheet(f"font-size: 11px; color: {text_muted};")
+        # Text styles
+        self._title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {tokens.app_fg};")
+        self._desc.setStyleSheet(f"font-size: 11px; color: {tokens.hint};")
+        self._last_update.setStyleSheet(f"font-size: 11px; color: {tokens.hint};")
 
-        self._mat_frame.setStyleSheet(
-            f"""
-            QFrame#mat_frame {{
-                background-color: {card_bg};
-                border: 1px solid {card_border};
-                border-radius: 8px;
-            }}
-        """
-        )
-        self._batch.setStyleSheet(f"font-weight: 600; color: {text_primary};")
-        self._fed_time.setStyleSheet(f"font-size: 10px; color: {text_muted};")
+        # Card frames
+        card_style = self._theme_service.get_card_style()
+        self._mat_frame.setStyleSheet(f"QFrame#mat_frame {{ {card_style} }}")
+        self._details_frame.setStyleSheet(f"QFrame#details_frame {{ {card_style} }}")
 
-        self._lbl_oee.setStyleSheet(f"font-weight: 600; margin-top: 6px; color: {text_primary};")
-        self._lbl_yield.setStyleSheet(f"font-weight: 600; margin-top: 4px; color: {text_primary};")
+        self._batch.setStyleSheet(f"font-weight: 600; color: {tokens.app_fg};")
+        self._fed_time.setStyleSheet(f"font-size: 10px; color: {tokens.hint};")
 
-        bar_bg = "#334155" if is_dark else "#E2E8F0"
-        self._bar_oee.setStyleSheet(f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }}")
-        self._bar_yield.setStyleSheet(f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }}")
+        # Labels
+        self._lbl_oee.setStyleSheet(f"font-weight: 600; margin-top: 6px; color: {tokens.app_fg};")
+        self._lbl_yield.setStyleSheet(f"font-weight: 600; margin-top: 4px; color: {tokens.app_fg};")
 
-        self._details_frame.setStyleSheet(
-            f"""
-            QFrame#details_frame {{
-                background-color: {card_bg};
-                border: 1px solid {card_border};
-                border-radius: 8px;
-            }}
-        """
-        )
-        self._inputs.setStyleSheet(f"color: {text_primary};")
-        self._outputs.setStyleSheet(f"color: {text_primary};")
-        self._cycle.setStyleSheet(f"color: {text_primary};")
+        # Progress bars
+        bar_style = self._theme_service.get_progress_bar_style()
+        self._bar_oee.setStyleSheet(bar_style)
+        self._bar_yield.setStyleSheet(bar_style)
+
+        # Detail labels
+        for label in [self._inputs, self._outputs, self._cycle]:
+            label.setStyleSheet(f"color: {tokens.app_fg};")
 
     def _render_device_from_model(self, device) -> None:
         """Render device from DeviceDisplayModel."""
+        tokens = self._theme_service.tokens
+
         if hasattr(device, "device_id"):
-            # DeviceDisplayModel
             self._title.setText(str(device.display_name))
             self._desc.setText(str(device.description) if device.description else "")
             self._desc.setVisible(bool(device.description))
@@ -315,23 +253,25 @@ class RightPanelView:
             self._batch.setText(f"📦 {device.material_batch}")
             self._fed_time.setText(f"⏰ Fed: {device.feeding_time}")
 
+            # OEE with dynamic color
             oee_val = float(device.oee) if device.oee else 0
             self._lbl_oee.setText(f"OEE: {oee_val:.1f}%")
             self._bar_oee.setValue(int(min(oee_val, 100)))
-            bar_color = "#10B981" if oee_val > 85 else ("#F59E0B" if oee_val > 60 else "#EF4444")
-            bar_bg = "#334155" if self._current_theme == "dark" else "#E2E8F0"
-            self._bar_oee.setStyleSheet(
-                f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }} "
-                f"QProgressBar::chunk {{ background-color: {bar_color}; border-radius: 4px; }}"
-            )
 
+            if oee_val > 85:
+                bar_color = tokens.success
+            elif oee_val > 60:
+                bar_color = tokens.warning
+            else:
+                bar_color = tokens.error
+
+            self._bar_oee.setStyleSheet(self._theme_service.get_progress_bar_style(bar_color))
+
+            # Yield
             yield_val = float(device.yield_rate) if device.yield_rate else 0
             self._lbl_yield.setText(f"Yield: {yield_val:.1f}%")
             self._bar_yield.setValue(int(min(yield_val, 100)))
-            self._bar_yield.setStyleSheet(
-                f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }} "
-                f"QProgressBar::chunk {{ background-color: #3B82F6; border-radius: 4px; }}"
-            )
+            self._bar_yield.setStyleSheet(self._theme_service.get_progress_bar_style(tokens.accent))
 
             self._inputs.setText(f"📥 Inputs: {device.input_count:,}")
             self._outputs.setText(f"📦 Outputs: {device.output_count:,}")
@@ -339,19 +279,22 @@ class RightPanelView:
 
             if device.last_error:
                 self._error.setText(f"⚠️ {device.last_error}")
-                self._error.setStyleSheet("color: #EF4444; font-weight: 600;")
+                self._error.setStyleSheet(f"color: {tokens.error}; font-weight: 600;")
             else:
                 self._error.setText("✅ Healthy")
-                self._error.setStyleSheet("color: #10B981;")
+                self._error.setStyleSheet(f"color: {tokens.success};")
         else:
-            # Fallback for dict
             self._render_device_info(device, device.get("device_id", "Unknown"))
 
     def _show_no_selection(self) -> None:
         """Show no device selected state."""
+        tokens = self._theme_service.tokens
+
         self._title.setText("SELECT DEVICE")
         self._status_badge.setText("N/A")
-        self._status_badge.setStyleSheet("background-color: #64748B; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;")
+        self._status_badge.setStyleSheet(
+            f"background-color: {tokens.hint}; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;"
+        )
         self._desc.setText("")
         self._desc.setVisible(False)
         self._last_update.setText("🕒 --")
@@ -365,13 +308,17 @@ class RightPanelView:
         self._outputs.setText("📦 Outputs: 0")
         self._cycle.setText("⏱️ Cycle: 0s")
         self._error.setText("--")
-        self._error.setStyleSheet("color: #64748B;")
+        self._error.setStyleSheet(f"color: {tokens.hint};")
 
     def _show_loading_device(self, device_id: str) -> None:
         """Show loading state for selected device."""
+        tokens = self._theme_service.tokens
+
         self._title.setText(device_id)
         self._status_badge.setText("LOADING")
-        self._status_badge.setStyleSheet("background-color: #64748B; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;")
+        self._status_badge.setStyleSheet(
+            f"background-color: {tokens.hint}; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;"
+        )
         self._desc.setText("Loading device data...")
         self._desc.setVisible(True)
         self._last_update.setText("🕒 --")
@@ -385,10 +332,11 @@ class RightPanelView:
         self._outputs.setText("📦 Outputs: --")
         self._cycle.setText("⏱️ Cycle: --")
         self._error.setText("--")
-        self._error.setStyleSheet("color: #64748B;")
+        self._error.setStyleSheet(f"color: {tokens.hint};")
 
     def _render_device_info(self, device: Any, device_id: str) -> None:
         """Render device information from dict (legacy support)."""
+        tokens = self._theme_service.tokens
 
         def get_val(key: str, default: Any = None) -> Any:
             if isinstance(device, dict):
@@ -397,7 +345,7 @@ class RightPanelView:
 
         display_name = get_val("display_name") or get_val("equip_name") or device_id
         status_name = get_val("status_name") or "Unknown"
-        status_color = get_val("status_color") or "#64748B"
+        status_color = get_val("status_color") or tokens.hint
         description = get_val("description") or ""
         last_update = get_val("last_update")
         material_batch = get_val("material_batch") or "--"
@@ -430,20 +378,20 @@ class RightPanelView:
         oee_val = float(oee) if oee else 0
         self._lbl_oee.setText(f"OEE: {oee_val:.1f}%")
         self._bar_oee.setValue(int(min(oee_val, 100)))
-        bar_color = "#10B981" if oee_val > 85 else ("#F59E0B" if oee_val > 60 else "#EF4444")
-        bar_bg = "#334155" if self._current_theme == "dark" else "#E2E8F0"
-        self._bar_oee.setStyleSheet(
-            f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }} "
-            f"QProgressBar::chunk {{ background-color: {bar_color}; border-radius: 4px; }}"
-        )
+
+        if oee_val > 85:
+            bar_color = tokens.success
+        elif oee_val > 60:
+            bar_color = tokens.warning
+        else:
+            bar_color = tokens.error
+
+        self._bar_oee.setStyleSheet(self._theme_service.get_progress_bar_style(bar_color))
 
         yield_val = float(yield_rate) if yield_rate else 0
         self._lbl_yield.setText(f"Yield: {yield_val:.1f}%")
         self._bar_yield.setValue(int(min(yield_val, 100)))
-        self._bar_yield.setStyleSheet(
-            f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 4px; }} "
-            f"QProgressBar::chunk {{ background-color: #3B82F6; border-radius: 4px; }}"
-        )
+        self._bar_yield.setStyleSheet(self._theme_service.get_progress_bar_style(tokens.accent))
 
         self._inputs.setText(f"📥 Inputs: {input_count:,}")
         self._outputs.setText(f"📦 Outputs: {output_count:,}")
@@ -451,23 +399,14 @@ class RightPanelView:
 
         if last_error:
             self._error.setText(f"⚠️ {last_error}")
-            self._error.setStyleSheet("color: #EF4444; font-weight: 600;")
+            self._error.setStyleSheet(f"color: {tokens.error}; font-weight: 600;")
         else:
             self._error.setText("✅ Healthy")
-            self._error.setStyleSheet("color: #10B981;")
+            self._error.setStyleSheet(f"color: {tokens.success};")
 
     def render(self, state: Dict[str, Any]) -> None:
-        """
-        Render panel based on state.
-
-        Legacy compatibility - primary updates come via ViewModel signals.
-        """
+        """Render panel based on state (legacy compatibility)."""
         is_expanded = select_right_panel_expanded(state)
-        theme = select_theme(state)
-
-        if theme != self._current_theme:
-            self._current_theme = theme
-            self._apply_theme_styles()
 
         width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if is_expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
         self._container.setFixedWidth(width)

@@ -1,13 +1,12 @@
+# File: presentation/viewmodels/shell_viewmodel.py
 """
 Shell ViewModel.
 
 Manages shell/navigation state including:
-- Theme (light/dark)
+- Theme (light/dark) via ThemeService
 - Current page
 - Sidebar expansion
 - Right panel expansion
-
-Replaces: ShellController
 """
 
 from __future__ import annotations
@@ -24,6 +23,7 @@ from .models.shell_model import SystemStatusModel
 
 if TYPE_CHECKING:
     from ..services.page_device_manager import PageDeviceManager
+    from ..services.theme_service import ThemeService
 
 logger = logging.getLogger(__name__)
 
@@ -33,17 +33,10 @@ class ShellViewModel(BaseViewModel):
     ViewModel for Shell (main application frame).
 
     Manages:
-    - Theme switching
+    - Theme switching (via injected ThemeService)
     - Page navigation
     - Panel states
     - System status
-
-    Signals:
-    - themeChanged: Emitted when theme changes
-    - pageChanged: Emitted when page changes
-    - sidebarChanged: Emitted when sidebar state changes
-    - rightPanelChanged: Emitted when right panel state changes
-    - systemStatusChanged: Emitted when system status changes
     """
 
     themeChanged = Signal(str)
@@ -54,17 +47,24 @@ class ShellViewModel(BaseViewModel):
 
     def __init__(
         self,
+        theme_service: Optional["ThemeService"] = None,
         config_path: Optional[Path] = None,
         page_manager: Optional["PageDeviceManager"] = None,
         parent=None,
     ):
         super().__init__(parent)
 
+        # Inject theme service or fall back to global
+        if theme_service is None:
+            from ..services.theme_service import get_theme_service
+
+            theme_service = get_theme_service()
+
+        self._theme_service = theme_service
         self._config_path = config_path
         self._page_manager = page_manager
 
         # State
-        self._theme: str = "light"
         self._current_page: str = "dashboard_page"
         self._sidebar_expanded: bool = False
         self._right_panel_expanded: bool = False
@@ -72,6 +72,13 @@ class ShellViewModel(BaseViewModel):
 
         # Cache
         self._layout_cache: Dict[str, Any] = {}
+
+        # Forward theme service signals
+        self._theme_service.themeChanged.connect(self._on_theme_service_changed)
+
+    def _on_theme_service_changed(self, theme: str) -> None:
+        """Forward theme changes from service."""
+        self.themeChanged.emit(theme)
 
     def initialize(self) -> None:
         """Initialize shell state."""
@@ -87,16 +94,27 @@ class ShellViewModel(BaseViewModel):
         self._page_manager = manager
 
     # =========================================================================
-    # Properties
+    # Theme Properties (Delegated to ThemeService)
     # =========================================================================
 
     @property
     def theme(self) -> str:
-        return self._theme
+        """Get current theme name."""
+        return self._theme_service.current_theme
 
     @property
     def is_dark(self) -> bool:
-        return self._theme == "dark"
+        """Check if current theme is dark."""
+        return self._theme_service.is_dark
+
+    @property
+    def theme_service(self) -> "ThemeService":
+        """Expose theme service for views that need direct access."""
+        return self._theme_service
+
+    # =========================================================================
+    # Other Properties
+    # =========================================================================
 
     @property
     def current_page(self) -> str:
@@ -115,27 +133,24 @@ class ShellViewModel(BaseViewModel):
         return self._system_status
 
     # =========================================================================
-    # User Actions
+    # Theme Actions
     # =========================================================================
 
     def toggle_theme(self) -> None:
         """Toggle between light and dark theme."""
-        new_theme = "dark" if self._theme == "light" else "light"
-        self._theme = new_theme
-        self.themeChanged.emit(new_theme)
-        logger.info(f"[ShellViewModel] Theme: {new_theme}")
+        self._theme_service.toggle_theme()
+        logger.info(f"[ShellViewModel] Theme: {self.theme}")
 
     def set_theme(self, theme: str) -> None:
         """Set specific theme."""
-        if theme not in ("light", "dark"):
-            return
-        if theme != self._theme:
-            self._theme = theme
-            self.themeChanged.emit(theme)
+        self._theme_service.set_theme(theme)
+
+    # =========================================================================
+    # Navigation Actions
+    # =========================================================================
 
     def navigate_to(self, page: str) -> None:
         """Navigate to a page."""
-        # Normalize page name
         normalized = page.replace("daboard", "dashboard")
         if not normalized.endswith("_page"):
             normalized = f"{normalized}_page"
@@ -145,12 +160,15 @@ class ShellViewModel(BaseViewModel):
 
         logger.info(f"[ShellViewModel] Navigating to {normalized}")
 
-        # Update page manager first (triggers device sync)
         if self._page_manager:
             self._page_manager.set_current_page(normalized)
 
         self._current_page = normalized
         self.pageChanged.emit(normalized)
+
+    # =========================================================================
+    # Panel Actions
+    # =========================================================================
 
     def toggle_sidebar(self) -> None:
         """Toggle sidebar expansion."""
@@ -190,6 +208,10 @@ class ShellViewModel(BaseViewModel):
             self._right_panel_expanded = expanded
             self.rightPanelChanged.emit(expanded)
 
+    # =========================================================================
+    # System Status
+    # =========================================================================
+
     def update_system_status(
         self,
         mssql_connected: Optional[bool] = None,
@@ -222,7 +244,6 @@ class ShellViewModel(BaseViewModel):
 
             config = data.get(area_key, {})
             if not config:
-                # Try fuzzy match
                 for key in data:
                     if area_key in key or key in area_key:
                         config = data[key]
@@ -236,13 +257,13 @@ class ShellViewModel(BaseViewModel):
             return {}
 
     # =========================================================================
-    # State Serialization (for store sync)
+    # State Serialization
     # =========================================================================
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize state to dictionary."""
         return {
-            "theme": self._theme,
+            "theme": self.theme,
             "current_page": self._current_page,
             "sidebar_expanded": self._sidebar_expanded,
             "right_panel_expanded": self._right_panel_expanded,

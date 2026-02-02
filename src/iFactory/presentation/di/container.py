@@ -1,3 +1,4 @@
+# File: presentation/di/container.py
 """
 UI Dependency Injection Container.
 
@@ -9,6 +10,7 @@ Features:
 - Initial history sync on startup
 - Proper shutdown handling
 - Proper ViewModel dependency injection
+- Centralized ThemeService management
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from PySide6.QtCore import QObject, QTimer
 
 from ..constants.timing import Timing
 from ..services.page_device_manager import PageDeviceManager
+from ..services.theme_service import ThemeService, get_theme_service
 from ..state.reducers import INITIAL_STATE
 from ..state.store import Store
 from ..viewmodels import (
@@ -48,6 +51,7 @@ class UIContainer(QObject):
     - Views bind to ViewModel signals (passive consumers)
     - Redux Store for cross-cutting state (theme, selection)
     - Proper dependency injection between ViewModels
+    - Centralized ThemeService for all theming needs
     """
 
     def __init__(self, app_container: "AppContainer"):
@@ -60,6 +64,7 @@ class UIContainer(QObject):
         # Core components
         self._store: Optional[Store] = None
         self._page_manager: Optional[PageDeviceManager] = None
+        self._theme_service: Optional[ThemeService] = None
         self._main_window: Optional[MainWindow] = None
 
         # ViewModels
@@ -80,17 +85,25 @@ class UIContainer(QObject):
 
         logger.info("[UIContainer] Initializing with MVVM architecture...")
 
+        # Initialize ThemeService FIRST - it's needed by ViewModels and Views
+        self._init_theme_service()
+
         self._init_store()
         self._init_page_manager()
         self._init_sync_orchestrator()
         self._init_viewmodels()
-        self._wire_viewmodel_dependencies()  # NEW: Wire up dependencies
+        self._wire_viewmodel_dependencies()
         self._init_main_window()
         self._connect_signals()
         self._init_auto_refresh()
 
         self._is_initialized = True
         logger.info("[UIContainer] Initialized successfully")
+
+    def _init_theme_service(self) -> None:
+        """Initialize the centralized theme service."""
+        self._theme_service = get_theme_service()
+        logger.info("[UIContainer] ThemeService initialized")
 
     def _init_store(self) -> None:
         """Initialize Redux-like store for cross-cutting state."""
@@ -159,7 +172,7 @@ class UIContainer(QObject):
         return lambda: NullUnitOfWork()
 
     def _init_viewmodels(self) -> None:
-        """Initialize all ViewModels with basic dependencies."""
+        """Initialize all ViewModels with proper dependencies."""
         config_path = None
         mssql_url = None
         remote_source = None
@@ -180,8 +193,9 @@ class UIContainer(QObject):
         except Exception as e:
             logger.warning(f"[UIContainer] Could not get remote config: {e}")
 
-        # 1. Shell ViewModel (no dependencies on other VMs)
+        # 1. Shell ViewModel - inject ThemeService
         self._shell_vm = ShellViewModel(
+            theme_service=self._theme_service,
             config_path=config_path,
             page_manager=self._page_manager,
         )
@@ -204,18 +218,18 @@ class UIContainer(QObject):
 
     def _wire_viewmodel_dependencies(self) -> None:
         """Wire up cross-ViewModel dependencies after initial creation."""
-        # DeviceListViewModel needs ShellViewModel for panel control
         if self._device_vm and self._shell_vm:
             self._device_vm.set_shell_viewmodel(self._shell_vm)
             logger.info("[UIContainer] Wired DeviceVM -> ShellVM")
 
     def _init_main_window(self) -> None:
-        """Initialize main window with ViewModels."""
+        """Initialize main window with ViewModels and ThemeService."""
         self._main_window = MainWindow(
             store=self._store,
             shell_vm=self._shell_vm,
             device_vm=self._device_vm,
             gantt_vm=self._gantt_vm,
+            theme_service=self._theme_service,
             page_manager=self._page_manager,
         )
 
@@ -256,7 +270,6 @@ class UIContainer(QObject):
 
         if selection.has_selection:
             self._store.dispatch(select_device_only(selection.selected_device_id))
-            # Panel state is now managed by ShellViewModel, not here
         else:
             self._store.dispatch(deselect_device())
 
@@ -294,7 +307,6 @@ class UIContainer(QObject):
         state = self._store.get_state()
         current_expanded = state.get("right_panel_expanded", False)
 
-        # Only dispatch if state actually changed
         if current_expanded != expanded:
             from ..state.actions import toggle_right_panel
 
@@ -349,6 +361,10 @@ class UIContainer(QObject):
 
     def get_store(self) -> Optional[Store]:
         return self._store
+
+    def get_theme_service(self) -> Optional[ThemeService]:
+        """Get the centralized theme service."""
+        return self._theme_service
 
     # =========================================================================
     # Lifecycle

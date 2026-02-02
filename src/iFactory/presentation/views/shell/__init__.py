@@ -1,11 +1,14 @@
+# File: presentation/views/shell/__init__.py
 """
-Shell Views Package.
+Shell Views - Application frame components.
 
-Shell components for the main application frame:
-- HeaderView: Top bar with toggle and window controls
-- SidebarView: Navigation sidebar
+These views make up the main application shell:
+- HeaderView: Logo, title, toggle button
+- SidebarView: Navigation menu
 - RightPanelView: Device details panel
-- StatusBarView: Bottom status bar
+- StatusBarView: Connection status
+
+All views use ThemeService for centralized theming.
 """
 
 from .header import HeaderView

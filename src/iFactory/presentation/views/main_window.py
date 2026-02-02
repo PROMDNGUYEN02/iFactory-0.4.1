@@ -3,6 +3,7 @@
 Main Window - MVVM Architecture (Optimized).
 
 Click-outside detection using focused approach instead of global event filter.
+Uses ThemeService for centralized theming.
 """
 
 from __future__ import annotations
@@ -12,9 +13,9 @@ import sys
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from PySide6.QtCore import QEvent, QRect, QTimer, Slot, QPoint, Qt
+from PySide6.QtCore import QTimer, Slot, QPoint, Qt
 from PySide6.QtGui import QKeySequence, QShortcut, QMouseEvent
-from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QWidget
 
 import iFactory.presentation.resources.resources_rc as resources_rc
 
@@ -22,16 +23,7 @@ sys.modules["resources_rc"] = resources_rc
 
 from ..constants.layout import Layout
 from ..constants.timing import Timing
-from ..resources.themes import get_theme_manager
-from ..state.selectors import (
-    select_current_page,
-    select_devices,
-    select_factory_summary,
-    select_right_panel_expanded,
-    select_selected_device_id,
-    select_sidebar_expanded,
-    select_theme,
-)
+from ..state.selectors import select_factory_summary
 from .shell.header import HeaderView
 from .shell.right_panel import RightPanelView
 from .shell.sidebar import SidebarView
@@ -43,6 +35,7 @@ from .widgets.legend_widget import LegendWidget
 
 if TYPE_CHECKING:
     from ..services.page_device_manager import PageDeviceManager
+    from ..services.theme_service import ThemeService
     from ..state.store import Store
     from ..viewmodels import (
         DeviceListViewModel,
@@ -63,6 +56,8 @@ class MainWindow(QMainWindow):
     - Uses mousePressEvent on specific widgets instead of global filter
     - Immediate response without timer delays
     - Clean separation of device clicks vs outside clicks
+
+    Uses ThemeService for all theming needs - no more scattered theme logic.
     """
 
     def __init__(
@@ -71,6 +66,7 @@ class MainWindow(QMainWindow):
         shell_vm: "ShellViewModel",
         device_vm: "DeviceListViewModel",
         gantt_vm: "GanttChartViewModel",
+        theme_service: "ThemeService",
         page_manager: Optional["PageDeviceManager"] = None,
         parent: Optional[QWidget] = None,
     ):
@@ -80,8 +76,8 @@ class MainWindow(QMainWindow):
         self._shell_vm = shell_vm
         self._device_vm = device_vm
         self._gantt_vm = gantt_vm
+        self._theme_service = theme_service
         self._page_manager = page_manager
-        self._theme_manager = get_theme_manager()
 
         self._prev_state: Dict[str, Any] = {}
         self._components_ready = False
@@ -97,38 +93,32 @@ class MainWindow(QMainWindow):
 
         self._setup_shortcuts()
         self._bind_viewmodels()
-        self._apply_theme("light")
+
+        # Apply initial theme using ThemeService
+        self._apply_theme(self._theme_service.current_theme)
 
         self._store.state_changed.connect(self._on_state_changed)
 
-        logger.info("[MainWindow] Initialized with MVVM (Optimized)")
+        logger.info("[MainWindow] Initialized with MVVM and ThemeService")
 
     # =========================================================================
     # Click-Outside Detection (Optimized)
     # =========================================================================
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """
-        Handle mouse press on MainWindow background.
-        This catches clicks that fall through to the main window.
-        """
+        """Handle mouse press on MainWindow background."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._handle_background_click(event.globalPosition().toPoint())
         super().mousePressEvent(event)
 
     def _handle_background_click(self, global_pos: QPoint) -> None:
-        """
-        Handle click on background area.
-        Close panel if click is outside right panel and not on a device.
-        """
+        """Handle click on background area."""
         if not self._shell_vm.right_panel_expanded:
             return
 
-        # Check if click is inside right panel
         if self._is_point_in_widget(global_pos, self.ui.right_slide_menu_frame):
-            return  # Click inside panel - ignore
+            return
 
-        # Click is outside panel - close it
         logger.debug("[MainWindow] Background click detected - closing panel")
         self._close_panel_only()
 
@@ -182,9 +172,8 @@ class MainWindow(QMainWindow):
 
         logger.debug(f"[MainWindow] Devices updated: {len(devices)} devices")
 
-        is_dark = self._theme_manager.is_dark
+        is_dark = self._theme_service.is_dark
 
-        # Convert DeviceDisplayModel to dict if needed
         devices_dict = {}
         for code, device in devices.items():
             if hasattr(device, "to_dict"):
@@ -310,25 +299,16 @@ class MainWindow(QMainWindow):
         logger.info(f"[MainWindow] Right panel changed: expanded={expanded}, width={width}")
 
     # =========================================================================
-    # Canvas Event Handlers (User Interactions -> ViewModel)
+    # Canvas Event Handlers
     # =========================================================================
 
     def _on_device_single_clicked(self, device_id: str) -> None:
-        """
-        Handle single click on device.
-        - Select device (update panel content if open)
-        - Do NOT open panel
-        - Keep panel open if already open
-        """
+        """Handle single click on device."""
         logger.info(f"[MainWindow] Device single clicked: {device_id}")
         self._device_vm.select_device(device_id, open_panel=False)
 
     def _on_device_double_clicked(self, device_id: str) -> None:
-        """
-        Handle double click on device.
-        - Select device
-        - Toggle panel (open if closed, close if open AND same device)
-        """
+        """Handle double click on device."""
         logger.info(f"[MainWindow] Device double clicked: {device_id}")
         self._device_vm.select_device(device_id, open_panel=True)
 
@@ -362,6 +342,7 @@ class MainWindow(QMainWindow):
             self.ui.stackedWidget.setCurrentWidget(self.ui.daboard_page)
 
     def _init_shell(self) -> None:
+        """Initialize shell components with ThemeService."""
         self.header = HeaderView(
             container=self.ui.title_frame,
             toggle_btn=getattr(self.ui, "pushButton", None),
@@ -373,6 +354,7 @@ class MainWindow(QMainWindow):
                 getattr(self.ui, "close_window_button", None),
             ),
             shell_vm=self._shell_vm,
+            theme_service=self._theme_service,
         )
 
         self.sidebar = SidebarView(
@@ -380,6 +362,7 @@ class MainWindow(QMainWindow):
             nav_list=self.ui.listWidget,
             settings_list=self.ui.listWidget_settings,
             shell_vm=self._shell_vm,
+            theme_service=self._theme_service,
         )
 
         self.right_panel = RightPanelView(
@@ -387,9 +370,14 @@ class MainWindow(QMainWindow):
             store=self._store,
             device_vm=self._device_vm,
             shell_vm=self._shell_vm,
+            theme_service=self._theme_service,
         )
 
-        self.status_bar = StatusBarView(self.ui.statusbar)
+        self.status_bar = StatusBarView(
+            status_bar=self.ui.statusbar,
+            shell_vm=self._shell_vm,
+            theme_service=self._theme_service,
+        )
 
     def _init_workspace(self) -> None:
         logger.info("[MainWindow] Initializing workspace...")
@@ -424,7 +412,6 @@ class MainWindow(QMainWindow):
                 LegendWidget(self),
             )
 
-            # Connect device click signals - these are IMMEDIATE, no delays
             self.canvas_dashboard.device_clicked.connect(self._on_device_single_clicked)
             self.canvas_orders.device_clicked.connect(self._on_device_single_clicked)
 
@@ -438,7 +425,7 @@ class MainWindow(QMainWindow):
 
             devices = self._device_vm.devices
             if devices:
-                is_dark = self._theme_manager.is_dark
+                is_dark = self._theme_service.is_dark
                 devices_dict = {k: v.to_dict() if hasattr(v, "to_dict") else v for k, v in devices.items()}
                 self.canvas_dashboard.render_state(devices_dict, is_dark)
                 self.canvas_orders.render_state(devices_dict, is_dark)
@@ -461,36 +448,30 @@ class MainWindow(QMainWindow):
         return widget
 
     def _apply_theme(self, theme: str) -> None:
-        self._theme_manager.set_theme(theme)
-        stylesheet = self._theme_manager.get_stylesheet()
+        """Apply theme using ThemeService."""
+        self._theme_service.set_theme(theme)
+
+        stylesheet = self._theme_service.get_stylesheet()
         if stylesheet:
             self.setStyleSheet(stylesheet)
             self.style().unpolish(self)
             self.style().polish(self)
 
-        self._apply_page_theme(theme)
+        self._apply_page_theme()
 
         if self._components_ready:
-            is_dark = theme == "dark"
+            is_dark = self._theme_service.is_dark
             self.device_gantt_dashboard.set_theme(is_dark)
             self.device_gantt_orders.set_theme(is_dark)
 
-    def _apply_page_theme(self, theme: str) -> None:
-        is_dark = theme == "dark"
-
-        if is_dark:
-            page_bg = "#0F172A"
-            frame_bg = "rgba(30, 41, 59, 0.6)"
-            border = "rgba(51, 65, 85, 0.4)"
-        else:
-            page_bg = "#F1F5F9"
-            frame_bg = "rgba(255, 255, 255, 0.8)"
-            border = "rgba(226, 232, 240, 0.6)"
+    def _apply_page_theme(self) -> None:
+        """Apply page theme using ThemeService tokens."""
+        tokens = self._theme_service.tokens
 
         for page_name in ["daboard_page", "orders_page"]:
             page = getattr(self.ui, page_name, None)
             if page:
-                page.setStyleSheet(f"background-color: {page_bg};")
+                page.setStyleSheet(f"background-color: {tokens.stack_bg};")
 
         for frame_name in ["daboard_top_frame", "orders_top_frame"]:
             frame = getattr(self.ui, frame_name, None)
@@ -498,9 +479,9 @@ class MainWindow(QMainWindow):
                 frame.setStyleSheet(
                     f"""
                     QFrame {{
-                        background-color: {frame_bg};
+                        background-color: {tokens.get_rgba("frame.bg", 0.8)};
                         border: none;
-                        border-bottom: 1px solid {border};
+                        border-bottom: 1px solid {tokens.get_rgba("border", 0.6)};
                     }}
                 """
                 )
@@ -511,9 +492,9 @@ class MainWindow(QMainWindow):
                 frame.setStyleSheet(
                     f"""
                     QFrame {{
-                        background-color: {frame_bg};
+                        background-color: {tokens.get_rgba("frame.bg", 0.8)};
                         border: none;
-                        border-top: 1px solid {border};
+                        border-top: 1px solid {tokens.get_rgba("border", 0.6)};
                     }}
                 """
                 )

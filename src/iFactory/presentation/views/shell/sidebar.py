@@ -1,13 +1,11 @@
+# File: presentation/views/shell/sidebar.py
 """
 Sidebar View - MVVM Architecture.
 
 Modern navigation sidebar with:
 - Navigation buttons
 - Settings menu
-- Theme support
-- Expansion animation
-
-Binds to ShellViewModel for navigation and theme.
+- Theme support via ThemeService
 """
 
 from __future__ import annotations
@@ -16,62 +14,32 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, QSize, QPoint, Slot
-from PySide6.QtGui import QIcon, QFont, QColor, QPainter, QPainterPath, QBrush, QPixmap
+from PySide6.QtGui import QIcon, QFont, QColor, QPainter, QPainterPath, QBrush
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QListWidget, QMenu, QGraphicsDropShadowEffect
-from PySide6.QtSvg import QSvgRenderer
 
 from ...constants.layout import Layout
-from ...resources.themes import get_theme_manager
-from ...state.selectors import select_current_page, select_sidebar_expanded, select_theme, select_data_range_days
+from ...state.selectors import select_current_page, select_sidebar_expanded, select_data_range_days
 
 if TYPE_CHECKING:
+    from ...services.theme_service import ThemeService
     from ...viewmodels import ShellViewModel
 
 logger = logging.getLogger(__name__)
 
 
-def create_colored_icon(icon_path: str, color: QColor, size: int = 16) -> QIcon:
-    """Create a colored icon from SVG path."""
-    renderer = QSvgRenderer(icon_path)
-
-    if not renderer.isValid():
-        return QIcon(icon_path)
-
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.transparent)
-
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing)
-    renderer.render(painter)
-    painter.end()
-
-    colored_pixmap = QPixmap(pixmap.size())
-    colored_pixmap.fill(Qt.transparent)
-
-    painter = QPainter(colored_pixmap)
-    painter.setRenderHint(QPainter.Antialiasing)
-    painter.setCompositionMode(QPainter.CompositionMode_Source)
-    painter.drawPixmap(0, 0, pixmap)
-    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-    painter.fillRect(colored_pixmap.rect(), color)
-    painter.end()
-
-    return QIcon(colored_pixmap)
-
-
 class ModernNavButton(QWidget):
     """Modern navigation button with hover and active states."""
 
-    def __init__(self, icon_path: str, text: str, page_id: str, on_click: callable, parent: Optional[QWidget] = None):
+    def __init__(self, icon_path: str, text: str, page_id: str, on_click: callable, theme_service: "ThemeService", parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._icon_path = icon_path
         self._text = text
         self._page_id = page_id
         self._on_click = on_click
+        self._theme_service = theme_service
         self._is_active = False
         self._is_hovered = False
         self._is_expanded = False
-        self._theme_manager = get_theme_manager()
 
         self.setFixedHeight(44)
         self.setCursor(Qt.PointingHandCursor)
@@ -109,21 +77,21 @@ class ModernNavButton(QWidget):
         self._apply_style()
 
     def _update_icon(self) -> None:
-        icon_path = self._theme_manager.get_icon_path(self._icon_path)
+        icon_path = self._theme_service.get_icon_path(self._icon_path)
         pixmap = QIcon(icon_path).pixmap(QSize(20, 20))
         self._icon_label.setPixmap(pixmap)
 
     def _apply_style(self) -> None:
-        is_dark = self._theme_manager.is_dark
+        tokens = self._theme_service.tokens
 
         if self._is_active:
-            text_color = "#3B82F6"
+            text_color = tokens.accent
             font_weight = "600"
         elif self._is_hovered:
-            text_color = "#E2E8F0" if is_dark else "#334155"
+            text_color = tokens.app_fg
             font_weight = "500"
         else:
-            text_color = "#94A3B8" if is_dark else "#64748B"
+            text_color = tokens.hint
             font_weight = "500"
 
         self._text_label.setStyleSheet(
@@ -185,7 +153,7 @@ class ModernNavButton(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        is_dark = self._theme_manager.is_dark
+        tokens = self._theme_service.tokens
         margin = 6 if self._is_expanded else 4
         rect = self.rect().adjusted(margin, 2, -margin, -2)
 
@@ -193,15 +161,17 @@ class ModernNavButton(QWidget):
         path.addRoundedRect(rect, 10, 10)
 
         if self._is_active:
-            bg_color = QColor(59, 130, 246, 30) if is_dark else QColor(59, 130, 246, 25)
+            bg_color = QColor(tokens.accent)
+            bg_color.setAlphaF(0.15)
             painter.fillPath(path, QBrush(bg_color))
 
             indicator = QPainterPath()
             indicator.addRoundedRect(margin, rect.top() + 8, 3, rect.height() - 16, 1.5, 1.5)
-            painter.fillPath(indicator, QBrush(QColor("#3B82F6")))
+            painter.fillPath(indicator, QBrush(QColor(tokens.accent)))
 
         elif self._is_hovered:
-            bg_color = QColor(255, 255, 255, 15) if is_dark else QColor(0, 0, 0, 8)
+            bg_color = QColor(tokens.hover)
+            bg_color.setAlphaF(0.5)
             painter.fillPath(path, QBrush(bg_color))
 
     @property
@@ -209,299 +179,18 @@ class ModernNavButton(QWidget):
         return self._page_id
 
 
-class SettingsMenu(QMenu):
-    """Professional settings menu with themed icons."""
-
-    DATE_RANGE_OPTIONS = [
-        ("Today", 1, "calendar_today"),
-        ("Last 7 Days", 7, "calendar_week"),
-        ("Last 30 Days", 30, "calendar_month"),
-        ("Last 3 Months", 90, "calendar_range"),
-        ("Last 6 Months", 180, "calendar_range"),
-        ("Last Year", 365, "calendar_year"),
-    ]
-
-    ICON_SVG = {
-        "calendar_today": """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" 
-                 stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                <line x1="16" y1="2" x2="16" y2="6"/>
-                <line x1="8" y1="2" x2="8" y2="6"/>
-                <line x1="3" y1="10" x2="21" y2="10"/>
-                <circle cx="12" cy="15" r="2"/>
-            </svg>
-        """,
-        "calendar_week": """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" 
-                 stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                <line x1="16" y1="2" x2="16" y2="6"/>
-                <line x1="8" y1="2" x2="8" y2="6"/>
-                <line x1="3" y1="10" x2="21" y2="10"/>
-                <line x1="7" y1="14" x2="11" y2="14"/>
-                <line x1="7" y1="18" x2="17" y2="18"/>
-            </svg>
-        """,
-        "calendar_month": """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" 
-                 stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                <line x1="16" y1="2" x2="16" y2="6"/>
-                <line x1="8" y1="2" x2="8" y2="6"/>
-                <line x1="3" y1="10" x2="21" y2="10"/>
-                <rect x="7" y="13" width="10" height="6" rx="1"/>
-            </svg>
-        """,
-        "calendar_range": """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" 
-                 stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                <line x1="16" y1="2" x2="16" y2="6"/>
-                <line x1="8" y1="2" x2="8" y2="6"/>
-                <line x1="3" y1="10" x2="21" y2="10"/>
-                <path d="M7 14h10M7 18h6"/>
-            </svg>
-        """,
-        "calendar_year": """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" 
-                 stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                <line x1="16" y1="2" x2="16" y2="6"/>
-                <line x1="8" y1="2" x2="8" y2="6"/>
-                <line x1="3" y1="10" x2="21" y2="10"/>
-                <path d="M8 14v4M12 13v5M16 15v3"/>
-            </svg>
-        """,
-        "sun": """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" 
-                 stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="5"/>
-                <line x1="12" y1="1" x2="12" y2="3"/>
-                <line x1="12" y1="21" x2="12" y2="23"/>
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-                <line x1="1" y1="12" x2="3" y2="12"/>
-                <line x1="21" y1="12" x2="23" y2="12"/>
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-            </svg>
-        """,
-        "moon": """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" 
-                 stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-            </svg>
-        """,
-        "info": """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" 
-                 stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="16" x2="12" y2="12"/>
-                <line x1="12" y1="8" x2="12.01" y2="8"/>
-            </svg>
-        """,
-        "check": """
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" 
-                 stroke="{color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="20 6 9 17 4 12"/>
-            </svg>
-        """,
-    }
-
-    def __init__(self, shell_vm: "ShellViewModel", current_range: int, theme_manager, parent: Optional[QWidget] = None):
-        super().__init__(parent)
-        self._shell_vm = shell_vm
-        self._current_range = current_range
-        self._theme_manager = theme_manager
-        self._is_dark = theme_manager.is_dark
-
-        self._icon_color = "#E2E8F0" if self._is_dark else "#475569"
-        self._icon_color_active = "#60A5FA" if self._is_dark else "#2563EB"
-        self._icon_color_disabled = "#64748B" if self._is_dark else "#94A3B8"
-
-        self._setup_menu()
-
-    def _create_icon_from_svg(self, svg_name: str, color: str, size: int = 18) -> QIcon:
-        """Create QIcon from inline SVG with specified color."""
-        svg_template = self.ICON_SVG.get(svg_name, "")
-        if not svg_template:
-            return QIcon()
-
-        svg_data = svg_template.format(color=color).strip().encode("utf-8")
-        renderer = QSvgRenderer(svg_data)
-
-        if not renderer.isValid():
-            return QIcon()
-
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
-
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        renderer.render(painter)
-        painter.end()
-
-        return QIcon(pixmap)
-
-    def _setup_menu(self) -> None:
-        if self._is_dark:
-            self.setStyleSheet(self._get_dark_style())
-        else:
-            self.setStyleSheet(self._get_light_style())
-
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(32)
-        shadow.setXOffset(0)
-        shadow.setYOffset(8)
-        shadow.setColor(QColor(0, 0, 0, 100 if self._is_dark else 50))
-        self.setGraphicsEffect(shadow)
-
-        self._build_menu_items()
-
-    def _get_dark_style(self) -> str:
-        return """
-            QMenu {
-                background-color: #1E293B;
-                border: 1px solid rgba(71, 85, 105, 0.8);
-                border-radius: 12px;
-                padding: 8px 6px;
-                min-width: 220px;
-            }
-            QMenu::item {
-                background-color: transparent;
-                color: #CBD5E1;
-                padding: 10px 16px 10px 14px;
-                margin: 2px 6px;
-                border-radius: 8px;
-                font-size: 13px;
-                font-family: 'Segoe UI', sans-serif;
-            }
-            QMenu::item:selected {
-                background-color: rgba(71, 85, 105, 0.6);
-                color: #F1F5F9;
-            }
-            QMenu::item:disabled {
-                color: #64748B;
-                background: transparent;
-                padding: 8px 14px 6px 14px;
-                font-weight: 700;
-                font-size: 10px;
-                letter-spacing: 1px;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: rgba(71, 85, 105, 0.6);
-                margin: 8px 12px;
-            }
-            QMenu::icon {
-                padding-left: 6px;
-            }
-        """
-
-    def _get_light_style(self) -> str:
-        return """
-            QMenu {
-                background-color: #FFFFFF;
-                border: 1px solid rgba(203, 213, 225, 0.9);
-                border-radius: 12px;
-                padding: 8px 6px;
-                min-width: 220px;
-            }
-            QMenu::item {
-                background-color: transparent;
-                color: #475569;
-                padding: 10px 16px 10px 14px;
-                margin: 2px 6px;
-                border-radius: 8px;
-                font-size: 13px;
-                font-family: 'Segoe UI', sans-serif;
-            }
-            QMenu::item:selected {
-                background-color: rgba(241, 245, 249, 0.95);
-                color: #1E293B;
-            }
-            QMenu::item:disabled {
-                color: #94A3B8;
-                background: transparent;
-                padding: 8px 14px 6px 14px;
-                font-weight: 700;
-                font-size: 10px;
-                letter-spacing: 1px;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: rgba(203, 213, 225, 0.8);
-                margin: 8px 12px;
-            }
-            QMenu::icon {
-                padding-left: 6px;
-            }
-        """
-
-    def _build_menu_items(self) -> None:
-        # Data Range Section Header
-        header = self.addAction("DATA RANGE")
-        header.setEnabled(False)
-
-        # Date range options
-        for label, days, icon_name in self.DATE_RANGE_OPTIONS:
-            is_selected = self._current_range == days
-            icon_color = self._icon_color_active if is_selected else self._icon_color
-            icon = self._create_icon_from_svg(icon_name, icon_color)
-
-            display_label = f"  {label}"
-            action = self.addAction(icon, display_label)
-
-            if is_selected:
-                action.setIcon(self._create_icon_from_svg("check", self._icon_color_active))
-
-            action.triggered.connect(lambda checked, d=days: self._on_range_selected(d))
-
-        self.addSeparator()
-
-        # Appearance Section Header
-        appearance_header = self.addAction("APPEARANCE")
-        appearance_header.setEnabled(False)
-
-        # Theme toggle
-        if self._is_dark:
-            theme_icon = self._create_icon_from_svg("sun", self._icon_color)
-            theme_action = self.addAction(theme_icon, "  Switch to Light Mode")
-        else:
-            theme_icon = self._create_icon_from_svg("moon", self._icon_color)
-            theme_action = self.addAction(theme_icon, "  Switch to Dark Mode")
-
-        theme_action.triggered.connect(self._shell_vm.toggle_theme)
-
-        self.addSeparator()
-
-        # About Section
-        info_header = self.addAction("ABOUT")
-        info_header.setEnabled(False)
-
-        version_icon = self._create_icon_from_svg("info", self._icon_color_disabled)
-        version_action = self.addAction(version_icon, "  Version 1.0.0")
-        version_action.setEnabled(False)
-
-    def _on_range_selected(self, days: int) -> None:
-        self._current_range = days
-        # TODO: Add data range to ShellViewModel if needed
-        # For now, this would need to be dispatched to store
-
-
 class SettingsButton(QWidget):
     """Settings button that opens the settings menu."""
 
-    def __init__(self, icon_path: str, text: str, shell_vm: "ShellViewModel", parent: Optional[QWidget] = None):
+    def __init__(self, icon_path: str, text: str, shell_vm: "ShellViewModel", theme_service: "ThemeService", parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._icon_path = icon_path
         self._text = text
         self._shell_vm = shell_vm
+        self._theme_service = theme_service
         self._is_hovered = False
         self._is_expanded = False
         self._current_range = 1
-        self._theme_manager = get_theme_manager()
 
         self.setFixedHeight(44)
         self.setCursor(Qt.PointingHandCursor)
@@ -539,17 +228,17 @@ class SettingsButton(QWidget):
         self._apply_style()
 
     def _update_icon(self) -> None:
-        icon_path = self._theme_manager.get_icon_path(self._icon_path)
+        icon_path = self._theme_service.get_icon_path(self._icon_path)
         pixmap = QIcon(icon_path).pixmap(QSize(20, 20))
         self._icon_label.setPixmap(pixmap)
 
     def _apply_style(self) -> None:
-        is_dark = self._theme_manager.is_dark
+        tokens = self._theme_service.tokens
 
         if self._is_hovered:
-            text_color = "#E2E8F0" if is_dark else "#334155"
+            text_color = tokens.app_fg
         else:
-            text_color = "#94A3B8" if is_dark else "#64748B"
+            text_color = tokens.hint
 
         self._text_label.setStyleSheet(
             f"""
@@ -603,7 +292,7 @@ class SettingsButton(QWidget):
         super().mousePressEvent(event)
 
     def _show_menu(self) -> None:
-        menu = SettingsMenu(shell_vm=self._shell_vm, current_range=self._current_range, theme_manager=self._theme_manager, parent=self)
+        menu = SettingsMenu(shell_vm=self._shell_vm, current_range=self._current_range, theme_service=self._theme_service, parent=self)
 
         menu.adjustSize()
         menu_height = menu.sizeHint().height()
@@ -623,26 +312,122 @@ class SettingsButton(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        is_dark = self._theme_manager.is_dark
+        tokens = self._theme_service.tokens
         margin = 6 if self._is_expanded else 4
         rect = self.rect().adjusted(margin, 2, -margin, -2)
 
         if self._is_hovered:
             path = QPainterPath()
             path.addRoundedRect(rect, 10, 10)
-            bg_color = QColor(255, 255, 255, 15) if is_dark else QColor(0, 0, 0, 8)
+            bg_color = QColor(tokens.hover)
+            bg_color.setAlphaF(0.5)
             painter.fillPath(path, QBrush(bg_color))
 
 
-class SidebarView:
-    """
-    Sidebar navigation view.
+class SettingsMenu(QMenu):
+    """Professional settings menu with themed styling."""
 
-    Passive view that:
-    - Binds to ShellViewModel signals
-    - Delegates navigation to ViewModel
-    - Renders based on state
-    """
+    DATE_RANGE_OPTIONS = [
+        ("Today", 1),
+        ("Last 7 Days", 7),
+        ("Last 30 Days", 30),
+        ("Last 3 Months", 90),
+        ("Last 6 Months", 180),
+        ("Last Year", 365),
+    ]
+
+    def __init__(self, shell_vm: "ShellViewModel", current_range: int, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._shell_vm = shell_vm
+        self._current_range = current_range
+        self._theme_service = theme_service
+
+        self._setup_menu()
+
+    def _setup_menu(self) -> None:
+        tokens = self._theme_service.tokens
+        is_dark = self._theme_service.is_dark
+
+        self.setStyleSheet(
+            f"""
+            QMenu {{
+                background-color: {tokens.slide_bg};
+                border: 1px solid {tokens.get_rgba("border", 0.8)};
+                border-radius: 12px;
+                padding: 8px 6px;
+                min-width: 220px;
+            }}
+            QMenu::item {{
+                background-color: transparent;
+                color: {tokens.app_fg};
+                padding: 10px 16px 10px 14px;
+                margin: 2px 6px;
+                border-radius: 8px;
+                font-size: 13px;
+            }}
+            QMenu::item:selected {{
+                background-color: {tokens.hover};
+                color: {tokens.app_fg};
+            }}
+            QMenu::item:disabled {{
+                color: {tokens.hint};
+                font-weight: 700;
+                font-size: 10px;
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {tokens.get_rgba("border", 0.6)};
+                margin: 8px 12px;
+            }}
+        """
+        )
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(32)
+        shadow.setXOffset(0)
+        shadow.setYOffset(8)
+        shadow.setColor(QColor(0, 0, 0, 100 if is_dark else 50))
+        self.setGraphicsEffect(shadow)
+
+        self._build_menu_items()
+
+    def _build_menu_items(self) -> None:
+        header = self.addAction("DATA RANGE")
+        header.setEnabled(False)
+
+        for label, days in self.DATE_RANGE_OPTIONS:
+            is_selected = self._current_range == days
+            display_label = f"  ✓ {label}" if is_selected else f"    {label}"
+            action = self.addAction(display_label)
+            action.triggered.connect(lambda checked, d=days: self._on_range_selected(d))
+
+        self.addSeparator()
+
+        appearance_header = self.addAction("APPEARANCE")
+        appearance_header.setEnabled(False)
+
+        if self._theme_service.is_dark:
+            theme_action = self.addAction("  ☀️ Switch to Light Mode")
+        else:
+            theme_action = self.addAction("  🌙 Switch to Dark Mode")
+
+        theme_action.triggered.connect(self._shell_vm.toggle_theme)
+
+        self.addSeparator()
+
+        info_header = self.addAction("ABOUT")
+        info_header.setEnabled(False)
+
+        version_action = self.addAction("  ℹ️ Version 1.0.0")
+        version_action.setEnabled(False)
+
+    def _on_range_selected(self, days: int) -> None:
+        self._current_range = days
+        logger.info(f"[SettingsMenu] Data range selected: {days} days")
+
+
+class SidebarView:
+    """Sidebar navigation view using ThemeService."""
 
     NAV_ITEMS = [
         (":/icon/dashboard.svg", "Dashboard", "dashboard_page"),
@@ -655,14 +440,14 @@ class SidebarView:
         nav_list: QListWidget,
         settings_list: QListWidget,
         shell_vm: "ShellViewModel",
+        theme_service: "ThemeService",
     ):
         self._container = container
         self._nav_list = nav_list
         self._settings_list = settings_list
         self._shell_vm = shell_vm
-        self._theme_manager = get_theme_manager()
+        self._theme_service = theme_service
 
-        self._current_theme = "light"
         self._is_expanded = False
         self._nav_buttons: List[ModernNavButton] = []
         self._settings_btn: Optional[SettingsButton] = None
@@ -679,13 +464,11 @@ class SidebarView:
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
         """Handle theme change."""
-        if theme != self._current_theme:
-            self._current_theme = theme
-            self._apply_styles()
-            for btn in self._nav_buttons:
-                btn.set_theme(theme)
-            if self._settings_btn:
-                self._settings_btn.set_theme(theme)
+        self._apply_styles()
+        for btn in self._nav_buttons:
+            btn.set_theme(theme)
+        if self._settings_btn:
+            self._settings_btn.set_theme(theme)
 
     @Slot(bool)
     def _on_sidebar_changed(self, expanded: bool) -> None:
@@ -725,52 +508,43 @@ class SidebarView:
         self._content_layout.setContentsMargins(4, 12, 4, 12)
         self._content_layout.setSpacing(4)
 
-        # Navigation buttons
         for icon_path, text, page_id in self.NAV_ITEMS:
-            btn = ModernNavButton(icon_path, text, page_id, self._on_nav_click)
+            btn = ModernNavButton(icon_path, text, page_id, self._on_nav_click, self._theme_service)
             self._nav_buttons.append(btn)
             self._content_layout.addWidget(btn)
 
         self._content_layout.addStretch()
 
-        # Divider
         self._divider = QFrame()
         self._divider.setFixedHeight(1)
         self._divider.setVisible(False)
         self._content_layout.addWidget(self._divider)
 
-        # Settings button
-        self._settings_btn = SettingsButton(":/icon/settings.svg", "Settings", self._shell_vm)
+        self._settings_btn = SettingsButton(":/icon/settings.svg", "Settings", self._shell_vm, self._theme_service)
         self._content_layout.addWidget(self._settings_btn)
 
         existing_layout.addWidget(self._content)
         self._apply_styles()
 
     def _apply_styles(self) -> None:
-        is_dark = self._current_theme == "dark"
-
-        if is_dark:
-            bg = "rgba(15, 23, 42, 0.98)"
-            border = "rgba(51, 65, 85, 0.5)"
-        else:
-            bg = "rgba(248, 250, 252, 0.98)"
-            border = "rgba(226, 232, 240, 0.5)"
+        """Apply theme styles using ThemeService."""
+        tokens = self._theme_service.tokens
 
         self._container.setStyleSheet(
             f"""
             QFrame#left_slide_menu_frame {{
-                background-color: {bg};
+                background-color: {tokens.get_rgba("slide.bg", 0.98)};
                 border: none;
-                border-right: 1px solid {border};
+                border-right: 1px solid {tokens.get_rgba("border", 0.5)};
             }}
         """
         )
 
-        divider_color = "rgba(100, 116, 139, 0.2)" if is_dark else "rgba(148, 163, 184, 0.2)"
+        divider_color = tokens.get_rgba("border", 0.2)
         self._divider.setStyleSheet(f"background-color: {divider_color}; margin: 4px 12px;")
 
     def _on_nav_click(self, page_id: str) -> None:
-        """Handle navigation button click - delegate to ViewModel."""
+        """Handle navigation button click."""
         self._shell_vm.navigate_to(page_id)
 
     def _update_active(self, current_page: str) -> None:
@@ -798,34 +572,17 @@ class SidebarView:
         self._container.setFixedWidth(width)
 
     def render(self, state: Dict[str, Any]) -> None:
-        """
-        Render sidebar based on state.
-
-        Legacy compatibility - primary updates come via ViewModel signals.
-        """
-        theme = select_theme(state)
+        """Render sidebar based on state (legacy compatibility)."""
         is_expanded = select_sidebar_expanded(state)
         current_page = select_current_page(state)
         data_range = select_data_range_days(state)
 
-        # Theme update
-        if theme != self._current_theme:
-            self._current_theme = theme
-            self._apply_styles()
-            for btn in self._nav_buttons:
-                btn.set_theme(theme)
-            if self._settings_btn:
-                self._settings_btn.set_theme(theme)
-
-        # Expansion update
         if is_expanded != self._is_expanded:
             self._is_expanded = is_expanded
             self._update_expansion()
 
-        # Active page update
         self._update_active(current_page)
 
-        # Settings button range
         if self._settings_btn:
             self._settings_btn.set_current_range(data_range)
 
