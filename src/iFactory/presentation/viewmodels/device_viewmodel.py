@@ -1,12 +1,6 @@
+# File: presentation/viewmodels/device_viewmodel.py
 """
-Device List ViewModel.
-
-This is a TRUE ViewModel that:
-- Owns UI state for device list
-- Exposes reactive signals for Views to bind
-- Orchestrates Use Cases (SyncOrchestrator)
-- Transforms DTOs to Display Models
-- Coordinates with ShellViewModel for panel state
+Device List ViewModel - Optimized for performance.
 """
 
 from __future__ import annotations
@@ -37,25 +31,17 @@ logger = logging.getLogger(__name__)
 
 class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     """
-    ViewModel for Device List.
+    ViewModel for Device List - Optimized.
 
-    Responsibilities:
-    - Manage device list UI state
-    - Handle device sync operations
-    - Transform data for display
-    - Manage device selection
-    - Coordinate with ShellViewModel for panel state
-
-    Signals:
-    - devicesChanged: Emitted when device list updates
-    - selectionChanged: Emitted when selected device changes
-    - syncStatusChanged: Emitted when sync status changes
+    Key changes:
+    - Simplified selection logic
+    - Panel state management delegated to ShellViewModel
+    - Removed redundant state tracking
     """
 
-    # Specific signals for device list
-    devicesChanged = Signal(dict)  # Dict[str, DeviceDisplayModel]
-    selectionChanged = Signal(object)  # DeviceSelectionModel
-    syncStatusChanged = Signal(object)  # DeviceSyncStatusModel
+    devicesChanged = Signal(dict)
+    selectionChanged = Signal(object)
+    syncStatusChanged = Signal(object)
 
     def __init__(
         self,
@@ -75,80 +61,55 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
 
         # Internal state
         self._devices: Dict[str, DeviceDisplayModel] = {}
-        self._selection = DeviceSelectionModel()
+        self._selected_device_id: Optional[str] = None
         self._sync_status = DeviceSyncStatusModel()
 
-        # Async executor for background operations
+        # Async executor
         self._executor = AsyncExecutor(max_workers=2, parent=self)
 
-        # Connect to page manager if available
         if self._page_manager:
             self._page_manager.page_changed.connect(self._on_page_changed)
 
-    # =========================================================================
-    # Initialization
-    # =========================================================================
-
     def initialize(self) -> None:
-        """Initialize ViewModel - load initial device list."""
         logger.info("[DeviceListViewModel] Initializing...")
         self._set_state(UiState.idle())
 
     # =========================================================================
-    # Configuration (Dependency Injection)
+    # Configuration
     # =========================================================================
 
     def set_shell_viewmodel(self, shell_vm: "ShellViewModel") -> None:
-        """Set shell viewmodel for panel coordination."""
         self._shell_vm = shell_vm
         logger.info("[DeviceListViewModel] ShellViewModel configured")
 
     def set_remote_source(self, source: "IRemoteDataSource") -> None:
-        """Set remote data source for fetching."""
         self._remote_source = source
-        logger.info("[DeviceListViewModel] Remote source configured")
 
     def set_sync_orchestrator(self, orchestrator: "SyncOrchestrator") -> None:
-        """Set sync orchestrator for coordinated sync."""
         self._sync_orchestrator = orchestrator
-        logger.info("[DeviceListViewModel] Sync orchestrator configured")
 
     def set_page_manager(self, manager: "PageDeviceManager") -> None:
-        """Set page manager for device ID resolution."""
         if self._page_manager:
             try:
                 self._page_manager.page_changed.disconnect(self._on_page_changed)
             except RuntimeError:
                 pass
-
         self._page_manager = manager
         self._page_manager.page_changed.connect(self._on_page_changed)
-        logger.info("[DeviceListViewModel] Page manager configured")
 
     # =========================================================================
     # Public API - User Actions
     # =========================================================================
 
     def load_devices(self, device_ids: Optional[List[str]] = None) -> None:
-        """
-        Load/sync devices.
-
-        This is the main entry point for loading devices.
-        Views call this method; it orchestrates the sync.
-
-        Args:
-            device_ids: Explicit list of device IDs to sync.
-                       If None, uses current page devices.
-        """
+        """Load/sync devices."""
         if self._is_disposed:
             return
 
-        # Prevent duplicate syncs
         if not self._mark_operation_started("sync"):
             logger.debug("[DeviceListViewModel] Sync already in progress")
             return
 
-        # Resolve device IDs
         codes = device_ids
         if not codes and self._page_manager:
             codes = self._page_manager.get_current_devices()
@@ -158,7 +119,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             self._set_empty("No devices to load")
             return
 
-        # Validate codes
         invalid_keys = {"ref_width", "ref_height", "devices", "min_scale", "max_scale"}
         codes = [c for c in codes if c not in invalid_keys]
 
@@ -167,13 +127,11 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             self._set_empty("No valid device IDs")
             return
 
-        # Update state to loading
         self._set_loading(True, f"Loading {len(codes)} devices...")
         self._update_sync_status(is_syncing=True)
 
         logger.info(f"[DeviceListViewModel] Loading {len(codes)} devices")
 
-        # Execute sync
         if self._sync_orchestrator:
             self._sync_via_orchestrator(codes)
         elif self._remote_source:
@@ -183,11 +141,9 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             self._set_error("No data source configured")
 
     def refresh(self) -> None:
-        """Force refresh current page devices."""
         if self._is_disposed:
             return
-
-        self._mark_operation_completed("sync")  # Allow new sync
+        self._mark_operation_completed("sync")
         self.load_devices()
 
     def select_device(self, device_id: str, open_panel: bool = False) -> None:
@@ -196,126 +152,83 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
 
         Args:
             device_id: Device to select
-            open_panel: Whether to open details panel (double-click behavior)
+            open_panel: If True, toggle panel state (double-click behavior)
+                       If False, just select device (single-click behavior)
         """
         if self._is_disposed:
             return
 
         logger.info(f"[DeviceListViewModel] select_device: {device_id}, open_panel={open_panel}")
 
-        # Check if selecting the same device
-        is_same_device = self._selection.selected_device_id == device_id
+        is_same_device = self._selected_device_id == device_id
+        was_selected = self._selected_device_id is not None
 
-        # Determine panel state
-        should_panel_be_open = self._selection.is_panel_open
+        # Always update selection
+        self._selected_device_id = device_id
 
-        if open_panel:
-            if is_same_device:
-                # Double-click on same device - toggle panel
-                should_panel_be_open = not self._selection.is_panel_open
-                logger.info(f"[DeviceListViewModel] Toggle panel: {should_panel_be_open}")
-            else:
-                # Double-click on different device - open panel
-                should_panel_be_open = True
-                logger.info(f"[DeviceListViewModel] Opening panel for new device")
-
-        # Update selection model
-        new_selection = DeviceSelectionModel(
+        # Create selection model (panel state managed separately)
+        selection = DeviceSelectionModel(
             selected_device_id=device_id,
-            is_panel_open=should_panel_be_open,
+            is_panel_open=self._shell_vm.right_panel_expanded if self._shell_vm else False,
         )
 
-        # Always emit if device changed or panel state changed
-        selection_changed = (
-            new_selection.selected_device_id != self._selection.selected_device_id or new_selection.is_panel_open != self._selection.is_panel_open
-        )
+        # Emit selection change
+        self.selectionChanged.emit(selection)
+        logger.debug(f"[DeviceListViewModel] Selection emitted: {device_id}")
 
-        if selection_changed:
-            self._selection = new_selection
-            self.selectionChanged.emit(new_selection)
-            logger.debug(f"[DeviceListViewModel] Selection changed: {device_id}, panel: {should_panel_be_open}")
-
-        # Coordinate with ShellViewModel for actual panel visibility
-        if self._shell_vm:
-            current_panel_expanded = self._shell_vm.right_panel_expanded
-
-            if should_panel_be_open and not current_panel_expanded:
-                # Need to open panel
-                self._shell_vm.open_right_panel()
-                logger.info(f"[DeviceListViewModel] Requested ShellVM to open panel")
-            elif not should_panel_be_open and current_panel_expanded:
-                # Need to close panel
-                self._shell_vm.close_right_panel()
-                logger.info(f"[DeviceListViewModel] Requested ShellVM to close panel")
-        else:
-            logger.warning("[DeviceListViewModel] No ShellViewModel set - cannot control panel")
+        # Handle panel state via ShellViewModel
+        if open_panel and self._shell_vm:
+            if is_same_device:
+                # Double-click same device → toggle panel
+                self._shell_vm.toggle_right_panel()
+                logger.info(f"[DeviceListViewModel] Toggle panel for same device")
+            else:
+                # Double-click different device → open panel if not already open
+                if not self._shell_vm.right_panel_expanded:
+                    self._shell_vm.open_right_panel()
+                    logger.info(f"[DeviceListViewModel] Open panel for new device")
+                # If panel already open, just update content (selection already emitted)
 
     def deselect_device(self) -> None:
-        """Deselect current device."""
+        """Deselect current device and close panel."""
         if self._is_disposed:
             return
 
-        was_panel_open = self._selection.is_panel_open
+        self._selected_device_id = None
 
-        self._selection = DeviceSelectionModel()
-        self.selectionChanged.emit(self._selection)
+        selection = DeviceSelectionModel()
+        self.selectionChanged.emit(selection)
 
         logger.info("[DeviceListViewModel] Device deselected")
 
-        # Close panel if it was open
-        if was_panel_open and self._shell_vm:
+        # Close panel
+        if self._shell_vm and self._shell_vm.right_panel_expanded:
             self._shell_vm.close_right_panel()
-            logger.info("[DeviceListViewModel] Closed panel after deselection")
-
-    def toggle_panel(self) -> None:
-        """Toggle details panel for selected device."""
-        if not self._selection.has_selection:
-            return
-
-        new_panel_state = not self._selection.is_panel_open
-
-        self._selection = DeviceSelectionModel(
-            selected_device_id=self._selection.selected_device_id,
-            is_panel_open=new_panel_state,
-        )
-        self.selectionChanged.emit(self._selection)
-
-        # Coordinate with ShellViewModel
-        if self._shell_vm:
-            if new_panel_state:
-                self._shell_vm.open_right_panel()
-            else:
-                self._shell_vm.close_right_panel()
 
     # =========================================================================
-    # Properties - UI can bind to these
+    # Properties
     # =========================================================================
 
     @property
     def devices(self) -> Dict[str, DeviceDisplayModel]:
-        """Get current device list."""
         return self._devices.copy()
 
     @property
     def selected_device_id(self) -> Optional[str]:
-        """Get selected device ID."""
-        return self._selection.selected_device_id
+        return self._selected_device_id
 
     @property
     def selected_device(self) -> Optional[DeviceDisplayModel]:
-        """Get selected device model."""
-        if not self._selection.has_selection:
+        if not self._selected_device_id:
             return None
-        return self._devices.get(self._selection.selected_device_id)
+        return self._devices.get(self._selected_device_id)
 
     @property
     def device_count(self) -> int:
-        """Get number of devices."""
         return len(self._devices)
 
     @property
     def sync_status(self) -> DeviceSyncStatusModel:
-        """Get current sync status."""
         return self._sync_status
 
     # =========================================================================
@@ -323,7 +236,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     # =========================================================================
 
     def _sync_via_orchestrator(self, device_ids: List[str]) -> None:
-        """Sync using SyncOrchestrator."""
         self._executor.execute(
             self._do_orchestrator_sync(device_ids),
             on_success=self._on_sync_success,
@@ -331,7 +243,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         )
 
     async def _do_orchestrator_sync(self, device_ids: List[str]) -> Dict[str, Any]:
-        """Execute orchestrator sync."""
         if not self._sync_orchestrator:
             return {"devices": {}, "count": 0, "error": "No orchestrator"}
 
@@ -341,7 +252,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             if not result.success:
                 return {"devices": {}, "count": 0, "error": result.error}
 
-            # Transform to display models
             display_models = {}
             for code, device_data in result.devices.items():
                 model = self._transform_to_display_model(code, device_data)
@@ -358,7 +268,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             return {"devices": {}, "count": 0, "error": str(e)}
 
     def _sync_via_remote(self, device_ids: List[str]) -> None:
-        """Fallback: Sync directly via remote source."""
         self._executor.execute(
             self._do_remote_sync(device_ids),
             on_success=self._on_sync_success,
@@ -366,7 +275,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         )
 
     async def _do_remote_sync(self, device_ids: List[str]) -> Dict[str, Any]:
-        """Execute remote sync."""
         if not self._remote_source:
             return {"devices": {}, "count": 0, "error": "No remote source"}
 
@@ -376,7 +284,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             if not records:
                 return {"devices": {}, "count": 0}
 
-            # Transform to display models
             display_models = {}
             for record in records:
                 code = record.get("equip_code", "")
@@ -390,12 +297,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             logger.error(f"[DeviceListViewModel] Remote sync failed: {e}")
             return {"devices": {}, "count": 0, "error": str(e)}
 
-    # =========================================================================
-    # Internal - Sync Result Handlers
-    # =========================================================================
-
     def _on_sync_success(self, result: Dict[str, Any]) -> None:
-        """Handle successful sync."""
         if self._is_disposed:
             return
 
@@ -408,56 +310,37 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         logger.info(f"[DeviceListViewModel] Sync success: {count} devices")
 
         if count == 0:
-            self._update_sync_status(
-                is_syncing=False,
-                last_sync_time=timestamp,
-            )
+            self._update_sync_status(is_syncing=False, last_sync_time=timestamp)
             self._set_empty("No devices found")
             return
 
-        # Update internal state
         self._devices = devices
-
-        # Update sync status
         self._update_sync_status(
             is_syncing=False,
             last_sync_time=timestamp,
             synced_count=count,
         )
 
-        # Emit signals
         self.devicesChanged.emit(self._get_devices_as_dict())
         self._set_success(data=devices, message=f"Synced {count} devices")
 
     def _on_sync_error(self, error: Exception) -> None:
-        """Handle sync error."""
         if self._is_disposed:
             return
 
         self._mark_operation_completed("sync")
-
         error_msg = str(error)
         logger.error(f"[DeviceListViewModel] Sync error: {error_msg}")
 
-        self._update_sync_status(
-            is_syncing=False,
-            error_message=error_msg,
-        )
-
+        self._update_sync_status(is_syncing=False, error_message=error_msg)
         self._set_error(f"Sync failed: {error_msg}")
 
     # =========================================================================
     # Internal - Data Transformation
     # =========================================================================
 
-    def _transform_to_display_model(
-        self,
-        code: str,
-        device_data: Any,
-    ) -> DeviceDisplayModel:
-        """Transform sync result to display model."""
+    def _transform_to_display_model(self, code: str, device_data: Any) -> DeviceDisplayModel:
         if hasattr(device_data, "equip_code"):
-            # SyncedDeviceData object
             status_code = self._parse_status(device_data.status_code)
             name = device_data.equip_name or code
             last_update = device_data.last_update
@@ -481,7 +364,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         )
 
     def _transform_record_to_display_model(self, record: Dict) -> DeviceDisplayModel:
-        """Transform remote record to display model."""
         code = record.get("equip_code", "UNKNOWN")
         name = record.get("equip_name") or code
         status_code = self._parse_status(record.get("equip_status", 0))
@@ -500,7 +382,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         )
 
     def _parse_status(self, raw: Any) -> int:
-        """Parse status code from various formats."""
         if raw is None:
             return StatusCode.UNKNOWN
         if isinstance(raw, int):
@@ -510,10 +391,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         except (ValueError, TypeError):
             return StatusCode.UNKNOWN
 
-    # =========================================================================
-    # Internal - State Updates
-    # =========================================================================
-
     def _update_sync_status(
         self,
         is_syncing: bool = None,
@@ -521,7 +398,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         synced_count: int = None,
         error_message: str = None,
     ) -> None:
-        """Update sync status and emit signal."""
         self._sync_status = DeviceSyncStatusModel(
             is_syncing=is_syncing if is_syncing is not None else self._sync_status.is_syncing,
             last_sync_time=last_sync_time or self._sync_status.last_sync_time,
@@ -531,39 +407,27 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         self.syncStatusChanged.emit(self._sync_status)
 
     def _get_devices_as_dict(self) -> Dict[str, dict]:
-        """Get devices as plain dictionaries for state storage."""
         return {code: model.to_dict() for code, model in self._devices.items()}
-
-    # =========================================================================
-    # Event Handlers
-    # =========================================================================
 
     @Slot(str, list)
     def _on_page_changed(self, page_name: str, device_codes: List[str]) -> None:
-        """Handle page change - load new page devices."""
         if self._is_disposed:
             return
 
         logger.info(f"[DeviceListViewModel] Page changed: {page_name}, {len(device_codes)} devices")
 
-        # Close panel and deselect when changing pages
-        if self._selection.has_selection:
-            self._selection = DeviceSelectionModel()
-            self.selectionChanged.emit(self._selection)
+        # Deselect and close panel when changing pages
+        if self._selected_device_id:
+            self._selected_device_id = None
+            self.selectionChanged.emit(DeviceSelectionModel())
 
             if self._shell_vm and self._shell_vm.right_panel_expanded:
                 self._shell_vm.close_right_panel()
 
-        # Reset and load new page devices
         self._mark_operation_completed("sync")
         self.load_devices(device_codes)
 
-    # =========================================================================
-    # Lifecycle
-    # =========================================================================
-
     def dispose(self) -> None:
-        """Clean up resources."""
         if self._is_disposed:
             return
 

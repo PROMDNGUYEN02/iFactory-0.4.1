@@ -1,6 +1,6 @@
 # File: presentation/views/widgets/device_gantt_widget.py
 """
-Simplified Device Gantt Widget - Timeline only with hover tooltip.
+Optimized Device Gantt Widget - Reduced animation overhead.
 """
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QRectF, Signal, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QRectF, Signal, QTimer
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -61,14 +61,14 @@ class GanttSegmentItem(QGraphicsRectItem):
         self._duration = duration_seconds
 
         self.setAcceptHoverEvents(True)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         config = STATUS_CONFIG.get(status_code, STATUS_CONFIG[0])
         gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
         gradient.setColorAt(0, QColor(config["gradient"][0]))
         gradient.setColorAt(1, QColor(config["gradient"][1]))
         self.setBrush(QBrush(gradient))
-        self.setPen(QPen(Qt.NoPen))
+        self.setPen(QPen(Qt.PenStyle.NoPen))
 
     def hoverEnterEvent(self, event):
         duration_str = self._format_duration(self._duration)
@@ -100,9 +100,20 @@ class GanttSegmentItem(QGraphicsRectItem):
 
 
 class DeviceGanttDisplayWidget(QWidget):
-    """Simplified Gantt widget - Timeline only with hover tooltips."""
+    """
+    Optimized Gantt widget.
+
+    Changes:
+    - Reduced animation FPS (10 FPS instead of 20)
+    - Stop animation when not visible
+    - Batch scene updates
+    """
 
     device_clicked = Signal(str)
+
+    # Animation settings
+    LOADING_FPS = 10  # Reduced from 20
+    LOADING_INTERVAL_MS = 1000 // LOADING_FPS
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -129,13 +140,17 @@ class DeviceGanttDisplayWidget(QWidget):
         self._scene = QGraphicsScene(self)
         self._view = QGraphicsView(self._scene)
         self._view.setObjectName("gantt_timeline_view")
-        self._view.setRenderHint(QPainter.Antialiasing)
-        self._view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._view.setFrameShape(QFrame.NoFrame)
+        self._view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._view.setFrameShape(QFrame.Shape.NoFrame)
         self._view.setMinimumHeight(20)
         self._view.setMaximumHeight(40)
         self._view.setMouseTracking(True)
+
+        # Optimize rendering
+        self._view.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
+        self._view.setCacheMode(QGraphicsView.CacheModeFlag.CacheBackground)
 
         layout.addWidget(self._view)
         self._apply_theme()
@@ -192,7 +207,7 @@ class DeviceGanttDisplayWidget(QWidget):
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        logger.info(f"[GanttWidget] render_device_gantt called: {device_code}, {len(segments)} segments")
+        logger.info(f"[GanttWidget] render: {device_code}, {len(segments)} segments")
 
         self._device_code = device_code
         self._device_name = device_name
@@ -205,17 +220,19 @@ class DeviceGanttDisplayWidget(QWidget):
             self._start_loading_animation()
         else:
             self._stop_loading_animation()
-
-        self._render_timeline()
+            self._render_timeline()
 
     def _start_loading_animation(self) -> None:
-        """Start loading shimmer animation."""
+        """Start loading shimmer animation (optimized FPS)."""
         if self._loading_timer is None:
             self._loading_timer = QTimer(self)
             self._loading_timer.timeout.connect(self._update_loading_animation)
 
         self._loading_offset = 0
-        self._loading_timer.start(50)  # 20 FPS
+        self._loading_timer.start(self.LOADING_INTERVAL_MS)
+
+        # Render initial loading state
+        self._render_timeline()
 
     def _stop_loading_animation(self) -> None:
         """Stop loading animation."""
@@ -224,23 +241,43 @@ class DeviceGanttDisplayWidget(QWidget):
 
     def _update_loading_animation(self) -> None:
         """Update loading animation frame."""
-        self._loading_offset = (self._loading_offset + 0.02) % 1.0
+        if not self.isVisible():
+            return  # Skip if not visible
+
+        self._loading_offset = (self._loading_offset + 0.05) % 1.0
         if self._is_loading and not self._segments:
-            self._render_timeline()
+            self._render_loading_only()
+
+    def _render_loading_only(self) -> None:
+        """Render only loading bar (optimized for animation)."""
+        view_width = self._view.viewport().width() - 2
+        view_height = self._view.viewport().height() - 2
+
+        if view_width < 50:
+            view_width = 400
+        if view_height < 10:
+            view_height = 30
+
+        # Clear and re-render loading bar only
+        self._scene.clear()
+        self._scene.setSceneRect(0, 0, view_width, view_height)
+
+        bar_height = view_height - 2
+        bar_y = 1
+
+        self._render_loading_bar(view_width, bar_height, bar_y)
 
     def _render_timeline(self) -> None:
         self._scene.clear()
         self._rendered_count = 0
 
         if not self._device_code or not self._start_time or not self._end_time:
-            logger.warning("[GanttWidget] Missing device_code or time range")
             self.show_placeholder()
             return
 
         view_width = self._view.viewport().width() - 2
         view_height = self._view.viewport().height() - 2
 
-        # Ensure minimum size
         if view_width < 50:
             view_width = 400
         if view_height < 10:
@@ -248,18 +285,15 @@ class DeviceGanttDisplayWidget(QWidget):
 
         total_seconds = (self._end_time - self._start_time).total_seconds()
         if total_seconds <= 0:
-            logger.warning("[GanttWidget] Invalid time range")
             return
 
         self._scene.setSceneRect(0, 0, view_width, view_height)
-
-        logger.debug(f"[GanttWidget] Rendering timeline: {self._device_code}, " f"view={view_width}x{view_height}, segments={len(self._segments)}")
 
         # Background
         bg_color = QColor("#1E293B" if self._is_dark_theme else "#F8FAFC")
         self._scene.addRect(
             QRectF(0, 0, view_width, view_height),
-            QPen(Qt.NoPen),
+            QPen(Qt.PenStyle.NoPen),
             QBrush(bg_color),
         )
 
@@ -269,28 +303,19 @@ class DeviceGanttDisplayWidget(QWidget):
         if self._segments:
             for segment in self._segments:
                 self._render_segment(segment, view_width, bar_height, bar_y, total_seconds)
-
-            logger.info(f"[GanttWidget] Rendered {self._rendered_count} segments on screen")
+            logger.info(f"[GanttWidget] Rendered {self._rendered_count} segments")
         elif self._is_loading:
             self._render_loading_bar(view_width, bar_height, bar_y)
         else:
             self._render_no_data_bar(view_width, bar_height, bar_y)
 
-        # Hour markers
         self._render_hour_markers(view_width, view_height, total_seconds)
-
-        # Current time indicator
         self._render_current_time_indicator(view_width, view_height, total_seconds)
 
-        # Force view update
-        self._view.viewport().update()
-
     def _render_loading_bar(self, view_width: float, bar_height: float, bar_y: float) -> None:
-        """Render animated loading state bar with shimmer effect."""
-        # Create shimmer gradient
+        """Render animated loading state bar."""
         gradient = QLinearGradient(0, 0, view_width, 0)
 
-        # Calculate shimmer position
         shimmer_pos = self._loading_offset
         shimmer_width = 0.3
 
@@ -301,7 +326,6 @@ class DeviceGanttDisplayWidget(QWidget):
             base_color = QColor("#E2E8F0")
             highlight_color = QColor("#CBD5E1")
 
-        # Create shimmer effect
         gradient.setColorAt(0, base_color)
         if shimmer_pos > shimmer_width:
             gradient.setColorAt(max(0, shimmer_pos - shimmer_width), base_color)
@@ -311,9 +335,8 @@ class DeviceGanttDisplayWidget(QWidget):
         gradient.setColorAt(1, base_color)
 
         loading_rect = QRectF(0, bar_y, view_width, bar_height)
-        self._scene.addRect(loading_rect, QPen(Qt.NoPen), QBrush(gradient))
+        self._scene.addRect(loading_rect, QPen(Qt.PenStyle.NoPen), QBrush(gradient))
 
-        # Add loading text
         text_color = QColor("#94A3B8")
         font = QFont("Segoe UI", 8)
         text_item = self._scene.addSimpleText("Loading timeline...", font)
@@ -326,7 +349,7 @@ class DeviceGanttDisplayWidget(QWidget):
         no_data_rect = QRectF(0, bar_y, view_width, bar_height)
         no_data_item = self._scene.addRect(
             no_data_rect,
-            QPen(Qt.NoPen),
+            QPen(Qt.PenStyle.NoPen),
             QBrush(QColor("#475569" if self._is_dark_theme else "#CBD5E1")),
         )
         no_data_item.setToolTip(f"<b>{self._device_name}</b><br>" f"<small>No history data available for the last 24 hours.</small>")
@@ -345,25 +368,21 @@ class DeviceGanttDisplayWidget(QWidget):
         status_name = segment.get("status_name") or STATUS_CONFIG.get(int(status_code), {}).get("name", "Unknown")
 
         if not start or not end:
-            logger.debug(f"[GanttWidget] Segment missing start/end: {segment}")
             return
 
         # Parse datetime if string
         if isinstance(start, str):
             try:
                 start = datetime.fromisoformat(start.replace("Z", "").replace("+00:00", ""))
-            except ValueError as e:
-                logger.debug(f"[GanttWidget] Failed to parse start: {start}, error: {e}")
+            except ValueError:
                 return
         if isinstance(end, str):
             try:
                 end = datetime.fromisoformat(end.replace("Z", "").replace("+00:00", ""))
-            except ValueError as e:
-                logger.debug(f"[GanttWidget] Failed to parse end: {end}, error: {e}")
+            except ValueError:
                 return
 
         if not isinstance(start, datetime) or not isinstance(end, datetime):
-            logger.debug(f"[GanttWidget] Invalid datetime types: start={type(start)}, end={type(end)}")
             return
 
         # Clip to window
@@ -373,14 +392,12 @@ class DeviceGanttDisplayWidget(QWidget):
         if clipped_start >= clipped_end:
             return
 
-        # Calculate position
         start_offset = (clipped_start - self._start_time).total_seconds()
         duration = (clipped_end - clipped_start).total_seconds()
 
         x = (start_offset / total_seconds) * view_width
         w = max((duration / total_seconds) * view_width, 2)
 
-        # Create and add segment
         rect = QRectF(x, bar_y, w, bar_height)
         segment_item = GanttSegmentItem(
             rect=rect,
@@ -444,6 +461,17 @@ class DeviceGanttDisplayWidget(QWidget):
             self._render_timeline()
         elif not self._device_code:
             self.show_placeholder()
+
+    def hideEvent(self, event) -> None:
+        """Stop animation when hidden."""
+        self._stop_loading_animation()
+        super().hideEvent(event)
+
+    def showEvent(self, event) -> None:
+        """Resume animation if needed when shown."""
+        super().showEvent(event)
+        if self._is_loading and not self._segments:
+            self._start_loading_animation()
 
 
 __all__ = ["DeviceGanttDisplayWidget"]

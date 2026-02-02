@@ -20,7 +20,7 @@ class Device(AggregateRoot):
         "_equipment_code",
         "_current_status",
         "_last_updated_at",
-        "_equip_name",  # Renamed
+        "_equip_name",
         "_reason_code",
     )
 

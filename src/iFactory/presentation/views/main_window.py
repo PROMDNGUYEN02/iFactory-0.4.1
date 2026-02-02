@@ -1,11 +1,8 @@
+# File: presentation/views/main_window.py
 """
-Main Window - MVVM Architecture.
+Main Window - MVVM Architecture (Optimized).
 
-The View is a passive consumer that:
-- Binds to ViewModel signals
-- Delegates all user interactions to ViewModels
-- Contains no business logic
-- Handles click-outside detection for panels using eventFilter
+Click-outside detection using focused approach instead of global event filter.
 """
 
 from __future__ import annotations
@@ -16,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from PySide6.QtCore import QEvent, QRect, QTimer, Slot, QPoint, Qt
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence, QShortcut, QMouseEvent
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 
 import iFactory.presentation.resources.resources_rc as resources_rc
@@ -62,15 +59,10 @@ class MainWindow(QMainWindow):
     """
     Main application window - PASSIVE VIEW.
 
-    Binds to ViewModel signals for state updates.
-    Delegates user actions to ViewModels.
-    Contains no business logic.
-    Uses eventFilter for click-outside detection.
-
-    Click-outside behavior:
-    - Click on device widget → update panel content (handled by device click signals)
-    - Click inside right panel → do nothing (allow interaction)
-    - Click ANYWHERE else (stack widget, pages, frames, etc.) → CLOSE panel
+    Optimized click-outside detection:
+    - Uses mousePressEvent on specific widgets instead of global filter
+    - Immediate response without timer delays
+    - Clean separation of device clicks vs outside clicks
     """
 
     def __init__(
@@ -94,12 +86,6 @@ class MainWindow(QMainWindow):
         self._prev_state: Dict[str, Any] = {}
         self._components_ready = False
 
-        # Click handling - track if a device was just clicked
-        self._device_click_pending = False
-
-        # Store pending click position for deferred processing
-        self._pending_click_pos: Optional[QPoint] = None
-
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.setWindowTitle("iFactory Production Monitor")
@@ -115,107 +101,57 @@ class MainWindow(QMainWindow):
 
         self._store.state_changed.connect(self._on_state_changed)
 
-        # Install event filter on QApplication to catch ALL mouse events
-        app = QApplication.instance()
-        if app:
-            app.installEventFilter(self)
-            logger.info("[MainWindow] Event filter installed on QApplication")
-
-        logger.info("[MainWindow] Initialized with MVVM")
+        logger.info("[MainWindow] Initialized with MVVM (Optimized)")
 
     # =========================================================================
-    # Event Filter for Click-Outside Detection
+    # Click-Outside Detection (Optimized)
     # =========================================================================
 
-    def eventFilter(self, watched, event) -> bool:
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         """
-        Global event filter to detect clicks outside the right panel.
-
-        Logic:
-        - Capture click position immediately (before event is invalidated)
-        - Defer processing to allow device signals to fire first
-        - If device click pending → skip closing
-        - If click inside right panel → skip closing
-        - All other clicks → close panel
+        Handle mouse press on MainWindow background.
+        This catches clicks that fall through to the main window.
         """
-        if event.type() == QEvent.Type.MouseButtonPress:
-            # Only handle left clicks
-            if hasattr(event, "button") and event.button() == Qt.MouseButton.LeftButton:
-                # Capture position NOW before event is invalidated
-                try:
-                    if hasattr(event, "globalPosition"):
-                        global_pos = event.globalPosition().toPoint()
-                    elif hasattr(event, "globalPos"):
-                        global_pos = event.globalPos()
-                    else:
-                        return False
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._handle_background_click(event.globalPosition().toPoint())
+        super().mousePressEvent(event)
 
-                    # Store position and defer processing
-                    self._pending_click_pos = QPoint(global_pos)
-                    QTimer.singleShot(10, self._handle_global_click_deferred)
-
-                except Exception as e:
-                    logger.debug(f"[MainWindow] Error capturing click position: {e}")
-
-        return False  # Never consume the event
-
-    def _handle_global_click_deferred(self) -> None:
-        """Handle global mouse click after device signals have processed."""
-        global_pos = self._pending_click_pos
-        self._pending_click_pos = None
-
-        if global_pos is None:
-            return
-
-        # Check if a device click just happened
-        if self._device_click_pending:
-            self._device_click_pending = False
-            logger.debug("[MainWindow] Click ignored - device click was processed")
-            return
-
-        # Check if right panel is open
+    def _handle_background_click(self, global_pos: QPoint) -> None:
+        """
+        Handle click on background area.
+        Close panel if click is outside right panel and not on a device.
+        """
         if not self._shell_vm.right_panel_expanded:
-            logger.debug("[MainWindow] Panel not expanded - ignoring click")
             return
 
-        # ONLY exclude: Right panel
-        # Everything else (stack widget, pages, frames, canvas empty space, etc.) should close the panel
+        # Check if click is inside right panel
+        if self._is_point_in_widget(global_pos, self.ui.right_slide_menu_frame):
+            return  # Click inside panel - ignore
 
-        # Check if click is inside right panel → allow interaction
-        right_panel_rect = self._get_widget_global_rect(self.ui.right_slide_menu_frame)
-        if right_panel_rect.isValid() and right_panel_rect.contains(global_pos):
-            logger.debug("[MainWindow] Click inside right panel - ignoring")
-            return
+        # Click is outside panel - close it
+        logger.debug("[MainWindow] Background click detected - closing panel")
+        self._close_panel_only()
 
-        # ALL OTHER CLICKS → close panel
-        logger.info(f"[MainWindow] Click outside detected at {global_pos} - closing panel")
-        self._close_panel_and_deselect()
-
-    def _get_widget_global_rect(self, widget: Optional[QWidget]) -> QRect:
-        """Get widget's global rectangle."""
-        if not widget:
-            return QRect()
-
+    def _is_point_in_widget(self, global_pos: QPoint, widget: Optional[QWidget]) -> bool:
+        """Check if global point is inside widget bounds."""
+        if not widget or not widget.isVisible():
+            return False
         try:
-            if not widget.isVisible():
-                return QRect()
+            local_pos = widget.mapFromGlobal(global_pos)
+            return widget.rect().contains(local_pos)
+        except Exception:
+            return False
 
-            top_left = widget.mapToGlobal(QPoint(0, 0))
-            return QRect(top_left, widget.size())
-        except Exception as e:
-            logger.debug(f"[MainWindow] Error getting widget rect: {e}")
-            return QRect()
+    def _close_panel_only(self) -> None:
+        """Close right panel without deselecting device."""
+        self._shell_vm.close_right_panel()
+        logger.info("[MainWindow] Panel closed (device still selected)")
 
     def _close_panel_and_deselect(self) -> None:
         """Close right panel and deselect device."""
         self._shell_vm.close_right_panel()
         self._device_vm.deselect_device()
         logger.info("[MainWindow] Panel closed and device deselected")
-
-    def _mark_device_clicked(self) -> None:
-        """Mark that a device was just clicked (to ignore click-outside)."""
-        self._device_click_pending = True
-        logger.debug("[MainWindow] Device click marked as pending")
 
     # =========================================================================
     # ViewModel Bindings
@@ -378,23 +314,22 @@ class MainWindow(QMainWindow):
     # =========================================================================
 
     def _on_device_single_clicked(self, device_id: str) -> None:
-        """Handle single click on device - select device, update panel content."""
+        """
+        Handle single click on device.
+        - Select device (update panel content if open)
+        - Do NOT open panel
+        - Keep panel open if already open
+        """
         logger.info(f"[MainWindow] Device single clicked: {device_id}")
-
-        # Mark device click to prevent immediate click-outside closing panel
-        self._mark_device_clicked()
-
-        # Select device - this will update panel content if different device
         self._device_vm.select_device(device_id, open_panel=False)
 
     def _on_device_double_clicked(self, device_id: str) -> None:
-        """Handle double click on device - select device and toggle panel."""
+        """
+        Handle double click on device.
+        - Select device
+        - Toggle panel (open if closed, close if open AND same device)
+        """
         logger.info(f"[MainWindow] Device double clicked: {device_id}")
-
-        # Mark device click to prevent immediate click-outside closing panel
-        self._mark_device_clicked()
-
-        # Double click opens/toggles panel
         self._device_vm.select_device(device_id, open_panel=True)
 
     # =========================================================================
@@ -489,7 +424,7 @@ class MainWindow(QMainWindow):
                 LegendWidget(self),
             )
 
-            # Connect device click signals
+            # Connect device click signals - these are IMMEDIATE, no delays
             self.canvas_dashboard.device_clicked.connect(self._on_device_single_clicked)
             self.canvas_orders.device_clicked.connect(self._on_device_single_clicked)
 
@@ -604,21 +539,6 @@ class MainWindow(QMainWindow):
         self.status_bar.render(state)
         self._update_lcd_displays(state)
         self._prev_state = state.copy()
-
-    # =========================================================================
-    # Window Events
-    # =========================================================================
-
-    def closeEvent(self, event) -> None:
-        """Handle window close - cleanup event filter."""
-        try:
-            app = QApplication.instance()
-            if app:
-                app.removeEventFilter(self)
-        except Exception as e:
-            logger.debug(f"[MainWindow] Error removing event filter: {e}")
-
-        super().closeEvent(event)
 
 
 __all__ = ["MainWindow"]
