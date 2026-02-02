@@ -1,0 +1,68 @@
+/* =============================================================================
+   STATUS BADGE STYLES
+   ============================================================================= */
+
+/* --- Status Badge Base --- */
+QLabel[class="status-badge"] {
+    padding: ${space.1} ${space.2};
+    border-radius: ${radius.full};
+    font-size: ${font.size.xs};
+    font-weight: ${font.weight.medium};
+}
+
+/* --- Status: Running --- */
+QLabel[status="running"],
+QFrame[status="running"] {
+    background-color: ${status.running.bg};
+    color: ${status.running};
+    border-color: ${status.running};
+}
+
+/* --- Status: Stopped --- */
+QLabel[status="stopped"],
+QFrame[status="stopped"] {
+    background-color: ${status.stopped.bg};
+    color: ${status.stopped};
+    border-color: ${status.stopped};
+}
+
+/* --- Status: Alarm --- */
+QLabel[status="alarm"],
+QFrame[status="alarm"] {
+    background-color: ${status.alarm.bg};
+    color: ${status.alarm};
+    border-color: ${status.alarm};
+}
+
+/* --- Status: Maintenance --- */
+QLabel[status="maintenance"],
+QFrame[status="maintenance"] {
+    background-color: ${status.maintenance.bg};
+    color: ${status.maintenance};
+    border-color: ${status.maintenance};
+}
+
+/* --- Status: Shutdown --- */
+QLabel[status="shutdown"],
+QFrame[status="shutdown"] {
+    background-color: ${status.shutdown.bg};
+    color: ${status.shutdown};
+    border-color: ${status.shutdown};
+}
+
+/* --- Status: Unknown --- */
+QLabel[status="unknown"],
+QFrame[status="unknown"] {
+    background-color: ${status.unknown.bg};
+    color: ${status.unknown};
+    border-color: ${status.unknown};
+}
+
+/* --- Status Indicator Dot --- */
+QLabel[class="status-dot"] {
+    min-width: 8px;
+    max-width: 8px;
+    min-height: 8px;
+    max-height: 8px;
+    border-radius: ${radius.full};
+}

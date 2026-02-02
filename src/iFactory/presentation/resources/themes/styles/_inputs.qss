@@ -1,0 +1,101 @@
+/* =============================================================================
+   INPUT STYLES
+   ============================================================================= */
+
+/* --- Line Edit --- */
+QLineEdit {
+    background-color: ${surface.card};
+    border: 1px solid ${border.default};
+    border-radius: ${radius.base};
+    padding: ${space.2} ${space.3};
+    min-height: ${size.input.height};
+    color: ${text.primary};
+    font-size: ${font.size.base};
+    selection-background-color: ${semantic.primary.subtle};
+}
+
+QLineEdit:hover {
+    border-color: ${border.strong};
+}
+
+QLineEdit:focus {
+    border-color: ${border.focus};
+    outline: none;
+}
+
+QLineEdit:disabled {
+    background-color: ${interactive.disabled.bg};
+    color: ${interactive.disabled.text};
+}
+
+QLineEdit::placeholder {
+    color: ${text.muted};
+}
+
+/* --- Combo Box --- */
+QComboBox {
+    background-color: ${surface.card};
+    border: 1px solid ${border.default};
+    border-radius: ${radius.base};
+    padding: ${space.2} ${space.3};
+    padding-right: ${space.8};
+    min-height: ${size.input.height};
+    color: ${text.primary};
+}
+
+QComboBox:hover {
+    border-color: ${border.strong};
+}
+
+QComboBox:focus {
+    border-color: ${border.focus};
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: ${space.6};
+    padding-right: ${space.2};
+}
+
+QComboBox QAbstractItemView {
+    background-color: ${surface.elevated};
+    border: 1px solid ${border.default};
+    border-radius: ${radius.base};
+    padding: ${space.1};
+    selection-background-color: ${interactive.selected.bg};
+    selection-color: ${interactive.selected.text};
+}
+
+/* --- Spin Box --- */
+QSpinBox,
+QDoubleSpinBox {
+    background-color: ${surface.card};
+    border: 1px solid ${border.default};
+    border-radius: ${radius.base};
+    padding: ${space.2} ${space.3};
+    min-height: ${size.input.height};
+    color: ${text.primary};
+}
+
+/* --- Check Box --- */
+QCheckBox {
+    color: ${text.primary};
+    spacing: ${space.2};
+}
+
+QCheckBox::indicator {
+    width: ${space.4};
+    height: ${space.4};
+    border: 1px solid ${border.default};
+    border-radius: ${radius.sm};
+    background-color: ${surface.card};
+}
+
+QCheckBox::indicator:hover {
+    border-color: ${semantic.primary};
+}
+
+QCheckBox::indicator:checked {
+    background-color: ${semantic.primary};
+    border-color: ${semantic.primary};
+}

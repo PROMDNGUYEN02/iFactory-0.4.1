@@ -1,0 +1,64 @@
+/* =============================================================================
+   GLOBAL STYLES - Reset & Base Typography
+   ============================================================================= */
+
+/* --- Application Reset --- */
+QMainWindow,
+QWidget#centralwidget {
+    background: ${surface.app};
+    color: ${text.primary};
+    font-family: ${font.family.primary}, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: ${font.size.base};
+    font-weight: ${font.weight.normal};
+}
+
+QWidget {
+    font-family: ${font.family.primary};
+}
+
+/* --- Stacked Widget --- */
+QStackedWidget {
+    background: ${surface.app};
+    border: none;
+}
+
+/* --- Labels --- */
+QLabel {
+    color: ${text.primary};
+    background: transparent;
+    padding: 0;
+    margin: 0;
+}
+
+QLabel[class="text-secondary"] {
+    color: ${text.secondary};
+}
+
+QLabel[class="text-muted"] {
+    color: ${text.muted};
+}
+
+QLabel[class="heading-lg"] {
+    font-size: ${font.size.xl};
+    font-weight: ${font.weight.semibold};
+}
+
+QLabel[class="heading-md"] {
+    font-size: ${font.size.lg};
+    font-weight: ${font.weight.medium};
+}
+
+/* --- LCD Number --- */
+QLCDNumber {
+    background: transparent;
+    color: ${text.primary};
+    border: none;
+}
+
+/* --- Separators --- */
+QFrame[frameShape="4"],  /* HLine */
+QFrame[frameShape="5"] { /* VLine */
+    background: ${border.default};
+    border: none;
+    max-height: 1px;
+}

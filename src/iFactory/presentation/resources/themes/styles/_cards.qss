@@ -1,0 +1,70 @@
+/* =============================================================================
+   CARD STYLES
+   ============================================================================= */
+
+/* --- Base Card --- */
+QFrame#frame_details,
+QFrame[class="card"],
+QWidget[class="card"] {
+    background-color: ${surface.card};
+    border: 1px solid ${border.default};
+    border-radius: ${radius.lg};
+    padding: ${space.4};
+}
+
+/* --- Elevated Card --- */
+QFrame[class="card-elevated"] {
+    background-color: ${surface.elevated};
+    border: 1px solid ${border.subtle};
+    border-radius: ${radius.lg};
+    padding: ${space.4};
+}
+
+/* --- Stat Card --- */
+QFrame[class="stat-card"] {
+    background-color: ${surface.card};
+    border: 1px solid ${border.default};
+    border-radius: ${radius.md};
+    padding: ${space.3};
+    min-height: 80px;
+}
+
+/* --- Device Card --- */
+QFrame[class="device-card"] {
+    background-color: ${surface.card};
+    border: 1px solid ${border.default};
+    border-radius: ${radius.md};
+    padding: ${space.2};
+}
+
+QFrame[class="device-card"]:hover {
+    border-color: ${semantic.primary};
+    background-color: ${interactive.hover};
+}
+
+/* --- Progress Bar --- */
+QProgressBar {
+    background-color: ${interactive.hover};
+    border: none;
+    border-radius: ${radius.sm};
+    height: 6px;
+    text-align: center;
+}
+
+QProgressBar::chunk {
+    background-color: ${semantic.primary};
+    border-radius: ${radius.sm};
+}
+
+/* --- Progress Bar Variants --- */
+QProgressBar[class="success"]::chunk {
+    background-color: ${semantic.success};
+}
+
+QProgressBar[class="warning"]::chunk {
+    background-color: ${semantic.warning};
+}
+
+QProgressBar[class="error"]::chunk {
+    background-color: ${semantic.error};
+}

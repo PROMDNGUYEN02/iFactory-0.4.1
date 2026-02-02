@@ -1,0 +1,69 @@
+/* =============================================================================
+   PANEL STYLES
+   ============================================================================= */
+
+/* --- Header Frame --- */
+QFrame#title_frame,
+QFrame#HeaderFrame {
+    background: ${surface.panel};
+    border: none;
+    border-bottom: 1px solid ${border.default};
+    min-height: ${layout.header.height};
+    max-height: ${layout.header.height};
+}
+
+/* --- Left Sidebar --- */
+QFrame#left_slide_menu_frame,
+QFrame#SidebarFrame {
+    background: ${surface.panel};
+    border: none;
+    border-right: 1px solid ${border.default};
+}
+
+QFrame#left_slide_menu_frame QListWidget,
+QFrame#SidebarFrame QListWidget {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+/* --- Right Panel --- */
+QFrame#right_slide_menu_frame,
+QFrame#RightPanelFrame {
+    background: ${surface.panel};
+    border: none;
+    border-left: 1px solid ${border.default};
+}
+
+/* --- Status Bar --- */
+QStatusBar {
+    background-color: ${surface.panel};
+    border-top: 1px solid ${border.default};
+    color: ${text.muted};
+    font-size: ${font.size.sm};
+    min-height: ${layout.statusbar.height};
+    padding: 0 ${space.3};
+}
+
+QStatusBar::item {
+    border: none;
+}
+
+/* --- Top/Bottom Frames (Dashboard, Orders) --- */
+QFrame#daboard_top_frame,
+QFrame#orders_top_frame,
+QFrame#DashboardTopFrame,
+QFrame#OrdersTopFrame {
+    background-color: ${surface.panel};
+    border: none;
+    border-bottom: 1px solid ${border.default};
+}
+
+QFrame#daboard_bottom_frame,
+QFrame#orders_bottom_frame,
+QFrame#DashboardBottomFrame,
+QFrame#OrdersBottomFrame {
+    background-color: ${surface.panel};
+    border: none;
+    border-top: 1px solid ${border.default};
+}

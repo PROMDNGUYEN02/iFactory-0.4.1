@@ -1,0 +1,12 @@
+/* =============================================================================
+   TOOLTIP STYLES
+   ============================================================================= */
+
+QToolTip {
+    background-color: ${tooltip.bg};
+    color: ${tooltip.text};
+    border: 1px solid ${tooltip.border};
+    border-radius: ${radius.base};
+    padding: ${space.2} ${space.3};
+    font-size: ${font.size.sm};
+}

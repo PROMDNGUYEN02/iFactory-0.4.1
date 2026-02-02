@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from PySide6.QtCore import Qt, QSize, QPoint, Slot
+from PySide6.QtCore import Qt, QSize, QPoint, Slot, Signal
 from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QBrush
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QListWidget, QMenu, QGraphicsDropShadowEffect
 
@@ -28,80 +28,95 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ModernNavButton(QWidget):
-    """Modern navigation button with hover and active states."""
+class NavButtonBase(QWidget):
+    """
+    Base class for navigation buttons.
+
+    Provides:
+    - Icon + text layout
+    - Hover/active states
+    - Theme handling
+    - Expansion animation
+    """
+
+    clicked = Signal()
 
     def __init__(
         self,
-        icon: Union[Icons, str],  # Accept enum or legacy string
+        icon: Union[Icons, str],
         text: str,
-        page_id: str,
-        on_click: callable,
         theme_service: "ThemeService",
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self._icon = icon
         self._text = text
-        self._page_id = page_id
-        self._on_click = on_click
         self._theme_service = theme_service
         self._is_active = False
         self._is_hovered = False
         self._is_expanded = False
 
         self.setFixedHeight(44)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setAttribute(Qt.WA_Hover)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
 
         self._setup_ui()
+        self._theme_service.themeChanged.connect(self._on_theme_changed)
 
     def _setup_ui(self) -> None:
         self._main_layout = QHBoxLayout(self)
         self._main_layout.setContentsMargins(0, 4, 0, 4)
         self._main_layout.setSpacing(12)
 
+        # Icon container
         self._icon_container = QWidget()
         self._icon_container.setFixedSize(36, 36)
         icon_layout = QHBoxLayout(self._icon_container)
         icon_layout.setContentsMargins(0, 0, 0, 0)
-        icon_layout.setAlignment(Qt.AlignCenter)
+        icon_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._icon_label = QLabel()
         self._icon_label.setFixedSize(22, 22)
-        self._icon_label.setAlignment(Qt.AlignCenter)
+        self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._icon_label.setScaledContents(True)
         icon_layout.addWidget(self._icon_label)
 
         self._main_layout.addWidget(self._icon_container)
 
+        # Text label
         self._text_label = QLabel(self._text)
         self._text_label.setFont(QFont("Segoe UI", 10))
         self._text_label.setVisible(False)
         self._main_layout.addWidget(self._text_label, 1)
 
         self.setToolTip(self._text)
-
         self._update_icon()
         self._apply_style()
 
+    def _on_theme_changed(self, theme: str) -> None:
+        """Handle theme change."""
+        self._update_icon()
+        self._apply_style()
+        self.update()
+
     def _update_icon(self) -> None:
-        """Update icon using ThemeService (handles caching and theming)."""
+        """Update icon using ThemeService."""
         pixmap = self._theme_service.get_pixmap(self._icon, QSize(20, 20))
         self._icon_label.setPixmap(pixmap)
 
     def _apply_style(self) -> None:
+        """Apply current theme styles."""
         tokens = self._theme_service.tokens
 
         if self._is_active:
-            text_color = tokens.accent
-            font_weight = "600"
+            text_color = tokens.primary
+            font_weight = tokens.font_weight_semibold
         elif self._is_hovered:
-            text_color = tokens.app_fg
-            font_weight = "500"
+            text_color = tokens.text_primary
+            font_weight = tokens.font_weight_medium
         else:
-            text_color = tokens.hint
-            font_weight = "500"
+            text_color = tokens.text_muted
+            font_weight = tokens.font_weight_medium
 
         self._text_label.setStyleSheet(
             f"""
@@ -116,13 +131,8 @@ class ModernNavButton(QWidget):
         self._icon_label.setStyleSheet("background: transparent;")
         self._icon_container.setStyleSheet("background: transparent;")
 
-    def set_active(self, active: bool) -> None:
-        if self._is_active != active:
-            self._is_active = active
-            self._apply_style()
-            self.update()
-
     def set_expanded(self, expanded: bool) -> None:
+        """Set expansion state."""
         if self._is_expanded == expanded:
             return
 
@@ -135,12 +145,6 @@ class ModernNavButton(QWidget):
         else:
             self._main_layout.setContentsMargins(0, 4, 0, 4)
             self.setToolTip(self._text)
-
-    def set_theme(self, theme: str) -> None:
-        """Handle theme change - icons are automatically updated via cache invalidation."""
-        self._update_icon()
-        self._apply_style()
-        self.update()
 
     def enterEvent(self, event) -> None:
         self._is_hovered = True
@@ -155,13 +159,13 @@ class ModernNavButton(QWidget):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
-            self._on_click(self._page_id)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
         super().mousePressEvent(event)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         tokens = self._theme_service.tokens
         margin = 6 if self._is_expanded else 4
@@ -171,138 +175,67 @@ class ModernNavButton(QWidget):
         path.addRoundedRect(rect, 10, 10)
 
         if self._is_active:
-            bg_color = QColor(tokens.accent)
+            # Active background
+            bg_color = QColor(tokens.primary)
             bg_color.setAlphaF(0.15)
             painter.fillPath(path, QBrush(bg_color))
 
+            # Active indicator bar
             indicator = QPainterPath()
             indicator.addRoundedRect(margin, rect.top() + 8, 3, rect.height() - 16, 1.5, 1.5)
-            painter.fillPath(indicator, QBrush(QColor(tokens.accent)))
+            painter.fillPath(indicator, QBrush(QColor(tokens.primary)))
 
         elif self._is_hovered:
-            bg_color = QColor(tokens.hover)
+            bg_color = QColor(tokens.interactive_hover)
             bg_color.setAlphaF(0.5)
             painter.fillPath(path, QBrush(bg_color))
+
+
+class ModernNavButton(NavButtonBase):
+    """Navigation button with page routing."""
+
+    def __init__(
+        self,
+        icon: Union[Icons, str],
+        text: str,
+        page_id: str,
+        on_click: callable,
+        theme_service: "ThemeService",
+        parent: Optional[QWidget] = None,
+    ):
+        self._page_id = page_id
+        self._on_click_handler = on_click
+        super().__init__(icon, text, theme_service, parent)
+        self.clicked.connect(self._handle_click)
+
+    def _handle_click(self) -> None:
+        self._on_click_handler(self._page_id)
+
+    def set_active(self, active: bool) -> None:
+        """Set active state."""
+        if self._is_active != active:
+            self._is_active = active
+            self._apply_style()
+            self.update()
 
     @property
     def page_id(self) -> str:
         return self._page_id
 
 
-class SettingsButton(QWidget):
+class SettingsButton(NavButtonBase):
     """Settings button that opens the settings menu."""
 
     def __init__(
         self, icon: Union[Icons, str], text: str, shell_vm: "ShellViewModel", theme_service: "ThemeService", parent: Optional[QWidget] = None
     ):
-        super().__init__(parent)
-        self._icon = icon
-        self._text = text
         self._shell_vm = shell_vm
-        self._theme_service = theme_service
-        self._is_hovered = False
-        self._is_expanded = False
         self._current_range = 1
-
-        self.setFixedHeight(44)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setAttribute(Qt.WA_Hover)
-
-        self._setup_ui()
-
-    def _setup_ui(self) -> None:
-        self._main_layout = QHBoxLayout(self)
-        self._main_layout.setContentsMargins(0, 4, 0, 4)
-        self._main_layout.setSpacing(12)
-
-        self._icon_container = QWidget()
-        self._icon_container.setFixedSize(36, 36)
-        icon_layout = QHBoxLayout(self._icon_container)
-        icon_layout.setContentsMargins(0, 0, 0, 0)
-        icon_layout.setAlignment(Qt.AlignCenter)
-
-        self._icon_label = QLabel()
-        self._icon_label.setFixedSize(22, 22)
-        self._icon_label.setAlignment(Qt.AlignCenter)
-        self._icon_label.setScaledContents(True)
-        icon_layout.addWidget(self._icon_label)
-
-        self._main_layout.addWidget(self._icon_container)
-
-        self._text_label = QLabel(self._text)
-        self._text_label.setFont(QFont("Segoe UI", 10))
-        self._text_label.setVisible(False)
-        self._main_layout.addWidget(self._text_label, 1)
-
-        self.setToolTip(self._text)
-
-        self._update_icon()
-        self._apply_style()
-
-    def _update_icon(self) -> None:
-        """Update icon using ThemeService."""
-        pixmap = self._theme_service.get_pixmap(self._icon, QSize(20, 20))
-        self._icon_label.setPixmap(pixmap)
-
-    def _apply_style(self) -> None:
-        tokens = self._theme_service.tokens
-
-        if self._is_hovered:
-            text_color = tokens.app_fg
-        else:
-            text_color = tokens.hint
-
-        self._text_label.setStyleSheet(
-            f"""
-            QLabel {{
-                color: {text_color};
-                background: transparent;
-                font-weight: 500;
-            }}
-        """
-        )
-        self._icon_label.setStyleSheet("background: transparent;")
-        self._icon_container.setStyleSheet("background: transparent;")
-
-    def set_expanded(self, expanded: bool) -> None:
-        if self._is_expanded == expanded:
-            return
-
-        self._is_expanded = expanded
-        self._text_label.setVisible(expanded)
-
-        if expanded:
-            self._main_layout.setContentsMargins(10, 4, 10, 4)
-            self.setToolTip("")
-        else:
-            self._main_layout.setContentsMargins(0, 4, 0, 4)
-            self.setToolTip(self._text)
-
-    def set_theme(self, theme: str) -> None:
-        """Handle theme change."""
-        self._update_icon()
-        self._apply_style()
-        self.update()
+        super().__init__(icon, text, theme_service, parent)
+        self.clicked.connect(self._show_menu)
 
     def set_current_range(self, days: int) -> None:
         self._current_range = days
-
-    def enterEvent(self, event) -> None:
-        self._is_hovered = True
-        self._apply_style()
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        self._is_hovered = False
-        self._apply_style()
-        self.update()
-        super().leaveEvent(event)
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
-            self._show_menu()
-        super().mousePressEvent(event)
 
     def _show_menu(self) -> None:
         menu = SettingsMenu(shell_vm=self._shell_vm, current_range=self._current_range, theme_service=self._theme_service, parent=self)
@@ -320,21 +253,6 @@ class SettingsButton(QWidget):
             menu_y = btn_global_pos.y()
 
         menu.exec(QPoint(menu_x, menu_y))
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        tokens = self._theme_service.tokens
-        margin = 6 if self._is_expanded else 4
-        rect = self.rect().adjusted(margin, 2, -margin, -2)
-
-        if self._is_hovered:
-            path = QPainterPath()
-            path.addRoundedRect(rect, 10, 10)
-            bg_color = QColor(tokens.hover)
-            bg_color.setAlphaF(0.5)
-            painter.fillPath(path, QBrush(bg_color))
 
 
 class SettingsMenu(QMenu):
@@ -364,37 +282,37 @@ class SettingsMenu(QMenu):
         self.setStyleSheet(
             f"""
             QMenu {{
-                background-color: {tokens.slide_bg};
-                border: 1px solid {tokens.get_rgba("border", 0.8)};
-                border-radius: 12px;
-                padding: 8px 6px;
+                background-color: {tokens.surface_panel};
+                border: 1px solid {tokens.border_default};
+                border-radius: {tokens.radius_lg};
+                padding: {tokens.space_2} {tokens.space_1};
                 min-width: 220px;
             }}
             QMenu::item {{
                 background-color: transparent;
-                color: {tokens.app_fg};
-                padding: 10px 16px 10px 14px;
-                margin: 2px 6px;
-                border-radius: 8px;
-                font-size: 13px;
+                color: {tokens.text_primary};
+                padding: {tokens.space_2} {tokens.space_4};
+                margin: 2px {tokens.space_1};
+                border-radius: {tokens.radius_md};
+                font-size: {tokens.font_size_base};
             }}
             QMenu::item:selected {{
-                background-color: {tokens.hover};
-                color: {tokens.app_fg};
+                background-color: {tokens.interactive_hover};
             }}
             QMenu::item:disabled {{
-                color: {tokens.hint};
-                font-weight: 700;
-                font-size: 10px;
+                color: {tokens.text_muted};
+                font-weight: {tokens.font_weight_bold};
+                font-size: {tokens.font_size_xs};
             }}
             QMenu::separator {{
                 height: 1px;
-                background: {tokens.get_rgba("border", 0.6)};
-                margin: 8px 12px;
+                background: {tokens.border_default};
+                margin: {tokens.space_2} {tokens.space_3};
             }}
         """
         )
 
+        # Shadow effect
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(32)
         shadow.setXOffset(0)
@@ -405,6 +323,7 @@ class SettingsMenu(QMenu):
         self._build_menu_items()
 
     def _build_menu_items(self) -> None:
+        # Data Range section
         header = self.addAction("DATA RANGE")
         header.setEnabled(False)
 
@@ -416,6 +335,7 @@ class SettingsMenu(QMenu):
 
         self.addSeparator()
 
+        # Appearance section
         appearance_header = self.addAction("APPEARANCE")
         appearance_header.setEnabled(False)
 
@@ -428,6 +348,7 @@ class SettingsMenu(QMenu):
 
         self.addSeparator()
 
+        # About section
         info_header = self.addAction("ABOUT")
         info_header.setEnabled(False)
 
@@ -442,7 +363,6 @@ class SettingsMenu(QMenu):
 class SidebarView:
     """Sidebar navigation view using ThemeService and Icons enum."""
 
-    # Use Icons enum instead of string paths
     NAV_ITEMS = [
         (Icons.DASHBOARD, "Dashboard", "dashboard_page"),
         (Icons.ORDERS, "Analytics", "orders_page"),
@@ -479,10 +399,6 @@ class SidebarView:
     def _on_theme_changed(self, theme: str) -> None:
         """Handle theme change."""
         self._apply_styles()
-        for btn in self._nav_buttons:
-            btn.set_theme(theme)
-        if self._settings_btn:
-            self._settings_btn.set_theme(theme)
 
     @Slot(bool)
     def _on_sidebar_changed(self, expanded: bool) -> None:
@@ -502,11 +418,13 @@ class SidebarView:
 
         self._container.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
 
+        # Hide legacy list widgets
         if self._nav_list:
             self._nav_list.hide()
         if self._settings_list:
             self._settings_list.hide()
 
+        # Clear existing layout
         existing_layout = self._container.layout()
         if existing_layout:
             while existing_layout.count():
@@ -517,26 +435,28 @@ class SidebarView:
                 elif widget:
                     widget.hide()
 
+        # Create content widget
         self._content = QWidget()
         self._content_layout = QVBoxLayout(self._content)
         self._content_layout.setContentsMargins(4, 12, 4, 12)
         self._content_layout.setSpacing(4)
 
-        # Create nav buttons with Icons enum
+        # Create nav buttons
         for icon_enum, text, page_id in self.NAV_ITEMS:
-            btn = ModernNavButton(icon_enum, text, page_id, self._on_nav_click, self._theme_service)  # Pass enum directly
+            btn = ModernNavButton(icon_enum, text, page_id, self._on_nav_click, self._theme_service)
             self._nav_buttons.append(btn)
             self._content_layout.addWidget(btn)
 
         self._content_layout.addStretch()
 
+        # Divider
         self._divider = QFrame()
         self._divider.setFixedHeight(1)
         self._divider.setVisible(False)
         self._content_layout.addWidget(self._divider)
 
-        # Settings button with Icons enum
-        self._settings_btn = SettingsButton(Icons.SETTINGS, "Settings", self._shell_vm, self._theme_service)  # Use enum
+        # Settings button
+        self._settings_btn = SettingsButton(Icons.SETTINGS, "Settings", self._shell_vm, self._theme_service)
         self._content_layout.addWidget(self._settings_btn)
 
         existing_layout.addWidget(self._content)
@@ -549,15 +469,14 @@ class SidebarView:
         self._container.setStyleSheet(
             f"""
             QFrame#left_slide_menu_frame {{
-                background-color: {tokens.get_rgba("slide.bg", 0.98)};
+                background-color: {tokens.surface_panel};
                 border: none;
-                border-right: 1px solid {tokens.get_rgba("border", 0.5)};
+                border-right: 1px solid {tokens.border_default};
             }}
         """
         )
 
-        divider_color = tokens.get_rgba("border", 0.2)
-        self._divider.setStyleSheet(f"background-color: {divider_color}; margin: 4px 12px;")
+        self._divider.setStyleSheet(f"background-color: {tokens.border_subtle}; margin: 4px 12px;")
 
     def _on_nav_click(self, page_id: str) -> None:
         """Handle navigation button click."""

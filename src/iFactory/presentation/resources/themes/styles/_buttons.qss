@@ -1,0 +1,103 @@
+/* =============================================================================
+   BUTTON STYLES
+   ============================================================================= */
+
+/* --- Base Button --- */
+QPushButton {
+    background-color: ${interactive.hover};
+    border: 1px solid ${border.default};
+    border-radius: ${radius.md};
+    padding: ${space.2} ${space.4};
+    min-height: ${size.button.height.base};
+    color: ${text.primary};
+    font-weight: ${font.weight.medium};
+    font-size: ${font.size.base};
+}
+
+QPushButton:hover {
+    background-color: ${interactive.active};
+    border-color: ${border.strong};
+}
+
+QPushButton:pressed {
+    background-color: ${interactive.active};
+}
+
+QPushButton:disabled {
+    background-color: ${interactive.disabled.bg};
+    color: ${interactive.disabled.text};
+    border-color: ${border.subtle};
+}
+
+/* --- Primary Button --- */
+QPushButton[class="primary"],
+QPushButton#primaryButton {
+    background-color: ${semantic.primary};
+    border: 1px solid ${semantic.primary};
+    color: ${text.inverse};
+}
+
+QPushButton[class="primary"]:hover,
+QPushButton#primaryButton:hover {
+    background-color: ${semantic.primary.hover};
+    border-color: ${semantic.primary.hover};
+}
+
+QPushButton[class="primary"]:pressed,
+QPushButton#primaryButton:pressed {
+    background-color: ${semantic.primary.active};
+}
+
+/* --- Ghost Button --- */
+QPushButton[class="ghost"],
+QPushButton#ghostButton {
+    background-color: transparent;
+    border: none;
+    color: ${text.secondary};
+}
+
+QPushButton[class="ghost"]:hover,
+QPushButton#ghostButton:hover {
+    background-color: ${interactive.hover};
+    color: ${text.primary};
+}
+
+/* --- Icon Button --- */
+QPushButton[class="icon-btn"],
+QPushButton#iconButton {
+    background-color: transparent;
+    border: none;
+    border-radius: ${radius.base};
+    padding: ${space.2};
+    min-width: ${size.button.height.base};
+    max-width: ${size.button.height.base};
+    min-height: ${size.button.height.base};
+    max-height: ${size.button.height.base};
+}
+
+QPushButton[class="icon-btn"]:hover,
+QPushButton#iconButton:hover {
+    background-color: ${interactive.hover};
+}
+
+/* --- Danger Button --- */
+QPushButton[class="danger"] {
+    background-color: ${semantic.error};
+    border-color: ${semantic.error};
+    color: ${text.inverse};
+}
+
+QPushButton[class="danger"]:hover {
+    background-color: ${semantic.error.hover};
+}
+
+/* --- Success Button --- */
+QPushButton[class="success"] {
+    background-color: ${semantic.success};
+    border-color: ${semantic.success};
+    color: ${text.inverse};
+}
+
+QPushButton[class="success"]:hover {
+    background-color: ${semantic.success.hover};
+}

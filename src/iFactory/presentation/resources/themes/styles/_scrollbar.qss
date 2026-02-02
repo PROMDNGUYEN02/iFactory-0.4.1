@@ -1,0 +1,62 @@
+/* =============================================================================
+   SCROLLBAR STYLES
+   ============================================================================= */
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+/* --- Vertical Scrollbar --- */
+QScrollBar:vertical {
+    background: ${scrollbar.track};
+    width: 8px;
+    margin: ${space.1} ${space.1};
+    border-radius: ${radius.sm};
+}
+
+QScrollBar::handle:vertical {
+    background: ${scrollbar.thumb};
+    border-radius: ${radius.sm};
+    min-height: ${space.6};
+}
+
+QScrollBar::handle:vertical:hover {
+    background: ${scrollbar.thumb.hover};
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+    height: 0;
+    border: none;
+}
+
+/* --- Horizontal Scrollbar --- */
+QScrollBar:horizontal {
+    background: ${scrollbar.track};
+    height: 8px;
+    margin: ${space.1} ${space.1};
+    border-radius: ${radius.sm};
+}
+
+QScrollBar::handle:horizontal {
+    background: ${scrollbar.thumb};
+    border-radius: ${radius.sm};
+    min-width: ${space.6};
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: ${scrollbar.thumb.hover};
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal,
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+    background: none;
+    width: 0;
+    border: none;
+}
