@@ -3,18 +3,18 @@
 Header View - MVVM Architecture.
 
 Binds to ShellViewModel for theme and sidebar state.
-Uses ThemeService for styling.
+Uses ThemeService for styling and icons.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from PySide6.QtCore import Qt, Slot, QSize
-from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import QFrame, QLabel, QPushButton
+
+from ...resources.icons import Icons
 
 if TYPE_CHECKING:
     from ...services.theme_service import ThemeService
@@ -29,7 +29,7 @@ class HeaderView:
 
     Passive view that:
     - Binds to ShellViewModel signals
-    - Uses ThemeService for styling
+    - Uses ThemeService for styling and icons
     - Delegates user actions to ViewModel
     """
 
@@ -63,7 +63,7 @@ class HeaderView:
         self._update_toggle_icon()
 
     def _setup_logo_and_title(self) -> None:
-        """Setup logo icon and application title."""
+        """Setup logo icon and application title using IconProvider."""
         if self._title_icon:
             self._load_logo()
 
@@ -72,46 +72,22 @@ class HeaderView:
             self._update_title_style()
 
     def _load_logo(self) -> None:
-        """Load and set the logo image."""
+        """Load and set the logo image using ThemeService."""
         if not self._title_icon:
             return
 
-        logo_loaded = False
+        # Use ThemeService to get cached pixmap
+        pixmap = self._theme_service.get_pixmap(Icons.LOGO, QSize(28, 28))
 
-        try:
-            pixmap = QPixmap(":/icon/logo.png")
-            if not pixmap.isNull():
-                scaled = pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                self._title_icon.setPixmap(scaled)
-                self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                logo_loaded = True
-        except Exception as e:
-            logger.debug(f"[HeaderView] Could not load logo from resources: {e}")
-
-        if not logo_loaded:
-            alternative_paths = [
-                "src/iFactory/presentation/resources/icon/logo.png",
-                "iFactory/presentation/resources/icon/logo.png",
-                "resources/icon/logo.png",
-            ]
-
-            for path in alternative_paths:
-                if os.path.exists(path):
-                    try:
-                        pixmap = QPixmap(path)
-                        if not pixmap.isNull():
-                            scaled = pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                            self._title_icon.setPixmap(scaled)
-                            self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                            logo_loaded = True
-                            break
-                    except Exception:
-                        pass
-
-        if not logo_loaded:
+        if not pixmap.isNull():
+            self._title_icon.setPixmap(pixmap)
+            self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        else:
+            # Fallback to emoji
             self._title_icon.setText("🏭")
             self._title_icon.setStyleSheet("QLabel { font-size: 20px; padding: 4px; }")
             self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            logger.warning("[HeaderView] Failed to load logo, using fallback")
 
     def _setup_connections(self) -> None:
         """Connect UI events to ViewModel methods."""
@@ -191,18 +167,15 @@ class HeaderView:
         )
 
     def _update_toggle_icon(self) -> None:
-        """Update toggle button icon based on state."""
+        """Update toggle button icon using enum-based icons."""
         if not self._toggle_btn:
             return
 
-        if self._current_expanded:
-            base_icon = ":/icon/left_panel_close.svg"
-        else:
-            base_icon = ":/icon/left_panel_open.svg"
+        # Use Icons enum - ThemeService handles theme-appropriate path
+        icon_enum = Icons.LEFT_PANEL_CLOSE if self._current_expanded else Icons.LEFT_PANEL_OPEN
 
-        icon_path = self._theme_service.get_icon_path(base_icon)
-        icon = QIcon(icon_path)
-
+        # Get cached icon from ThemeService
+        icon = self._theme_service.get_icon(icon_enum)
         tokens = self._theme_service.tokens
 
         if not icon.isNull():
@@ -223,9 +196,10 @@ class HeaderView:
             """
             )
         else:
+            # Fallback to text arrow
             arrow_text = "◀" if self._current_expanded else "▶"
             self._toggle_btn.setText(arrow_text)
-            self._toggle_btn.setIcon(QIcon())
+            self._toggle_btn.setIcon(icon)  # Clear any existing icon
             self._toggle_btn.setStyleSheet(
                 """
                 QPushButton {

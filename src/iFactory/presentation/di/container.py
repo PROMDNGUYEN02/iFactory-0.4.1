@@ -11,6 +11,7 @@ Features:
 - Proper shutdown handling
 - Proper ViewModel dependency injection
 - Centralized ThemeService management
+- Icon preloading for faster startup
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING, Optional
 from PySide6.QtCore import QObject, QTimer
 
 from ..constants.timing import Timing
+from ..resources.icons import Icons, DeviceIcons
 from ..services.page_device_manager import PageDeviceManager
 from ..services.theme_service import ThemeService, get_theme_service
 from ..state.reducers import INITIAL_STATE
@@ -52,6 +54,7 @@ class UIContainer(QObject):
     - Redux Store for cross-cutting state (theme, selection)
     - Proper dependency injection between ViewModels
     - Centralized ThemeService for all theming needs
+    - Centralized icon management with caching
     """
 
     def __init__(self, app_container: "AppContainer"):
@@ -88,6 +91,9 @@ class UIContainer(QObject):
         # Initialize ThemeService FIRST - it's needed by ViewModels and Views
         self._init_theme_service()
 
+        # Preload commonly used icons
+        self._preload_icons()
+
         self._init_store()
         self._init_page_manager()
         self._init_sync_orchestrator()
@@ -104,6 +110,26 @@ class UIContainer(QObject):
         """Initialize the centralized theme service."""
         self._theme_service = get_theme_service()
         logger.info("[UIContainer] ThemeService initialized")
+
+    def _preload_icons(self) -> None:
+        """Preload commonly used icons for faster startup."""
+        if not self._theme_service:
+            return
+
+        # Preload navigation icons
+        nav_icons = [
+            Icons.DASHBOARD,
+            Icons.ORDERS,
+            Icons.SETTINGS,
+            Icons.LEFT_PANEL_OPEN,
+            Icons.LEFT_PANEL_CLOSE,
+            Icons.LOGO,
+            Icons.DASHBOARD_LAYOUT,
+            Icons.ORDERS_LAYOUT,
+        ]
+
+        self._theme_service.preload_icons(nav_icons)
+        logger.info(f"[UIContainer] Preloaded {len(nav_icons)} navigation icons")
 
     def _init_store(self) -> None:
         """Initialize Redux-like store for cross-cutting state."""
@@ -122,6 +148,41 @@ class UIContainer(QObject):
         self._page_manager = PageDeviceManager(config_path=config_path)
         all_devices = self._page_manager.get_all_devices()
         logger.info(f"[UIContainer] PageDeviceManager: {len(all_devices)} devices")
+
+        # Preload device icons based on available devices
+        self._preload_device_icons()
+
+    def _preload_device_icons(self) -> None:
+        """Preload device icons based on page manager devices."""
+        if not self._theme_service or not self._page_manager:
+            return
+
+        try:
+            # Get all device IDs from page manager
+            all_devices = self._page_manager.get_all_devices()
+
+            # Extract equipment codes (first 3 characters typically)
+            device_codes = set()
+            for device_id in all_devices:
+                # Extract base code (e.g., "AMX" from "AMX01")
+                if len(device_id) >= 3:
+                    base_code = "".join(c for c in device_id[:3] if c.isalpha())
+                    if base_code:
+                        device_codes.add(base_code.upper())
+
+            # Filter to valid device icons that exist in DeviceIcons enum
+            device_icons = []
+            for code in device_codes:
+                device_icon = DeviceIcons.from_code(code)
+                if device_icon:
+                    device_icons.append(device_icon)
+
+            if device_icons:
+                self._theme_service.preload_icons(device_icons)
+                logger.info(f"[UIContainer] Preloaded {len(device_icons)} device icons")
+
+        except Exception as e:
+            logger.warning(f"[UIContainer] Failed to preload device icons: {e}")
 
     def _init_sync_orchestrator(self) -> None:
         """Get or create SyncOrchestrator from Application Layer."""

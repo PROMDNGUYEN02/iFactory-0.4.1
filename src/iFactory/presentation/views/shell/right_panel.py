@@ -2,7 +2,7 @@
 """
 Right Panel - Device details view.
 
-Uses ThemeService for all styling.
+Uses ThemeService for all styling and icons.
 """
 
 from __future__ import annotations

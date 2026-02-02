@@ -388,7 +388,12 @@ class MainWindow(QMainWindow):
 
             self.canvas_dashboard = self._embed(
                 self.ui.daboard_midle_frame_1,
-                DeviceCanvasWidget("dashboard", dash_config, self),
+                DeviceCanvasWidget(
+                    area_key="dashboard",
+                    layout_config=dash_config,
+                    theme_service=self._theme_service,  # <-- FIXED
+                    parent=self,
+                ),
             )
             self.device_gantt_dashboard = self._embed(
                 self.ui.daboard_midle_frame_2,
@@ -401,7 +406,12 @@ class MainWindow(QMainWindow):
 
             self.canvas_orders = self._embed(
                 self.ui.orders_midle_frame_1,
-                DeviceCanvasWidget("orders", orders_config, self),
+                DeviceCanvasWidget(
+                    area_key="orders",
+                    layout_config=orders_config,
+                    theme_service=self._theme_service,  # <-- FIXED
+                    parent=self,
+                ),
             )
             self.device_gantt_orders = self._embed(
                 self.ui.orders_midle_frame_2,

@@ -128,8 +128,6 @@ class StatusBarView:
         )
 
         self._lbl_msg.setStyleSheet(f"color: {tokens.app_fg}; padding-left: 10px; font-size: 12px;")
-
-        # Update separator style
         self._sep.setStyleSheet(f"background-color: {tokens.border};")
 
     def _update_indicator(self, label: QLabel, is_active: bool, text_ok: str, text_err: str) -> None:

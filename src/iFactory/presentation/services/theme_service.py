@@ -7,8 +7,7 @@ Responsibilities:
 - Compile and cache stylesheets
 - Provide semantic color tokens
 - Emit theme change signals
-
-This replaces direct ThemeManager access with an injectable service.
+- Provide icon path resolution (delegates to IconProvider)
 """
 
 from __future__ import annotations
@@ -16,10 +15,13 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union, TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QObject, Signal, QSize
+from PySide6.QtGui import QColor, QIcon, QPixmap
+
+if TYPE_CHECKING:
+    from ..resources.icons import Icons, DeviceIcons
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +183,7 @@ class ThemeService(QObject):
     - Single source of truth for theme state
     - Cached stylesheet compilation
     - Semantic color tokens
-    - Icon path resolution
+    - Icon resolution with caching
     - Reactive theme change signals
     """
 
@@ -195,6 +197,9 @@ class ThemeService(QObject):
         self._variables: Dict[str, Any] = {}
         self._stylesheet_cache: Dict[str, str] = {}
         self._tokens_cache: Dict[str, ThemeTokens] = {}
+
+        # Lazy-loaded icon provider
+        self._icon_provider = None
 
         self._load_variables()
 
@@ -212,6 +217,14 @@ class ThemeService(QObject):
         except Exception as e:
             logger.error(f"[ThemeService] Failed to load variables: {e}")
             self._variables = {"common": {}, "light": {}, "dark": {}, "iconAlias": {}}
+
+    def _get_icon_provider(self):
+        """Lazy-load icon provider to avoid circular imports."""
+        if self._icon_provider is None:
+            from ..resources.icons import get_icon_provider
+
+            self._icon_provider = get_icon_provider(self)
+        return self._icon_provider
 
     # =========================================================================
     # Theme State
@@ -313,13 +326,59 @@ class ThemeService(QObject):
         self._load_variables()
 
     # =========================================================================
-    # Icon Resolution
+    # Icon Resolution (Delegates to IconProvider)
     # =========================================================================
 
-    def get_icon_path(self, original_path: str) -> str:
-        """Resolve icon path for current theme."""
-        alias_map = self._variables.get("iconAlias", {}).get(self._current_theme, {})
-        return alias_map.get(original_path, original_path)
+    def get_icon_path(self, icon_or_path: Union["Icons", "DeviceIcons", str]) -> str:
+        """
+        Resolve icon path for current theme.
+
+        Supports both enum-based icons (preferred) and legacy string paths.
+
+        Args:
+            icon_or_path: Icons enum, DeviceIcons enum, or legacy string path
+
+        Returns:
+            Theme-appropriate resource path
+        """
+        return self._get_icon_provider().resolve_path(icon_or_path)
+
+    def get_icon(self, icon_or_path: Union["Icons", "DeviceIcons", str]) -> QIcon:
+        """
+        Get cached QIcon for the given icon.
+
+        Args:
+            icon_or_path: Icons enum, DeviceIcons enum, or legacy string path
+
+        Returns:
+            Cached QIcon instance
+        """
+        return self._get_icon_provider().get_icon(icon_or_path)
+
+    def get_pixmap(self, icon_or_path: Union["Icons", "DeviceIcons", str], size: Optional[QSize] = None) -> QPixmap:
+        """
+        Get cached QPixmap for the given icon.
+
+        Args:
+            icon_or_path: Icons enum, DeviceIcons enum, or legacy string path
+            size: Desired size
+
+        Returns:
+            Cached QPixmap instance
+        """
+        return self._get_icon_provider().get_pixmap(icon_or_path, size)
+
+    def get_device_icon(self, equipment_code: str) -> QIcon:
+        """Get icon for a device by equipment code."""
+        return self._get_icon_provider().get_device_icon(equipment_code)
+
+    def get_device_pixmap(self, equipment_code: str, size: Optional[QSize] = None) -> QPixmap:
+        """Get pixmap for a device by equipment code."""
+        return self._get_icon_provider().get_device_pixmap(equipment_code, size)
+
+    def preload_icons(self, icons: list) -> None:
+        """Preload icons for faster access."""
+        self._get_icon_provider().preload(icons)
 
     # =========================================================================
     # Component Styles (Pre-computed helpers)

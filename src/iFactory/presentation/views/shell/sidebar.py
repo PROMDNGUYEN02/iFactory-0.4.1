@@ -3,7 +3,7 @@
 Sidebar View - MVVM Architecture.
 
 Modern navigation sidebar with:
-- Navigation buttons
+- Navigation buttons using Icons enum
 - Settings menu
 - Theme support via ThemeService
 """
@@ -11,13 +11,14 @@ Modern navigation sidebar with:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from PySide6.QtCore import Qt, QSize, QPoint, Slot
-from PySide6.QtGui import QIcon, QFont, QColor, QPainter, QPainterPath, QBrush
+from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QBrush
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QListWidget, QMenu, QGraphicsDropShadowEffect
 
 from ...constants.layout import Layout
+from ...resources.icons import Icons
 from ...state.selectors import select_current_page, select_sidebar_expanded, select_data_range_days
 
 if TYPE_CHECKING:
@@ -30,9 +31,17 @@ logger = logging.getLogger(__name__)
 class ModernNavButton(QWidget):
     """Modern navigation button with hover and active states."""
 
-    def __init__(self, icon_path: str, text: str, page_id: str, on_click: callable, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        icon: Union[Icons, str],  # Accept enum or legacy string
+        text: str,
+        page_id: str,
+        on_click: callable,
+        theme_service: "ThemeService",
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
-        self._icon_path = icon_path
+        self._icon = icon
         self._text = text
         self._page_id = page_id
         self._on_click = on_click
@@ -77,8 +86,8 @@ class ModernNavButton(QWidget):
         self._apply_style()
 
     def _update_icon(self) -> None:
-        icon_path = self._theme_service.get_icon_path(self._icon_path)
-        pixmap = QIcon(icon_path).pixmap(QSize(20, 20))
+        """Update icon using ThemeService (handles caching and theming)."""
+        pixmap = self._theme_service.get_pixmap(self._icon, QSize(20, 20))
         self._icon_label.setPixmap(pixmap)
 
     def _apply_style(self) -> None:
@@ -128,6 +137,7 @@ class ModernNavButton(QWidget):
             self.setToolTip(self._text)
 
     def set_theme(self, theme: str) -> None:
+        """Handle theme change - icons are automatically updated via cache invalidation."""
         self._update_icon()
         self._apply_style()
         self.update()
@@ -182,9 +192,11 @@ class ModernNavButton(QWidget):
 class SettingsButton(QWidget):
     """Settings button that opens the settings menu."""
 
-    def __init__(self, icon_path: str, text: str, shell_vm: "ShellViewModel", theme_service: "ThemeService", parent: Optional[QWidget] = None):
+    def __init__(
+        self, icon: Union[Icons, str], text: str, shell_vm: "ShellViewModel", theme_service: "ThemeService", parent: Optional[QWidget] = None
+    ):
         super().__init__(parent)
-        self._icon_path = icon_path
+        self._icon = icon
         self._text = text
         self._shell_vm = shell_vm
         self._theme_service = theme_service
@@ -228,8 +240,8 @@ class SettingsButton(QWidget):
         self._apply_style()
 
     def _update_icon(self) -> None:
-        icon_path = self._theme_service.get_icon_path(self._icon_path)
-        pixmap = QIcon(icon_path).pixmap(QSize(20, 20))
+        """Update icon using ThemeService."""
+        pixmap = self._theme_service.get_pixmap(self._icon, QSize(20, 20))
         self._icon_label.setPixmap(pixmap)
 
     def _apply_style(self) -> None:
@@ -267,6 +279,7 @@ class SettingsButton(QWidget):
             self.setToolTip(self._text)
 
     def set_theme(self, theme: str) -> None:
+        """Handle theme change."""
         self._update_icon()
         self._apply_style()
         self.update()
@@ -427,11 +440,12 @@ class SettingsMenu(QMenu):
 
 
 class SidebarView:
-    """Sidebar navigation view using ThemeService."""
+    """Sidebar navigation view using ThemeService and Icons enum."""
 
+    # Use Icons enum instead of string paths
     NAV_ITEMS = [
-        (":/icon/dashboard.svg", "Dashboard", "dashboard_page"),
-        (":/icon/orders.svg", "Analytics", "orders_page"),
+        (Icons.DASHBOARD, "Dashboard", "dashboard_page"),
+        (Icons.ORDERS, "Analytics", "orders_page"),
     ]
 
     def __init__(
@@ -508,8 +522,9 @@ class SidebarView:
         self._content_layout.setContentsMargins(4, 12, 4, 12)
         self._content_layout.setSpacing(4)
 
-        for icon_path, text, page_id in self.NAV_ITEMS:
-            btn = ModernNavButton(icon_path, text, page_id, self._on_nav_click, self._theme_service)
+        # Create nav buttons with Icons enum
+        for icon_enum, text, page_id in self.NAV_ITEMS:
+            btn = ModernNavButton(icon_enum, text, page_id, self._on_nav_click, self._theme_service)  # Pass enum directly
             self._nav_buttons.append(btn)
             self._content_layout.addWidget(btn)
 
@@ -520,7 +535,8 @@ class SidebarView:
         self._divider.setVisible(False)
         self._content_layout.addWidget(self._divider)
 
-        self._settings_btn = SettingsButton(":/icon/settings.svg", "Settings", self._shell_vm, self._theme_service)
+        # Settings button with Icons enum
+        self._settings_btn = SettingsButton(Icons.SETTINGS, "Settings", self._shell_vm, self._theme_service)  # Use enum
         self._content_layout.addWidget(self._settings_btn)
 
         existing_layout.addWidget(self._content)
