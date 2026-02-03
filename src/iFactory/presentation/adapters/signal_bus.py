@@ -1,39 +1,82 @@
 """
-Signal Bus - Application-wide signal management.
+Signal Bus - Application-wide signal management with throttling.
 
 Provides a singleton for cross-cutting signal communication.
-Used for components that need to communicate without direct coupling.
+High-frequency signals are throttled to prevent UI freezing.
 """
 
-import logging
-from typing import Any, Dict
+from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal
+import logging
+from typing import Any, Dict, List, Optional
+
+from PySide6.QtCore import QObject, QTimer, Signal
 
 logger = logging.getLogger(__name__)
+
+
+class SignalThrottler(QObject):
+    """
+    Throttles high-frequency signal emissions.
+
+    Batches updates and emits at most once per interval.
+    """
+
+    flushed = Signal(object)
+
+    def __init__(self, interval_ms: int = 50, parent: Optional[QObject] = None):
+        super().__init__(parent)
+        self._interval_ms = interval_ms
+        self._pending_data: Optional[Any] = None
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._flush)
+
+    def push(self, data: Any) -> None:
+        """Push data to be emitted (batched)."""
+        self._pending_data = data
+        if not self._timer.isActive():
+            self._timer.start(self._interval_ms)
+
+    def _flush(self) -> None:
+        """Emit batched data."""
+        if self._pending_data is not None:
+            self.flushed.emit(self._pending_data)
+            self._pending_data = None
+
+    def flush_now(self) -> None:
+        """Force immediate flush."""
+        self._timer.stop()
+        self._flush()
+
+    def cancel(self) -> None:
+        """Cancel pending emission."""
+        self._timer.stop()
+        self._pending_data = None
 
 
 class SignalBus(QObject):
     """
     Singleton signal bus for application-wide events.
 
-    Use sparingly - prefer direct ViewModel signals for component communication.
-    This is mainly for truly cross-cutting concerns.
+    High-frequency signals (devices_updated, gantt_updated) are
+    automatically throttled to prevent UI freezing.
+
+    Throttle interval: 50ms (20 FPS max)
     """
 
-    # Core signals
     devices_updated = Signal(dict)
     gantt_updated = Signal(dict)
     error_occurred = Signal(str)
     loading_changed = Signal(bool)
     theme_changed = Signal(str)
-
-    # Navigation signals
     page_changed = Signal(str)
     device_selected = Signal(str)
     device_deselected = Signal()
 
-    _instance = None
+    THROTTLE_INTERVAL_MS = 50
+
+    _instance: Optional["SignalBus"] = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -45,14 +88,39 @@ class SignalBus(QObject):
             return
         super().__init__()
         self._initialized = True
-        logger.debug("[SignalBus] Initialized")
+
+        self._devices_throttler = SignalThrottler(self.THROTTLE_INTERVAL_MS, self)
+        self._devices_throttler.flushed.connect(self._emit_devices_internal)
+
+        self._gantt_throttler = SignalThrottler(self.THROTTLE_INTERVAL_MS, self)
+        self._gantt_throttler.flushed.connect(self._emit_gantt_internal)
+
+        logger.debug("[SignalBus] Initialized with throttling")
+
+    def _emit_devices_internal(self, data: Dict[str, Any]) -> None:
+        """Internal: emit after throttle."""
+        self.devices_updated.emit(data)
+
+    def _emit_gantt_internal(self, data: Dict[str, Any]) -> None:
+        """Internal: emit after throttle."""
+        self.gantt_updated.emit(data)
 
     def emit_devices(self, data: Dict[str, Any]) -> None:
-        """Emit device update signal."""
+        """Emit device update signal (throttled)."""
+        self._devices_throttler.push(data)
+
+    def emit_devices_immediate(self, data: Dict[str, Any]) -> None:
+        """Emit device update immediately (bypasses throttle)."""
+        self._devices_throttler.flush_now()
         self.devices_updated.emit(data)
 
     def emit_gantt(self, data: Dict[str, Any]) -> None:
-        """Emit gantt update signal."""
+        """Emit gantt update signal (throttled)."""
+        self._gantt_throttler.push(data)
+
+    def emit_gantt_immediate(self, data: Dict[str, Any]) -> None:
+        """Emit gantt update immediately (bypasses throttle)."""
+        self._gantt_throttler.flush_now()
         self.gantt_updated.emit(data)
 
     def emit_error(self, message: str) -> None:
@@ -80,10 +148,15 @@ class SignalBus(QObject):
         """Emit device deselection signal."""
         self.device_deselected.emit()
 
+    def flush_all(self) -> None:
+        """Force flush all throttled signals."""
+        self._devices_throttler.flush_now()
+        self._gantt_throttler.flush_now()
+
 
 def get_signal_bus() -> SignalBus:
     """Get the singleton signal bus instance."""
     return SignalBus()
 
 
-__all__ = ["SignalBus", "get_signal_bus"]
+__all__ = ["SignalBus", "SignalThrottler", "get_signal_bus"]

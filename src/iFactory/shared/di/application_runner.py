@@ -1,5 +1,8 @@
+# File: shared/di/application_runner.py
 """
-Application Runner - Optimized with MVVM and Deferred Data Loading.
+Application Runner - Fixed event loop handling.
+
+FIXED: Proper cleanup ordering with event loop.
 """
 
 from __future__ import annotations
@@ -19,32 +22,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CLEANUP_TIMEOUT = 2.0
+_CLEANUP_TIMEOUT = 5.0
 
 
 class ApplicationRunner:
-    """
-    Runs the Qt application with MVVM architecture.
+    """Runs the Qt application with MVVM architecture."""
 
-    Startup sequence:
-    1. Initialize AppContainer (infrastructure, services)
-    2. Initialize UIContainer (ViewModels, Views)
-    3. Show main window
-    4. Trigger deferred data loading
-    """
-
-    __slots__ = ("qt_app", "container", "_ui_container", "main_window", "_loop")
+    __slots__ = ("qt_app", "container", "_ui_container", "main_window", "_loop", "_cleanup_done")
 
     def __init__(self, qt_app: QApplication) -> None:
-        """Initialize runner with Qt application."""
         self.qt_app = qt_app
         self.container: Optional[AppContainer] = None
         self._ui_container: Optional["UIContainer"] = None
         self.main_window = None
         self._loop: Optional[qasync.QEventLoop] = None
+        self._cleanup_done = False
 
     def run(self) -> int:
-        """Run the application and return exit code."""
         try:
             self._loop = qasync.QEventLoop(self.qt_app)
             asyncio.set_event_loop(self._loop)
@@ -58,27 +52,31 @@ class ApplicationRunner:
 
                 self._show_window()
 
-                # Schedule deferred data load after window is shown
                 if self._ui_container:
                     self._ui_container.schedule_deferred_data_load()
 
-                return self._loop.run_forever()
+                # Run until quit
+                exit_code = self._loop.run_forever()
+
+                # Cleanup while loop is still valid
+                self._do_cleanup()
+
+                return exit_code
 
         except Exception as e:
             logger.exception(f"Application run failed: {e}")
             return 1
         finally:
-            self._cleanup()
+            # Final cleanup if not done
+            if not self._cleanup_done:
+                self._sync_cleanup()
 
     async def _initialize(self) -> None:
-        """Initialize application - fast path only."""
         try:
-            # Initialize infrastructure and application layer
             self.container = AppContainer()
             await self.container.initialize()
             logger.info("AppContainer initialized")
 
-            # Get UI container (already initialized in AppContainer)
             if hasattr(self.container, "get_ui_container"):
                 self._ui_container = self.container.get_ui_container()
 
@@ -89,10 +87,8 @@ class ApplicationRunner:
                 self._ui_container = UIContainer(self.container)
                 self._ui_container.initialize()
 
-            # Get main window from UI container
             self.main_window = self._ui_container.get_main_window()
 
-            # Run async initialization if available
             if hasattr(self._ui_container, "initialize_async"):
                 await self._ui_container.initialize_async()
 
@@ -103,7 +99,6 @@ class ApplicationRunner:
             raise
 
     def _show_window(self) -> None:
-        """Show main window and process events."""
         if self.main_window:
             self.main_window.show()
             self.qt_app.processEvents()
@@ -111,43 +106,81 @@ class ApplicationRunner:
             self.qt_app.processEvents()
             logger.info("Main window shown")
 
-    def _cleanup(self) -> None:
-        """Cleanup resources."""
+    def _do_cleanup(self) -> None:
+        """Cleanup while event loop is still available."""
+        if self._cleanup_done:
+            return
+
         logger.info("Cleaning up application...")
 
-        # Shutdown UI first (stops timers, disposes ViewModels)
-        if hasattr(self, "_ui_container") and self._ui_container:
+        # Step 1: Shutdown UI (stops timers, executors)
+        if self._ui_container:
             try:
                 self._ui_container.shutdown()
             except Exception as e:
                 logger.warning(f"UI shutdown error: {e}")
 
-        # Brief pause for pending operations
-        if self._loop and not self._loop.is_closed():
-            try:
-                self._loop.run_until_complete(asyncio.sleep(0.1))
-            except Exception:
-                pass
+        # Step 2: Process remaining Qt events
+        try:
+            self.qt_app.processEvents()
+        except Exception:
+            pass
 
-        # Cleanup container
-        if self.container and self._loop and not self._loop.is_closed():
+        # Step 3: Run async cleanup if loop is available
+        if self._loop and not self._loop.is_closed():
             try:
                 self._loop.run_until_complete(asyncio.wait_for(self._async_cleanup(), timeout=_CLEANUP_TIMEOUT))
             except asyncio.TimeoutError:
-                logger.warning("Cleanup timed out")
+                logger.warning("Async cleanup timed out")
+            except RuntimeError as e:
+                logger.debug(f"Async cleanup runtime: {e}")
             except Exception as e:
-                logger.warning(f"Cleanup error: {e}")
+                logger.warning(f"Async cleanup error: {e}")
 
+        self._cleanup_done = True
+        logger.info("Application cleanup complete")
+
+    def _sync_cleanup(self) -> None:
+        """Synchronous fallback cleanup."""
+        if self._cleanup_done:
+            return
+
+        logger.info("Cleaning up application (sync fallback)...")
+
+        if self._ui_container:
+            try:
+                self._ui_container.shutdown()
+            except Exception as e:
+                logger.warning(f"UI shutdown error: {e}")
+
+        self._cleanup_done = True
         logger.info("Application cleanup complete")
 
     async def _async_cleanup(self) -> None:
-        """Async cleanup operations."""
-        if hasattr(self.container, "dispose"):
-            await self.container.dispose()
+        """Async cleanup for database connections."""
+        # Dispose MSSQL adapter
+        if self.container:
+            remote_source = getattr(self.container, "remote_source", None)
+            if remote_source and hasattr(remote_source, "dispose"):
+                try:
+                    await remote_source.dispose()
+                    logger.info("Remote source disposed")
+                except Exception as e:
+                    logger.debug(f"Remote source dispose: {e}")
+
+        # Brief delay
+        await asyncio.sleep(0.1)
+
+        # Dispose container
+        if self.container and hasattr(self.container, "dispose"):
+            try:
+                await self.container.dispose()
+                logger.info("Container disposed")
+            except Exception as e:
+                logger.debug(f"Container dispose: {e}")
 
 
 def run_application() -> int:
-    """Entry point for application."""
     app = QApplication(sys.argv)
     return ApplicationRunner(app).run()
 

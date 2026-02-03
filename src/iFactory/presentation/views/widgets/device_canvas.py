@@ -1,9 +1,11 @@
-# File: presentation/views/widgets/device_canvas.py
 """
 Device Canvas - Factory floor visualization.
 
-Uses ThemeService for device icons with automatic caching.
-Icon background rect matches actual pixmap size (keeps aspect ratio).
+OPTIMIZATIONS:
+1. ColorRegistry for cached colors
+2. Removed per-item QGraphicsDropShadowEffect (memory intensive)
+3. Hover effect drawn directly in paint instead of effect
+4. Cached pixmaps and fonts
 """
 
 from __future__ import annotations
@@ -23,7 +25,6 @@ from PySide6.QtGui import (
     QPixmap,
 )
 from PySide6.QtWidgets import (
-    QGraphicsDropShadowEffect,
     QGraphicsItem,
     QGraphicsObject,
     QGraphicsScene,
@@ -34,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...constants.colors import get_color_registry
 from ...resources.icons import Icons
 
 if TYPE_CHECKING:
@@ -46,8 +48,10 @@ class DeviceIconItem(QGraphicsObject):
     """
     Individual device icon on the canvas.
 
-    The background rect automatically matches the actual pixmap size,
-    ensuring no extra space around the icon.
+    OPTIMIZATIONS:
+    - Uses ColorRegistry for cached colors
+    - No QGraphicsDropShadowEffect (draws glow manually when hovered)
+    - Cached pixmaps via ThemeService
     """
 
     def __init__(
@@ -63,119 +67,99 @@ class DeviceIconItem(QGraphicsObject):
         self.equip_code = device_data["id"]
         self._parent_canvas = parent_canvas
         self._theme_service = theme_service
+        self._colors = get_color_registry()
         self._ref_width = ref_width
         self._ref_height = ref_height
 
-        # Config size (requested from JSON)
         self._config_width = device_data.get("width", 40)
         self._config_height = device_data.get("height", 40)
-
-        # Actual display size (matches pixmap after loading)
         self._display_width: int = self._config_width
         self._display_height: int = self._config_height
         self._padding = 2
 
-        # State
-        self._status_color = QColor("Transparent")
+        self._status_code: int = 0
         self._is_hovered = False
         self._pixmap: Optional[QPixmap] = None
         self._is_dark = False
 
-        # Click detection
         self._click_timer: Optional[QTimer] = None
         self._pending_single_click = False
 
-        # Setup interaction
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFlag(QGraphicsItem.ItemIsSelectable, False)
 
-        # Create label
         lbl_text = device_data.get("label_text", self.equip_code)
         self.label = QGraphicsSimpleTextItem(lbl_text, self)
-        self.label.setFont(QFont("Segoe UI", 7))
-        self.label.setBrush(QBrush(QColor("#2c3e50")))
+        label_font = self._colors.get_font("Segoe UI", 7)
+        self.label.setFont(label_font)
+        self.label.setBrush(self._colors.get_brush("#2c3e50"))
 
-        # Create output badge
         self.output_badge = QGraphicsSimpleTextItem("", self)
-        self.output_badge.setFont(QFont("Segoe UI", 6, QFont.Weight.Bold))
-        self.output_badge.setBrush(QBrush(QColor("#2c3e50")))
+        badge_font = self._colors.get_font("Segoe UI", 6, QFont.Weight.Bold)
+        self.output_badge.setFont(badge_font)
+        self.output_badge.setBrush(self._colors.get_brush("#2c3e50"))
         self.output_badge.setVisible(False)
 
-        # Load icon FIRST (this sets _display_width/_display_height)
         self._load_icon()
 
-        # Set position based on percentage
         x = (device_data.get("x_percent", 0) / 100) * ref_width
         y = (device_data.get("y_percent", 0) / 100) * ref_height
         self.setPos(x, y)
 
-        # Position label after icon loaded
         self._position_label()
 
-        # Setup glow effect
-        self._glow = QGraphicsDropShadowEffect()
-        self._glow.setBlurRadius(15)
-        self._glow.setOffset(0, 0)
-        self._glow.setColor(self._status_color)
-        self._glow.setEnabled(False)
-        self.setGraphicsEffect(self._glow)
-
     def boundingRect(self) -> QRectF:
-        """Return bounding rect based on actual pixmap size."""
+        extra = 4 if self._is_hovered else 0
         return QRectF(
-            -self._padding,
-            -self._padding,
-            self._display_width + 2 * self._padding,
-            self._display_height + 2 * self._padding,
+            -self._padding - extra,
+            -self._padding - extra,
+            self._display_width + 2 * self._padding + 2 * extra,
+            self._display_height + 2 * self._padding + 2 * extra,
         )
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Background rect matches EXACTLY the actual pixmap size
         bg_rect = QRectF(0, 0, self._display_width, self._display_height)
         corner_radius = 4
-        base_color = self._status_color
+
+        status_color = self._colors.get_status_color(self._status_code)
 
         path = QPainterPath()
         path.addRoundedRect(bg_rect, corner_radius, corner_radius)
 
-        # Gradient fill
+        if self._is_hovered:
+            glow_rect = bg_rect.adjusted(-3, -3, 3, 3)
+            glow_path = QPainterPath()
+            glow_path.addRoundedRect(glow_rect, corner_radius + 2, corner_radius + 2)
+
+            glow_color = QColor(status_color)
+            glow_color.setAlpha(100)
+            painter.fillPath(glow_path, glow_color)
+
         gradient = QLinearGradient(bg_rect.topLeft(), bg_rect.bottomRight())
         if self._is_hovered:
-            gradient.setColorAt(0, base_color.lighter(120))
-            gradient.setColorAt(1, base_color)
-            painter.setPen(QPen(QColor("#ffffff"), 1.5))
+            gradient.setColorAt(0, status_color.lighter(120))
+            gradient.setColorAt(1, status_color)
+            painter.setPen(QPen(self._colors.get_color("#ffffff"), 1.5))
         else:
-            gradient.setColorAt(0, base_color)
-            gradient.setColorAt(1, base_color.darker(110))
-            painter.setPen(QPen(base_color.darker(130), 1))
+            gradient.setColorAt(0, status_color)
+            gradient.setColorAt(1, status_color.darker(110))
+            painter.setPen(QPen(status_color.darker(130), 1))
 
         painter.fillPath(path, QBrush(gradient))
         painter.drawPath(path)
 
-        # Draw pixmap at (0, 0) - sizes match exactly
         if self._pixmap and not self._pixmap.isNull():
             painter.drawPixmap(0, 0, self._pixmap)
 
     def _get_device_base_code(self) -> str:
-        """
-        Extract base equipment code from device ID.
-
-        Examples:
-            "AMX01" -> "AMX"
-            "CCT02" -> "CCT"
-            "CA111" -> "CA1"
-            "CA211" -> "CA2"
-        """
         device_id = self.equip_code
 
-        # Special cases for CA1, CA2
         if device_id.startswith("CA1") or device_id.startswith("CA2"):
             return device_id[:3]
 
-        # Standard case: first 3 alphabetic characters
         base_code = ""
         for char in device_id:
             if char.isalpha():
@@ -186,25 +170,17 @@ class DeviceIconItem(QGraphicsObject):
         return base_code.upper() if base_code else device_id[:3].upper()
 
     def _load_icon(self) -> None:
-        """
-        Load icon with aspect ratio preserved.
-
-        Updates _display_width/_display_height to match actual pixmap size,
-        ensuring background rect fits exactly.
-        """
         target_size = QSize(self._config_width, self._config_height)
         pixmap: Optional[QPixmap] = None
 
         if self._theme_service:
             base_code = self._get_device_base_code()
-            # Keep aspect ratio = True (default)
             pixmap = self._theme_service.get_device_pixmap(base_code, target_size)
 
             if pixmap.isNull():
                 logger.warning(f"[DeviceIcon] No icon for {base_code}, using fallback")
                 pixmap = self._theme_service.get_pixmap(Icons.LOGO, target_size)
         else:
-            # Fallback: direct loading
             icon_key = "image_dark" if self._is_dark else "image"
             icon_path = self.device_data.get(icon_key, "")
 
@@ -228,11 +204,9 @@ class DeviceIconItem(QGraphicsObject):
                 )
 
         if pixmap and not pixmap.isNull():
-            # KEY: Update display size to ACTUAL pixmap size
             new_width = pixmap.width()
             new_height = pixmap.height()
 
-            # Check if geometry changed
             if self._display_width != new_width or self._display_height != new_height:
                 self.prepareGeometryChange()
                 self._display_width = new_width
@@ -240,14 +214,12 @@ class DeviceIconItem(QGraphicsObject):
 
             self._pixmap = pixmap
 
-            # Reposition children
             if hasattr(self, "label"):
                 self._position_label()
             if hasattr(self, "output_badge") and self.output_badge.isVisible():
                 self._position_output_badge()
 
     def _position_label(self) -> None:
-        """Position label relative to actual icon size."""
         if not hasattr(self, "label"):
             return
 
@@ -267,40 +239,42 @@ class DeviceIconItem(QGraphicsObject):
         elif lbl_pos == "top":
             x = (w - lbl_rect.width()) / 2
             y = -lbl_rect.height() - spacing
-        else:  # bottom
+        else:
             x = (w - lbl_rect.width()) / 2
             y = h + spacing
 
         self.label.setPos(x, y)
 
     def _position_output_badge(self) -> None:
-        """Position output badge at top-right of icon."""
         if not hasattr(self, "output_badge"):
             return
         br = self.output_badge.boundingRect()
         self.output_badge.setPos(self._display_width - br.width() + 4, -4)
 
     def update_live_data(self, device_vm: Any) -> None:
-        """Update device with live data."""
-        status_color_str = "#9E9E9E"
+        status_code = 0
         output_count = 0
         last_update = None
         status_display = "Unknown"
 
         if isinstance(device_vm, dict):
-            status_color_str = device_vm.get("status_color", "#9E9E9E")
+            status_code = device_vm.get("status_code", 0)
             output_count = device_vm.get("output_count", 0) or 0
             last_update = device_vm.get("last_update")
             status_display = device_vm.get("status_name", "Unknown")
-        elif hasattr(device_vm, "status_color"):
-            status_color_str = device_vm.status_color
+        elif hasattr(device_vm, "status_code"):
+            status_code = device_vm.status_code
             output_count = getattr(device_vm, "output_count", 0) or 0
             last_update = getattr(device_vm, "last_update", None)
             status_display = getattr(device_vm, "status_name", "Unknown")
 
-        new_color = QColor(status_color_str)
-        self._status_color = new_color
-        self._glow.setColor(new_color)
+        if isinstance(status_code, str):
+            try:
+                status_code = int(status_code)
+            except ValueError:
+                status_code = 0
+
+        self._status_code = status_code
         self.update()
 
         if output_count > 0:
@@ -319,29 +293,29 @@ class DeviceIconItem(QGraphicsObject):
         self.setToolTip(tooltip_text)
 
     def update_theme(self, is_dark: bool) -> None:
-        """Handle theme change - reload icon."""
         if is_dark != self._is_dark:
             self._is_dark = is_dark
             self._load_icon()
-            c = QColor("#E0E0E0") if is_dark else QColor("#2c3e50")
-            self.label.setBrush(QBrush(c))
-            self.output_badge.setBrush(QBrush(c))
+
+            text_color = "#E0E0E0" if is_dark else "#2c3e50"
+            text_brush = self._colors.get_brush(text_color)
+            self.label.setBrush(text_brush)
+            self.output_badge.setBrush(text_brush)
             self.update()
 
     def hoverEnterEvent(self, event) -> None:
         self._is_hovered = True
-        self._glow.setEnabled(True)
+        self.prepareGeometryChange()
         self.update()
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
         self._is_hovered = False
-        self._glow.setEnabled(False)
+        self.prepareGeometryChange()
         self.update()
         super().hoverLeaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        """Handle mouse press - start click detection."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._pending_single_click = True
 
@@ -356,7 +330,6 @@ class DeviceIconItem(QGraphicsObject):
             super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
-        """Handle double click - open right panel."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._pending_single_click = False
             if self._click_timer:
@@ -369,7 +342,6 @@ class DeviceIconItem(QGraphicsObject):
             super().mouseDoubleClickEvent(event)
 
     def _emit_single_click(self) -> None:
-        """Emit single click signal after timer expires."""
         if self._pending_single_click:
             self._pending_single_click = False
             self._parent_canvas.device_clicked.emit(self.equip_code)
@@ -380,9 +352,10 @@ class DeviceCanvasWidget(QWidget):
     """
     Canvas widget displaying factory floor with device icons.
 
-    Uses ThemeService for:
-    - Background image theming
-    - Device icon theming with caching
+    OPTIMIZATIONS:
+    - Uses ColorRegistry for all colors
+    - ThemeService for cached pixmaps
+    - No per-item effects
     """
 
     device_clicked = Signal(str)
@@ -399,6 +372,7 @@ class DeviceCanvasWidget(QWidget):
         self.area_key = area_key
         self._layout_config = layout_config
         self._theme_service = theme_service
+        self._colors = get_color_registry()
 
         self._is_dark = theme_service.is_dark if theme_service else False
         self._device_items: Dict[str, DeviceIconItem] = {}
@@ -422,8 +396,8 @@ class DeviceCanvasWidget(QWidget):
         self.view.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.view.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
-        self.view.setCacheMode(QGraphicsView.CacheModeFlag.CacheNone)
+        self.view.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.MinimalViewportUpdate)
+        self.view.setCacheMode(QGraphicsView.CacheModeFlag.CacheBackground)
 
         layout.addWidget(self.view)
 
@@ -437,7 +411,6 @@ class DeviceCanvasWidget(QWidget):
             self._ref_height = self._layout_config.get("ref_height", 600)
             self.scene.setSceneRect(0, 0, self._ref_width, self._ref_height)
 
-            # Load background image
             bg_path = self._get_background_path(self._is_dark)
             bg_pixmap = self._load_background_pixmap(bg_path)
 
@@ -447,7 +420,6 @@ class DeviceCanvasWidget(QWidget):
                 self._bg_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
                 self._bg_item.setAcceptHoverEvents(False)
 
-            # Create device icons with ThemeService
             for dev in self._layout_config.get("devices", []):
                 item = DeviceIconItem(
                     dev,
@@ -465,7 +437,6 @@ class DeviceCanvasWidget(QWidget):
             logger.error("Failed to init canvas items: %s", e)
 
     def _get_background_path(self, is_dark: bool) -> str:
-        """Get background image path using ThemeService."""
         key = self.area_key.lower()
 
         if "dashboard" in key or "daboard" in key:
@@ -476,11 +447,9 @@ class DeviceCanvasWidget(QWidget):
         if self._theme_service:
             return self._theme_service.get_icon_path(icon)
         else:
-            # Fallback without ThemeService
             return icon.value.dark_path if is_dark else icon.value.light_path
 
     def _load_background_pixmap(self, path: str) -> Optional[QPixmap]:
-        """Load and scale background pixmap."""
         pixmap = QPixmap(path)
         if not pixmap.isNull():
             return pixmap.scaled(
@@ -493,31 +462,22 @@ class DeviceCanvasWidget(QWidget):
         return None
 
     def render_state(self, devices_state: Dict[str, Any], is_dark: bool) -> None:
-        """Render device states with proper color updates."""
-        # Update theme if changed
         if is_dark != self._is_dark:
             self._is_dark = is_dark
 
-            # Update background
             if self._bg_item:
                 bg_path = self._get_background_path(is_dark)
                 pixmap = self._load_background_pixmap(bg_path)
                 if pixmap:
                     self._bg_item.setPixmap(pixmap)
 
-            # Update all device icons
             for item in self._device_items.values():
                 item.update_theme(is_dark)
 
-        # Update each device's live data
         for dev_id, vm in devices_state.items():
             item = self._device_items.get(dev_id)
             if item:
                 item.update_live_data(vm)
-
-        # Force scene update
-        self.scene.update()
-        self.view.viewport().update()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

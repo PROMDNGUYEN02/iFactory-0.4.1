@@ -1,14 +1,8 @@
+# File: presentation/viewmodels/gantt_viewmodel.py
 """
-Gantt Chart ViewModel.
+Gantt Chart ViewModel - Optimized to prevent duplicate emissions.
 
-This is a TRUE ViewModel that:
-- Owns UI state for Gantt charts
-- Exposes reactive signals for Views to bind
-- Fetches history data on device selection
-- Transforms raw data to display models
-- Contains ZERO business rules
-
-Replaces: GanttController + GanttPresenter
+FIXED: Single emission per chart ready event.
 """
 
 from __future__ import annotations
@@ -17,7 +11,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QThread, Signal, Slot
+from PySide6.QtCore import QThread, Signal, Slot, QMutex, QMutexLocker
 
 from .base import AsyncViewModelMixin, BaseViewModel, UiState
 from .models.gantt_model import (
@@ -40,6 +34,7 @@ logger = logging.getLogger(__name__)
 class GanttFetchWorker(QThread):
     """
     Worker thread for fetching Gantt data using synchronous SQLAlchemy.
+    Thread-safe with proper connection cleanup.
     """
 
     finished = Signal(str, list)
@@ -51,6 +46,8 @@ class GanttFetchWorker(QThread):
         self._sync_url: Optional[str] = None
         self._device_code: Optional[str] = None
         self._days: int = 1
+        self._is_cancelled: bool = False
+        self._mutex = QMutex()
 
         if mssql_url:
             self._sync_url = self._convert_to_sync_url(mssql_url)
@@ -59,23 +56,42 @@ class GanttFetchWorker(QThread):
         return async_url.replace("mssql+aioodbc", "mssql+pyodbc")
 
     def set_request(self, device_code: str, days: int = 1) -> None:
-        self._device_code = device_code
-        self._days = days
+        with QMutexLocker(self._mutex):
+            self._device_code = device_code
+            self._days = days
+            self._is_cancelled = False
+
+    def cancel(self) -> None:
+        with QMutexLocker(self._mutex):
+            self._is_cancelled = True
 
     def run(self) -> None:
-        if not self._device_code or not self._sync_url:
-            self.error.emit(self._device_code or "unknown", "Missing device code or MSSQL URL")
+        with QMutexLocker(self._mutex):
+            if self._is_cancelled:
+                return
+            device_code = self._device_code
+            days = self._days
+            sync_url = self._sync_url
+
+        if not device_code or not sync_url:
+            self.error.emit(device_code or "unknown", "Missing device code or MSSQL URL")
             return
 
         try:
-            segments = self._fetch_sync(self._device_code, self._days)
-            logger.info(f"[GanttFetchWorker] Fetched {len(segments)} segments for {self._device_code}")
-            self.finished.emit(self._device_code, segments)
+            segments = self._fetch_sync(device_code, days, sync_url)
+
+            with QMutexLocker(self._mutex):
+                if self._is_cancelled:
+                    return
+
+            logger.info(f"[GanttFetchWorker] Fetched {len(segments)} segments for {device_code}")
+            self.finished.emit(device_code, segments)
+
         except Exception as e:
             logger.error(f"[GanttFetchWorker] Error: {e}")
-            self.error.emit(self._device_code, str(e))
+            self.error.emit(device_code, str(e))
 
-    def _fetch_sync(self, device_code: str, days: int) -> List[Dict[str, Any]]:
+    def _fetch_sync(self, device_code: str, days: int, sync_url: str) -> List[Dict[str, Any]]:
         from sqlalchemy import create_engine, text
         from sqlalchemy.pool import NullPool
 
@@ -95,7 +111,8 @@ class GanttFetchWorker(QThread):
         ORDER BY S.START_TIME ASC
         """
 
-        engine = create_engine(self._sync_url, poolclass=NullPool)
+        engine = create_engine(sync_url, poolclass=NullPool)
+        segments = []
 
         try:
             with engine.connect() as conn:
@@ -105,14 +122,15 @@ class GanttFetchWorker(QThread):
                 )
                 rows = result.fetchall()
 
-            segments = []
             for row in rows:
                 segment = self._process_row(row, start_time, end_time)
                 if segment:
                     segments.append(segment)
-            return segments
+
         finally:
             engine.dispose()
+
+        return segments
 
     def _process_row(self, row: Any, window_start: datetime, window_end: datetime) -> Optional[Dict[str, Any]]:
         try:
@@ -156,6 +174,8 @@ class GanttFetchWorker(QThread):
 class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
     """
     ViewModel for Gantt Chart.
+
+    FIXED: Single chartReady emission per fetch.
     """
 
     chartReady = Signal(object)
@@ -175,6 +195,9 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._workers: List[GanttFetchWorker] = []
         self._pending_devices: set = set()
+
+        # Track emitted charts to prevent duplicates
+        self._last_emitted_chart_id: str = ""
 
     def initialize(self) -> None:
         self._set_state(UiState.idle())
@@ -228,6 +251,7 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
     def clear_chart(self) -> None:
         self._current_chart = None
         self._current_device = None
+        self._last_emitted_chart_id = ""
         self._set_state(UiState.idle())
 
     def get_cached_segments(self, device_code: str) -> List[Dict[str, Any]]:
@@ -271,7 +295,6 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         self._pending_devices.discard(device_code)
         self._cache[device_code] = {"data": segments, "timestamp": datetime.now()}
         self._process_segments(device_code, device_code, segments)
-        logger.info(f"[GanttChartViewModel] Chart ready: {device_code}, {len(segments)} segments")
 
     @Slot(str, str)
     def _on_worker_error(self, device_code: str, error: str) -> None:
@@ -304,9 +327,21 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
             current_status_color=current_color,
         )
 
+        # Generate chart ID for duplicate detection
+        chart_id = f"{device_code}:{len(segments)}"
+
+        # Skip if same as last emitted
+        if chart_id == self._last_emitted_chart_id:
+            logger.debug(f"[GanttChartViewModel] Skipping duplicate emission for {device_code}")
+            return
+
+        self._last_emitted_chart_id = chart_id
         self._current_chart = chart
         self._set_loading_state(device_code, is_loading=False)
         self._set_success(data=chart)
+
+        # Log and emit ONCE
+        logger.info(f"[GanttChartViewModel] Chart ready: {device_code}, {len(segments)} segments")
         self.chartReady.emit(chart)
 
     def _create_segment_models(
@@ -426,7 +461,7 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
             last = segments[-1]
             return last.status_name, last.status_color
 
-        return "Unknown", "Transperant"
+        return "Unknown", "Transparent"
 
     def _format_duration(self, seconds: float) -> str:
         if seconds < 60:
@@ -451,9 +486,10 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
             return
 
         for worker in self._workers:
+            worker.cancel()
             if worker.isRunning():
                 worker.quit()
-                worker.wait(1000)
+                worker.wait(500)
 
         self._workers.clear()
         self._cache.clear()
