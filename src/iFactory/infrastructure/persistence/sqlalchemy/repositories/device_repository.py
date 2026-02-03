@@ -1,11 +1,14 @@
+# File: infrastructure/persistence/sqlalchemy/repositories/device_repository.py
 """
 Device Repository - Cache layer for offline mode.
 In Remote-First architecture, this is optional.
+
+UPDATED: Added bulk_save() method for optimized batch operations.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple, Dict
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +27,8 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
     """
     Device cache repository.
     Used for offline mode fallback.
+
+    OPTIMIZATION: Added bulk operations for batch processing.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -40,10 +45,58 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         return await self.get_by_code(EquipmentCode(code))
 
     async def get_all(self) -> Sequence[Device]:
+        """
+        Load ALL devices in a single query.
+        Used for bulk pre-loading before sync operations.
+        """
         stmt = select(DeviceModel).order_by(DeviceModel.equip_code)
         result = await self._session.execute(stmt)
         models = result.scalars().all()
         return [SQLAlchemyMapper.to_device_entity(m) for m in models if m]
+
+    async def get_all_as_dict(self) -> Dict[str, Device]:
+        """
+        Load ALL devices as a dictionary keyed by equipment code.
+        Optimized for O(1) lookup during sync operations.
+
+        Returns:
+            Dict mapping uppercase equipment codes to Device entities.
+        """
+        devices = await self.get_all()
+        return {device.equipment_code.value.upper(): device for device in devices}
+
+    async def get_by_codes(self, codes: List[str]) -> Sequence[Device]:
+        """
+        Load multiple devices by their codes in a single query.
+
+        Args:
+            codes: List of equipment codes to fetch.
+
+        Returns:
+            Sequence of Device entities found.
+        """
+        if not codes:
+            return []
+
+        upper_codes = [c.upper() for c in codes]
+        stmt = select(DeviceModel).where(DeviceModel.equip_code.in_(upper_codes)).order_by(DeviceModel.equip_code)
+
+        result = await self._session.execute(stmt)
+        models = result.scalars().all()
+        return [SQLAlchemyMapper.to_device_entity(m) for m in models if m]
+
+    async def get_by_codes_as_dict(self, codes: List[str]) -> Dict[str, Device]:
+        """
+        Load multiple devices as a dictionary.
+
+        Args:
+            codes: List of equipment codes to fetch.
+
+        Returns:
+            Dict mapping uppercase equipment codes to Device entities.
+        """
+        devices = await self.get_by_codes(codes)
+        return {device.equipment_code.value.upper(): device for device in devices}
 
     async def get_dashboard_snapshot(
         self,
@@ -83,8 +136,29 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
         return [SQLAlchemyMapper.to_device_entity(m) for m in models if m]
 
     async def save(self, device: Device) -> None:
+        """Save a single device (upsert)."""
         model = SQLAlchemyMapper.to_device_model(device)
         await self._session.merge(model)
+
+    async def bulk_save(self, devices: List[Device]) -> None:
+        """
+        Bulk save multiple devices in a single batch operation.
+
+        Uses merge() for upsert behavior (insert or update).
+        More efficient than individual saves due to reduced round-trips.
+
+        Args:
+            devices: List of Device entities to save.
+        """
+        if not devices:
+            return
+
+        for device in devices:
+            model = SQLAlchemyMapper.to_device_model(device)
+            await self._session.merge(model)
+
+        # Note: The session will batch these operations efficiently.
+        # Actual DB write happens on commit(), which is handled by UoW.
 
     async def delete(self, code: EquipmentCode) -> bool:
         stmt = delete(DeviceModel).where(DeviceModel.equip_code == code.value)

@@ -1,3 +1,4 @@
+# File: domain/entities/device.py
 from __future__ import annotations
 
 from datetime import datetime
@@ -14,6 +15,10 @@ from ..value_objects.equipment_code import EquipmentCode
 class Device(AggregateRoot):
     """
     Aggregate Root representing a manufacturing device.
+
+    Supports two modes of status update:
+    1. Command-driven (update_status): Enforces transition policy
+    2. Sync-driven (sync_status): Observes external state without policy enforcement
     """
 
     __slots__ = (
@@ -86,7 +91,7 @@ class Device(AggregateRoot):
     def is_operational(self) -> bool:
         return self._current_status.is_running
 
-    # --- Commands ---
+    # --- Command Methods (enforce transition policy) ---
 
     def start_production(self, timestamp: datetime) -> None:
         self._transition_to(MachineStatus.RUNNING, timestamp)
@@ -115,11 +120,69 @@ class Device(AggregateRoot):
         new_status: MachineStatus,
         timestamp: datetime,
     ) -> None:
+        """
+        Update status with transition policy enforcement.
+
+        Use this for command-driven changes (e.g., operator actions).
+        Raises InvalidTransitionError if the transition is not allowed.
+        """
         self._transition_to(new_status, timestamp)
 
+    # --- Sync Methods (observe external state) ---
+
+    def sync_status(
+        self,
+        observed_status: MachineStatus,
+        observed_at: datetime,
+    ) -> bool:
+        """
+        Synchronize status from an external observation (e.g., SCADA/PLC).
+
+        This method is for syncing observed state from external systems.
+        It does NOT enforce transition policies because we are observing
+        reality, not commanding a change.
+
+        Args:
+            observed_status: The status observed from the external system.
+            observed_at: When the observation was made.
+
+        Returns:
+            True if the status was updated, False if ignored (stale data).
+
+        Note:
+            - Ignores out-of-order events (timestamp guard)
+            - Does NOT enforce transition policy
+            - Emits domain event on actual change
+        """
+        # Timestamp guard: reject out-of-order events
+        if observed_at < self._last_updated_at:
+            return False  # Stale data, silently ignore
+
+        # Same status: just update timestamp
+        if self._current_status == observed_status:
+            self._last_updated_at = observed_at
+            return True
+
+        # Record domain event for actual state change
+        event = StatusChangedEvent(
+            occurred_at=observed_at,
+            equipment_code=self._equipment_code,
+            previous_status=self._current_status,
+            new_status=observed_status,
+        )
+        self._record_event(event)
+
+        # Update state
+        self._current_status = observed_status
+        self._last_updated_at = observed_at
+        return True
+
     def update_remote_info(self, equip_name: Optional[str], reason_code: Optional[str]) -> None:
-        self._equip_name = equip_name
-        self._reason_code = reason_code
+        """Update metadata from remote source."""
+        if equip_name is not None:
+            self._equip_name = equip_name
+        if reason_code is not None:
+            self._reason_code = reason_code
 
     # --- Internal Behavior ---
 
@@ -128,6 +191,10 @@ class Device(AggregateRoot):
         new_status: MachineStatus,
         timestamp: datetime,
     ) -> None:
+        """
+        Internal transition with full policy enforcement.
+        Used by command methods.
+        """
         if timestamp < self._last_updated_at:
             raise StaleDataError.timestamp_regression(self._last_updated_at, timestamp)
 
@@ -135,6 +202,7 @@ class Device(AggregateRoot):
             self._last_updated_at = timestamp
             return
 
+        # Enforce transition policy (may raise InvalidTransitionError)
         StatusTransitionPolicy.validate(self._current_status, new_status)
 
         event = StatusChangedEvent(

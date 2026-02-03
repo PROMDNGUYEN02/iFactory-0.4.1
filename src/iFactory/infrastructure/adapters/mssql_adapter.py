@@ -1,6 +1,9 @@
+# File: infrastructure/adapters/mssql_adapter.py
 """
 MSSQL Adapter.
 Implements IRemoteDataSource for MSSQL/SCADA database.
+
+UPDATED: Improved shutdown handling to prevent async errors during cleanup.
 """
 
 import logging
@@ -26,6 +29,7 @@ class MssqlAdapter(IRemoteDataSource):
         self._engine: Optional[AsyncEngine] = None
         self._connection_string = connection_string
         self._is_disposed = False
+        self._disposing = False  # Flag to prevent new operations during disposal
 
         if connection_string:
             self._engine = create_async_engine(
@@ -33,6 +37,11 @@ class MssqlAdapter(IRemoteDataSource):
                 poolclass=NullPool,
                 echo=False,
             )
+
+    @property
+    def is_available(self) -> bool:
+        """Check if the adapter is available for operations."""
+        return not self._is_disposed and not self._disposing and self._engine is not None
 
     def _parse_datetime(self, val: Any) -> datetime:
         """Robust datetime parsing for legacy SQL types."""
@@ -81,8 +90,8 @@ class MssqlAdapter(IRemoteDataSource):
         """
         Fetch the single LATEST status for specified devices.
         """
-        if self._is_disposed or not self._engine:
-            logger.warning("MSSQL Engine not initialized or disposed.")
+        if not self.is_available:
+            logger.debug("[MssqlAdapter] Adapter not available, skipping fetch")
             return []
 
         if equipment_codes is not None and len(equipment_codes) == 0:
@@ -115,6 +124,10 @@ class MssqlAdapter(IRemoteDataSource):
 
         try:
             async with self._engine.connect() as conn:
+                # Double-check we haven't started disposing
+                if self._disposing:
+                    return []
+
                 stmt = text(query_str)
                 if equipment_codes:
                     stmt = stmt.bindparams(bindparam("codes", expanding=True))
@@ -125,7 +138,7 @@ class MssqlAdapter(IRemoteDataSource):
                 return [self._map_row(row) for row in rows]
 
         except Exception as e:
-            if not self._is_disposed:
+            if not self._is_disposed and not self._disposing:
                 logger.error(f"[MssqlAdapter] Bulk fetch error: {e}")
             return []
 
@@ -135,7 +148,7 @@ class MssqlAdapter(IRemoteDataSource):
         days: int = 1,
     ) -> List[Dict[str, Any]]:
         """Fetch history status for a single device."""
-        if self._is_disposed:
+        if not self.is_available:
             return []
 
         now = datetime.now()
@@ -149,7 +162,7 @@ class MssqlAdapter(IRemoteDataSource):
         end_time: datetime,
     ) -> List[Dict[str, Any]]:
         """Fetch history for a specific time range."""
-        if self._is_disposed or not self._engine:
+        if not self.is_available:
             return []
 
         query = """
@@ -167,6 +180,9 @@ class MssqlAdapter(IRemoteDataSource):
 
         try:
             async with self._engine.connect() as conn:
+                if self._disposing:
+                    return []
+
                 result = await conn.execute(
                     text(query),
                     {
@@ -179,7 +195,7 @@ class MssqlAdapter(IRemoteDataSource):
                 return [self._map_row(row) for row in rows]
 
         except Exception as e:
-            if not self._is_disposed:
+            if not self._is_disposed and not self._disposing:
                 logger.error(f"[MssqlAdapter] History fetch error for {equip_code}: {e}")
             return []
 
@@ -189,7 +205,7 @@ class MssqlAdapter(IRemoteDataSource):
         limit: int = 1,
     ) -> List[Dict[str, Any]]:
         """Fetch the N most recent history records for a device."""
-        if self._is_disposed or not self._engine:
+        if not self.is_available:
             return []
 
         query = """
@@ -205,6 +221,9 @@ class MssqlAdapter(IRemoteDataSource):
 
         try:
             async with self._engine.connect() as conn:
+                if self._disposing:
+                    return []
+
                 result = await conn.execute(
                     text(query),
                     {"code": equip_code, "limit": limit},
@@ -213,12 +232,27 @@ class MssqlAdapter(IRemoteDataSource):
                 return [self._map_row(row) for row in rows]
 
         except Exception as e:
-            if not self._is_disposed:
+            if not self._is_disposed and not self._disposing:
                 logger.error(f"[MssqlAdapter] Latest history error for {equip_code}: {e}")
             return []
 
     async def dispose(self) -> None:
-        """Clean up engine."""
+        """
+        Clean up engine.
+
+        Uses a two-phase shutdown:
+        1. Set disposing flag to prevent new operations
+        2. Dispose the engine
+        """
+        # Phase 1: Signal that we're shutting down
+        self._disposing = True
+
+        # Give in-flight operations a moment to complete
+        import asyncio
+
+        await asyncio.sleep(0.1)
+
+        # Phase 2: Actually dispose
         self._is_disposed = True
 
         if self._engine:
@@ -226,7 +260,8 @@ class MssqlAdapter(IRemoteDataSource):
                 await self._engine.dispose()
                 logger.info("[MssqlAdapter] Engine disposed")
             except Exception as e:
-                logger.warning(f"Error disposing MSSQL engine: {e}")
+                # During shutdown, errors are expected and can be ignored
+                logger.debug(f"[MssqlAdapter] Expected error during dispose: {e}")
             finally:
                 self._engine = None
 

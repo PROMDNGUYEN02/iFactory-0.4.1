@@ -4,6 +4,12 @@ Sync Commands.
 
 Pure Application Layer commands for device synchronization.
 All commands accept explicit arguments - no implicit UI state.
+
+OPTIMIZED:
+- Eliminated N+1 query patterns
+- Pre-loads devices in bulk for O(1) lookup
+- Single commit per transaction
+- Uses sync_status() for external state observation (no transition policy)
 """
 
 from __future__ import annotations
@@ -117,6 +123,13 @@ class SyncLatestStatusHandler:
 
     This handler is UI-agnostic. The caller (e.g., Orchestrator or Controller)
     is responsible for determining which device IDs to sync.
+
+    OPTIMIZATION NOTES:
+    - Pre-loads ALL existing devices in ONE query
+    - Uses in-memory dict for O(1) lookup
+    - Collects changes and bulk-saves at the end
+    - Single commit outside all loops
+    - Uses sync_status() for external state observation (bypasses transition policy)
     """
 
     def __init__(
@@ -136,10 +149,19 @@ class SyncLatestStatusHandler:
 
         Returns:
             SyncLatestStatusResult with synced device data.
+
+        Flow:
+            1. Fetch remote data (already optimized - one row per device)
+            2. Load ALL local devices in ONE query
+            3. Build in-memory lookup dict
+            4. Process each remote record against local state
+            5. Bulk save all modified devices
+            6. Commit ONCE at the end
         """
         if not request.device_ids:
             return SyncLatestStatusResult(count=0, timestamp=datetime.now())
 
+        # Step 1: Fetch remote data (single query returning latest per device)
         try:
             remote_records = await self._remote_source.fetch_latest_status(request.device_ids)
         except Exception as e:
@@ -152,10 +174,25 @@ class SyncLatestStatusHandler:
         synced_devices: Dict[str, SyncedDeviceData] = {}
 
         async with self._uow_factory() as uow:
+            # Step 2: Pre-load ALL existing devices in ONE query
+            existing_devices_dict: Dict[str, Device] = {}
+            if uow.devices:
+                try:
+                    all_devices = await uow.devices.get_all()
+                    # Step 3: Build O(1) lookup dictionary keyed by equipment code
+                    existing_devices_dict = {device.equipment_code.value.upper(): device for device in all_devices}
+                    logger.debug(f"[SyncLatestStatus] Pre-loaded {len(existing_devices_dict)} existing devices")
+                except Exception as e:
+                    logger.warning(f"[SyncLatestStatus] Failed to pre-load devices: {e}")
+
+            # Step 4: Process all remote records in memory
+            devices_to_save: List[Device] = []
+
             for record in remote_records:
                 try:
-                    device = await self._process_record(uow, record)
+                    device = self._process_record(record, existing_devices_dict)
                     if device:
+                        devices_to_save.append(device)
                         synced_devices[device.equipment_code.value] = SyncedDeviceData(
                             equip_code=device.equipment_code.value,
                             status_code=str(device.current_status.value),
@@ -168,6 +205,18 @@ class SyncLatestStatusHandler:
                     code = record.get("equip_code", "unknown")
                     logger.warning(f"[SyncLatestStatus] Error processing {code}: {e}")
 
+            # Step 5: Bulk save all modified devices (single batch operation)
+            if uow.devices and devices_to_save:
+                try:
+                    if hasattr(uow.devices, "bulk_save"):
+                        await uow.devices.bulk_save(devices_to_save)
+                    else:
+                        for device in devices_to_save:
+                            await uow.devices.save(device)
+                except Exception as e:
+                    logger.error(f"[SyncLatestStatus] Bulk save failed: {e}")
+
+            # Step 6: Single commit OUTSIDE all loops
             await uow.commit()
 
         logger.info(f"[SyncLatestStatus] Synced {len(synced_devices)} devices")
@@ -178,33 +227,62 @@ class SyncLatestStatusHandler:
             timestamp=datetime.now(),
         )
 
-    async def _process_record(self, uow: AbstractUnitOfWork, record: Dict[str, Any]) -> Optional[Device]:
-        """Process a single status record into a Device entity."""
-        raw_code = str(record.get("equip_code"))
+    def _process_record(self, record: Dict[str, Any], existing_devices: Dict[str, Device]) -> Optional[Device]:
+        """
+        Process a single status record.
+
+        Uses existing device if found, otherwise creates a new device entity.
+        Uses sync_status() which does NOT enforce transition policy since
+        we are observing external state, not commanding a change.
+
+        Args:
+            record: Remote status record
+            existing_devices: Pre-loaded device lookup dict
+
+        Returns:
+            Device entity (updated or new), or None if processing failed
+        """
+        raw_code = str(record.get("equip_code", "")).strip()
+        if not raw_code:
+            return None
+
         raw_status = record.get("raw_status") or record.get("equip_status") or "0"
         timestamp = record.get("last_update") or datetime.now()
         equip_name = record.get("equip_name")
         reason_code = record.get("reason_code")
-
-        code_vo = EquipmentCode(raw_code)
 
         try:
             status_enum = MachineStatus(int(raw_status))
         except (ValueError, TypeError):
             status_enum = MachineStatus.UNKNOWN
 
-        device = Device(
-            equipment_code=code_vo,
-            current_status=status_enum,
-            last_updated_at=timestamp,
-            equip_name=equip_name,
-            reason_code=reason_code,
-        )
+        code_upper = raw_code.upper()
+        existing_device = existing_devices.get(code_upper)
 
-        if uow.devices:
-            await uow.devices.save(device)
-
-        return device
+        if existing_device:
+            # Update existing device using sync_status (no transition policy)
+            # This is an observation of external state, not a command
+            updated = existing_device.sync_status(status_enum, timestamp)
+            if updated:
+                existing_device.update_remote_info(equip_name, reason_code)
+                return existing_device
+            else:
+                # Stale data was rejected by timestamp guard
+                logger.debug(f"[SyncLatestStatus] Stale data ignored for {raw_code}")
+                return None
+        else:
+            # Create new device
+            code_vo = EquipmentCode(raw_code)
+            device = Device(
+                equipment_code=code_vo,
+                current_status=status_enum,
+                last_updated_at=timestamp,
+                equip_name=equip_name,
+                reason_code=reason_code,
+            )
+            # Add to lookup dict for potential future lookups in same batch
+            existing_devices[code_upper] = device
+            return device
 
 
 class SyncHistoryHandler:
@@ -212,6 +290,11 @@ class SyncHistoryHandler:
     Handler: Sync history for a time range.
 
     Used for initial history load or on-demand history fetching.
+
+    NOTE: Remote API calls per device are unavoidable here since the remote
+    source doesn't support bulk history fetch. However, we still:
+    - Use bulk_save for persistence
+    - Single commit at the end
     """
 
     def __init__(
@@ -238,24 +321,41 @@ class SyncHistoryHandler:
         total_synced = 0
         devices_processed = 0
 
+        # Collect all periods across all devices for bulk save
+        all_periods: List[StatusPeriod] = []
+        equip_names: Dict[str, str] = {}
+
         try:
+            # Fetch all remote data first (outside UoW to minimize transaction time)
+            device_records: Dict[str, List[Dict[str, Any]]] = {}
+            for code in request.device_ids:
+                try:
+                    records = await self._remote_source.fetch_device_history_range(code, request.start_time, request.end_time)
+                    if records:
+                        device_records[code] = records
+                except Exception as e:
+                    logger.warning(f"[SyncHistory] Remote fetch failed for {code}: {e}")
+
+            # Now process within UoW
             async with self._uow_factory() as uow:
                 if not uow.history:
                     logger.warning("[SyncHistory] No history repository available")
                     return SyncHistoryResult(error="No history repository")
 
-                for code in request.device_ids:
-                    try:
-                        records = await self._remote_source.fetch_device_history_range(code, request.start_time, request.end_time)
+                for code, records in device_records.items():
+                    periods, equip_name = self._convert_to_periods(code, records)
+                    if periods:
+                        all_periods.extend(periods)
+                        if equip_name:
+                            equip_names[code] = equip_name
+                        total_synced += len(periods)
+                        devices_processed += 1
 
-                        if records:
-                            count = await self._bulk_save(uow.history, code, records)
-                            total_synced += count
-                            devices_processed += 1
+                # Bulk save all periods in one operation
+                if all_periods:
+                    await uow.history.bulk_save_status_history(all_periods, equip_name=next(iter(equip_names.values()), None))
 
-                    except Exception as e:
-                        logger.warning(f"[SyncHistory] Failed for {code}: {e}")
-
+                # Single commit outside all loops
                 await uow.commit()
 
         except Exception as e:
@@ -269,8 +369,8 @@ class SyncHistoryHandler:
             devices_processed=devices_processed,
         )
 
-    async def _bulk_save(self, history_repo, equip_code: str, records: List[Dict[str, Any]]) -> int:
-        """Bulk save history records."""
+    def _convert_to_periods(self, equip_code: str, records: List[Dict[str, Any]]) -> tuple[List[StatusPeriod], Optional[str]]:
+        """Convert raw records to StatusPeriod value objects."""
         periods = []
         equip_name = None
 
@@ -298,10 +398,7 @@ class SyncHistoryHandler:
             )
             periods.append(period)
 
-        if periods:
-            await history_repo.bulk_save_status_history(periods, equip_name=equip_name)
-
-        return len(periods)
+        return periods, equip_name
 
 
 class SyncIncrementalHistoryHandler:
@@ -309,6 +406,8 @@ class SyncIncrementalHistoryHandler:
     Handler: Sync recent history records for upsert.
 
     Fetches a limited number of recent records per device for incremental updates.
+
+    OPTIMIZATION: Collects all periods and performs bulk upsert at the end.
     """
 
     def __init__(
@@ -335,23 +434,44 @@ class SyncIncrementalHistoryHandler:
         total_updated = 0
         devices_processed = 0
 
+        # Collect all periods for bulk operation
+        all_periods: List[StatusPeriod] = []
+        equip_names: Dict[str, str] = {}
+
         try:
+            # Fetch all remote data first
+            device_records: Dict[str, List[Dict[str, Any]]] = {}
+            for code in request.device_ids:
+                try:
+                    records = await self._remote_source.fetch_latest_history_records(code, limit=request.record_limit)
+                    if records:
+                        device_records[code] = records
+                except Exception as e:
+                    logger.debug(f"[SyncIncremental] Remote fetch failed for {code}: {e}")
+
             async with self._uow_factory() as uow:
                 if not uow.history:
                     return SyncHistoryResult(error="No history repository")
 
-                for code in request.device_ids:
-                    try:
-                        records = await self._remote_source.fetch_latest_history_records(code, limit=request.record_limit)
+                for code, records in device_records.items():
+                    periods, equip_name = self._convert_to_periods(code, records)
+                    if periods:
+                        all_periods.extend(periods)
+                        if equip_name:
+                            equip_names[code] = equip_name
+                        total_updated += len(periods)
+                        devices_processed += 1
 
-                        if records:
-                            count = await self._upsert_records(uow.history, code, records)
-                            total_updated += count
-                            devices_processed += 1
+                # Bulk upsert all periods
+                if all_periods:
+                    if hasattr(uow.history, "bulk_upsert_status_periods"):
+                        await uow.history.bulk_upsert_status_periods(all_periods)
+                    else:
+                        for period in all_periods:
+                            equip_name = equip_names.get(period.equipment_code.value)
+                            await uow.history.save_status_period(period, equip_name=equip_name)
 
-                    except Exception as e:
-                        logger.debug(f"[SyncIncremental] Failed for {code}: {e}")
-
+                # Single commit outside all loops
                 await uow.commit()
 
         except Exception as e:
@@ -366,9 +486,9 @@ class SyncIncrementalHistoryHandler:
             devices_processed=devices_processed,
         )
 
-    async def _upsert_records(self, history_repo, equip_code: str, records: List[Dict[str, Any]]) -> int:
-        """Upsert history records."""
-        count = 0
+    def _convert_to_periods(self, equip_code: str, records: List[Dict[str, Any]]) -> tuple[List[StatusPeriod], Optional[str]]:
+        """Convert raw records to StatusPeriod value objects."""
+        periods = []
         equip_name = None
 
         for record in records:
@@ -393,11 +513,9 @@ class SyncIncrementalHistoryHandler:
                 status=status_enum,
                 time_range=TimeRange(start=start_time, end=end_time),
             )
+            periods.append(period)
 
-            await history_repo.save_status_period(period, equip_name=equip_name)
-            count += 1
-
-        return count
+        return periods, equip_name
 
 
 # =============================================================================
@@ -536,34 +654,34 @@ class SyncDeviceStatusCommand:
 
             equip_name = next((r.get("equip_name") for r in data if r.get("equip_name")), None)
 
+            # Build all periods first
+            periods = []
+            for record in data:
+                start_time = record.get("start_time")
+                if not start_time:
+                    continue
+
+                raw_status = record.get("equip_status", "0")
+                try:
+                    status_enum = MachineStatus(int(raw_status))
+                except (ValueError, TypeError):
+                    status_enum = MachineStatus.UNKNOWN
+
+                end_time = record.get("end_time")
+                if end_time and end_time < start_time:
+                    end_time = start_time
+
+                period = StatusPeriod(
+                    equipment_code=EquipmentCode(record.get("equip_code")),
+                    status=status_enum,
+                    time_range=TimeRange(start=start_time, end=end_time),
+                )
+                periods.append(period)
+
+            # Single UoW usage with bulk save
             async with self._uow as uow:
-                if uow.history:
-                    periods = []
-                    for record in data:
-                        start_time = record.get("start_time")
-                        if not start_time:
-                            continue
-
-                        raw_status = record.get("equip_status", "0")
-                        try:
-                            status_enum = MachineStatus(int(raw_status))
-                        except (ValueError, TypeError):
-                            status_enum = MachineStatus.UNKNOWN
-
-                        end_time = record.get("end_time")
-                        if end_time and end_time < start_time:
-                            end_time = start_time
-
-                        period = StatusPeriod(
-                            equipment_code=EquipmentCode(record.get("equip_code")),
-                            status=status_enum,
-                            time_range=TimeRange(start=start_time, end=end_time),
-                        )
-                        periods.append(period)
-
-                    if periods:
-                        await uow.history.bulk_save_status_history(periods, equip_name=equip_name)
-
+                if uow.history and periods:
+                    await uow.history.bulk_save_status_history(periods, equip_name=equip_name)
                 await uow.commit()
 
             logger.info(f"[SyncDeviceStatus] Synced {len(data)} records for {equip_code}")
