@@ -1,13 +1,15 @@
-# File: presentation/state/actions.py
+# src/iFactory/presentation/state/actions.py
 """
 State Actions.
 Defines all possible state mutations.
+
+Supports both dict payloads (backward compat) and typed payloads.
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 class ActionType(Enum):
@@ -17,7 +19,7 @@ class ActionType(Enum):
     TOGGLE_SIDEBAR = auto()
     TOGGLE_RIGHT_PANEL = auto()
     SELECT_DEVICE = auto()
-    SELECT_DEVICE_ONLY = auto()  # Select without opening panel
+    SELECT_DEVICE_ONLY = auto()
     DESELECT_DEVICE = auto()
     SET_DATA_RANGE = auto()
     SET_LOADING = auto()
@@ -30,6 +32,42 @@ class ActionType(Enum):
     UPDATE_SYSTEM_STATUS = auto()
     SYNC_COMPLETED = auto()
     SET_PAGE_DEVICES = auto()
+
+
+# ============================================================================
+# Typed Payloads (for new code)
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class SystemStatusPayload:
+    """Typed payload for UPDATE_SYSTEM_STATUS."""
+
+    mssql: bool = False
+    sqlite: bool = False
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class PageDevicesPayload:
+    """Typed payload for SET_PAGE_DEVICES."""
+
+    page: str = ""
+    devices: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SyncCompletedPayload:
+    """Typed payload for SYNC_COMPLETED."""
+
+    timestamp: datetime = field(default_factory=datetime.now)
+    device_count: int = 0
+    success: bool = True
+
+
+# ============================================================================
+# Action
+# ============================================================================
 
 
 @dataclass(frozen=True)
@@ -108,6 +146,11 @@ def set_selected_device_gantt(gantt_view_model: Any) -> Action:
 
 
 def update_system_status(mssql: bool, sqlite: bool, message: str = "") -> Action:
+    """
+    Update system status.
+
+    Uses dict payload for backward compatibility.
+    """
     return create_action(
         ActionType.UPDATE_SYSTEM_STATUS,
         {"mssql": mssql, "sqlite": sqlite, "message": message},
@@ -115,16 +158,24 @@ def update_system_status(mssql: bool, sqlite: bool, message: str = "") -> Action
 
 
 def sync_completed(payload: Dict[str, Any]) -> Action:
+    """Signal sync completion with dict payload."""
     return create_action(ActionType.SYNC_COMPLETED, payload)
 
 
-def set_page_devices(page: str, device_codes: list) -> Action:
-    return create_action(ActionType.SET_PAGE_DEVICES, {"page": page, "devices": device_codes})
+def set_page_devices(page: str, device_codes: List[str]) -> Action:
+    """Set devices for a page using dict payload."""
+    return create_action(
+        ActionType.SET_PAGE_DEVICES,
+        {"page": page, "devices": device_codes},
+    )
 
 
 __all__ = [
     "ActionType",
     "Action",
+    "SystemStatusPayload",
+    "PageDevicesPayload",
+    "SyncCompletedPayload",
     "create_action",
     "set_theme",
     "set_page",

@@ -1,5 +1,19 @@
-# File: presentation/state/selectors.py
-from typing import Any, Dict, List, Optional
+# src/iFactory/presentation/state/selectors.py
+"""
+State Selectors.
+Pure functions for extracting and computing derived state.
+
+NOTE: Returns dicts for backward compatibility with existing views.
+"""
+
+from typing import Any, Callable, Dict, List, Optional, TypeVar
+
+T = TypeVar("T")
+
+
+# ============================================================================
+# Basic Selectors
+# ============================================================================
 
 
 def select_theme(state: Dict[str, Any]) -> str:
@@ -81,7 +95,11 @@ def select_system_status(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def select_factory_summary(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Calculate and select factory summary statistics."""
+    """
+    Calculate and select factory summary statistics.
+
+    Returns a dict for backward compatibility with existing views.
+    """
     devices = select_devices(state)
     if not devices:
         return {

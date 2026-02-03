@@ -1,16 +1,19 @@
+# src/iFactory/presentation/state/reducers.py
 """
 State Reducers.
 Pure functions that handle state transitions.
+
+Compatible with both dict payloads and typed dataclass payloads.
 """
 
 from datetime import datetime
 from typing import Any, Dict
 
-from .actions import Action, ActionType
+from .actions import Action, ActionType, SystemStatusPayload, PageDevicesPayload, SyncCompletedPayload
 
 INITIAL_STATE: Dict[str, Any] = {
     "theme": "light",
-    "current_page": "electrode_page",  # Default to electrode
+    "current_page": "electrode_page",
     "sidebar_expanded": False,
     "right_panel_expanded": False,
     "selected_device_id": None,
@@ -156,28 +159,61 @@ def _handle_set_selected_device_gantt(
 
 def _handle_update_system_status(
     state: Dict[str, Any],
-    payload: Dict,
+    payload: Any,
 ) -> Dict[str, Any]:
+    """Handle both dict and SystemStatusPayload."""
     current = state.get("system_status", {})
-    updated = {
-        "mssql": payload.get("mssql", current.get("mssql", False)),
-        "sqlite": payload.get("sqlite", current.get("sqlite", False)),
-        "message": payload.get("message") or current.get("message", ""),
-    }
+
+    # Handle typed payload (SystemStatusPayload dataclass)
+    if isinstance(payload, SystemStatusPayload):
+        updated = {
+            "mssql": payload.mssql,
+            "sqlite": payload.sqlite,
+            "message": payload.message or current.get("message", ""),
+        }
+    # Handle dict payload (backward compatibility)
+    elif isinstance(payload, dict):
+        updated = {
+            "mssql": payload.get("mssql", current.get("mssql", False)),
+            "sqlite": payload.get("sqlite", current.get("sqlite", False)),
+            "message": payload.get("message") or current.get("message", ""),
+        }
+    else:
+        return state
+
     return {**state, "system_status": updated}
 
 
-def _handle_sync_completed(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]:
+def _handle_sync_completed(state: Dict[str, Any], payload: Any) -> Dict[str, Any]:
+    """Handle both dict and SyncCompletedPayload."""
+    # Handle typed payload
+    if isinstance(payload, SyncCompletedPayload):
+        timestamp = payload.timestamp
+    # Handle dict payload (backward compatibility)
+    elif isinstance(payload, dict):
+        timestamp = payload.get("timestamp", datetime.now())
+    else:
+        timestamp = datetime.now()
+
     return {
         **state,
-        "last_sync": payload.get("timestamp", datetime.now()),
+        "last_sync": timestamp,
         "is_loading": False,
     }
 
 
-def _handle_set_page_devices(state: Dict[str, Any], payload: Dict) -> Dict[str, Any]:
-    page = payload.get("page", "")
-    devices = payload.get("devices", [])
+def _handle_set_page_devices(state: Dict[str, Any], payload: Any) -> Dict[str, Any]:
+    """Handle both dict and PageDevicesPayload."""
+    # Handle typed payload
+    if isinstance(payload, PageDevicesPayload):
+        page = payload.page
+        devices = payload.devices
+    # Handle dict payload (backward compatibility)
+    elif isinstance(payload, dict):
+        page = payload.get("page", "")
+        devices = payload.get("devices", [])
+    else:
+        return state
 
     page_devices = dict(state.get("page_devices", {}))
     page_devices[page] = devices
