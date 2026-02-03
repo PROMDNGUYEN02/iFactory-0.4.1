@@ -2,7 +2,9 @@
 """
 Themeable mixin for views.
 
-Provides consistent theme handling across all views.
+OPTIMIZED:
+1. Skip redundant theme updates
+2. Provides consistent theme handling across all views
 """
 
 from __future__ import annotations
@@ -28,6 +30,10 @@ class ThemeableView(Protocol):
 class ThemeableMixin:
     """
     Mixin that provides consistent theme handling.
+
+    OPTIMIZED:
+    - Tracks current theme to skip redundant updates
+    - Provides is_dark property for convenience
 
     Usage:
         class MyView(ThemeableMixin):
@@ -55,10 +61,12 @@ class ThemeableMixin:
 
     @Slot(str)
     def _on_theme_changed_internal(self, theme: str) -> None:
-        """Handle theme change."""
-        if theme != self._current_theme:
-            self._current_theme = theme
-            self._apply_theme_styles()
+        """Handle theme change - OPTIMIZED to skip redundant updates."""
+        if theme == self._current_theme:
+            return  # Skip if no change
+
+        self._current_theme = theme
+        self._apply_theme_styles()
 
     def _apply_theme_styles(self) -> None:
         """
@@ -72,3 +80,6 @@ class ThemeableMixin:
     def is_dark(self) -> bool:
         """Check if current theme is dark."""
         return self._current_theme == "dark"
+
+
+__all__ = ["ThemeableMixin", "ThemeableView"]

@@ -2,10 +2,10 @@
 """
 Sidebar View - MVVM Architecture.
 
-Modern navigation sidebar with:
-- Navigation buttons using Icons enum
-- Settings menu
-- Theme support via ThemeService
+OPTIMIZED:
+1. Batch button updates on theme change
+2. Skip redundant updates
+3. Cached styles
 """
 
 from __future__ import annotations
@@ -15,7 +15,16 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from PySide6.QtCore import Qt, QSize, QPoint, Slot, Signal
 from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QBrush
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QListWidget, QMenu, QGraphicsDropShadowEffect
+from PySide6.QtWidgets import (
+    QFrame,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QWidget,
+    QListWidget,
+    QMenu,
+    QGraphicsDropShadowEffect,
+)
 
 from ...constants.layout import Layout
 from ...resources.icons import Icons
@@ -32,11 +41,9 @@ class NavButtonBase(QWidget):
     """
     Base class for navigation buttons.
 
-    Provides:
-    - Icon + text layout
-    - Hover/active states
-    - Theme handling
-    - Expansion animation
+    OPTIMIZED:
+    - Skip redundant theme updates
+    - Cached icon loading
     """
 
     clicked = Signal()
@@ -55,6 +62,7 @@ class NavButtonBase(QWidget):
         self._is_active = False
         self._is_hovered = False
         self._is_expanded = False
+        self._current_theme = theme_service.current_theme
 
         self.setFixedHeight(44)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -68,7 +76,6 @@ class NavButtonBase(QWidget):
         self._main_layout.setContentsMargins(0, 4, 0, 4)
         self._main_layout.setSpacing(12)
 
-        # Icon container
         self._icon_container = QWidget()
         self._icon_container.setFixedSize(36, 36)
         icon_layout = QHBoxLayout(self._icon_container)
@@ -83,7 +90,6 @@ class NavButtonBase(QWidget):
 
         self._main_layout.addWidget(self._icon_container)
 
-        # Text label
         self._text_label = QLabel(self._text)
         self._text_label.setFont(QFont("Segoe UI", 10))
         self._text_label.setVisible(False)
@@ -94,18 +100,20 @@ class NavButtonBase(QWidget):
         self._apply_style()
 
     def _on_theme_changed(self, theme: str) -> None:
-        """Handle theme change."""
+        """Handle theme change - OPTIMIZED."""
+        if theme == self._current_theme:
+            return  # Skip if no change
+
+        self._current_theme = theme
         self._update_icon()
         self._apply_style()
         self.update()
 
     def _update_icon(self) -> None:
-        """Update icon using ThemeService."""
         pixmap = self._theme_service.get_pixmap(self._icon, QSize(20, 20))
         self._icon_label.setPixmap(pixmap)
 
     def _apply_style(self) -> None:
-        """Apply current theme styles."""
         tokens = self._theme_service.tokens
 
         if self._is_active:
@@ -132,7 +140,6 @@ class NavButtonBase(QWidget):
         self._icon_container.setStyleSheet("background: transparent;")
 
     def set_expanded(self, expanded: bool) -> None:
-        """Set expansion state."""
         if self._is_expanded == expanded:
             return
 
@@ -175,12 +182,10 @@ class NavButtonBase(QWidget):
         path.addRoundedRect(rect, 10, 10)
 
         if self._is_active:
-            # Active background
             bg_color = QColor(tokens.primary)
             bg_color.setAlphaF(0.15)
             painter.fillPath(path, QBrush(bg_color))
 
-            # Active indicator bar
             indicator = QPainterPath()
             indicator.addRoundedRect(margin, rect.top() + 8, 3, rect.height() - 16, 1.5, 1.5)
             painter.fillPath(indicator, QBrush(QColor(tokens.primary)))
@@ -212,7 +217,6 @@ class ModernNavButton(NavButtonBase):
         self._on_click_handler(self._page_id)
 
     def set_active(self, active: bool) -> None:
-        """Set active state."""
         if self._is_active != active:
             self._is_active = active
             self._apply_style()
@@ -227,7 +231,12 @@ class SettingsButton(NavButtonBase):
     """Settings button that opens the settings menu."""
 
     def __init__(
-        self, icon: Union[Icons, str], text: str, shell_vm: "ShellViewModel", theme_service: "ThemeService", parent: Optional[QWidget] = None
+        self,
+        icon: Union[Icons, str],
+        text: str,
+        shell_vm: "ShellViewModel",
+        theme_service: "ThemeService",
+        parent: Optional[QWidget] = None,
     ):
         self._shell_vm = shell_vm
         self._current_range = 1
@@ -238,7 +247,12 @@ class SettingsButton(NavButtonBase):
         self._current_range = days
 
     def _show_menu(self) -> None:
-        menu = SettingsMenu(shell_vm=self._shell_vm, current_range=self._current_range, theme_service=self._theme_service, parent=self)
+        menu = SettingsMenu(
+            shell_vm=self._shell_vm,
+            current_range=self._current_range,
+            theme_service=self._theme_service,
+            parent=self,
+        )
 
         menu.adjustSize()
         menu_height = menu.sizeHint().height()
@@ -267,7 +281,13 @@ class SettingsMenu(QMenu):
         ("Last Year", 365),
     ]
 
-    def __init__(self, shell_vm: "ShellViewModel", current_range: int, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        shell_vm: "ShellViewModel",
+        current_range: int,
+        theme_service: "ThemeService",
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
         self._shell_vm = shell_vm
         self._current_range = current_range
@@ -312,7 +332,6 @@ class SettingsMenu(QMenu):
         """
         )
 
-        # Shadow effect
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(32)
         shadow.setXOffset(0)
@@ -323,7 +342,6 @@ class SettingsMenu(QMenu):
         self._build_menu_items()
 
     def _build_menu_items(self) -> None:
-        # Data Range section
         header = self.addAction("DATA RANGE")
         header.setEnabled(False)
 
@@ -335,7 +353,6 @@ class SettingsMenu(QMenu):
 
         self.addSeparator()
 
-        # Appearance section
         appearance_header = self.addAction("APPEARANCE")
         appearance_header.setEnabled(False)
 
@@ -348,7 +365,6 @@ class SettingsMenu(QMenu):
 
         self.addSeparator()
 
-        # About section
         info_header = self.addAction("ABOUT")
         info_header.setEnabled(False)
 
@@ -357,11 +373,17 @@ class SettingsMenu(QMenu):
 
     def _on_range_selected(self, days: int) -> None:
         self._current_range = days
-        logger.info(f"[SettingsMenu] Data range selected: {days} days")
+        logger.debug(f"[SettingsMenu] Data range selected: {days} days")
 
 
 class SidebarView:
-    """Sidebar navigation view using ThemeService and Icons enum."""
+    """
+    Sidebar navigation view.
+
+    OPTIMIZED:
+    - Batch button updates
+    - Skip redundant updates
+    """
 
     NAV_ITEMS = [
         (Icons.electrode, "Electrode", "electrode_page"),
@@ -383,6 +405,8 @@ class SidebarView:
         self._theme_service = theme_service
 
         self._is_expanded = False
+        self._current_page = ""
+        self._current_theme = theme_service.current_theme
         self._nav_buttons: List[ModernNavButton] = []
         self._settings_btn: Optional[SettingsButton] = None
 
@@ -390,27 +414,31 @@ class SidebarView:
         self._bind_viewmodel()
 
     def _bind_viewmodel(self) -> None:
-        """Bind to ViewModel signals."""
         self._shell_vm.themeChanged.connect(self._on_theme_changed)
         self._shell_vm.sidebarChanged.connect(self._on_sidebar_changed)
         self._shell_vm.pageChanged.connect(self._on_page_changed)
 
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
-        """Handle theme change."""
+        """Handle theme change - OPTIMIZED batch update."""
+        if theme == self._current_theme:
+            return
+
+        self._current_theme = theme
         self._apply_styles()
+        # Note: Individual buttons handle their own theme changes via signal
 
     @Slot(bool)
     def _on_sidebar_changed(self, expanded: bool) -> None:
-        """Handle sidebar expansion change."""
         if expanded != self._is_expanded:
             self._is_expanded = expanded
             self._update_expansion()
 
     @Slot(str)
     def _on_page_changed(self, page: str) -> None:
-        """Handle page change."""
-        self._update_active(page)
+        if page != self._current_page:
+            self._current_page = page
+            self._update_active(page)
 
     def _setup_sidebar(self) -> None:
         if not self._container:
@@ -418,13 +446,11 @@ class SidebarView:
 
         self._container.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
 
-        # Hide legacy list widgets
         if self._nav_list:
             self._nav_list.hide()
         if self._settings_list:
             self._settings_list.hide()
 
-        # Clear existing layout
         existing_layout = self._container.layout()
         if existing_layout:
             while existing_layout.count():
@@ -435,13 +461,11 @@ class SidebarView:
                 elif widget:
                     widget.hide()
 
-        # Create content widget
         self._content = QWidget()
         self._content_layout = QVBoxLayout(self._content)
         self._content_layout.setContentsMargins(4, 12, 4, 12)
         self._content_layout.setSpacing(4)
 
-        # Create nav buttons
         for icon_enum, text, page_id in self.NAV_ITEMS:
             btn = ModernNavButton(icon_enum, text, page_id, self._on_nav_click, self._theme_service)
             self._nav_buttons.append(btn)
@@ -449,13 +473,11 @@ class SidebarView:
 
         self._content_layout.addStretch()
 
-        # Divider
         self._divider = QFrame()
         self._divider.setFixedHeight(1)
         self._divider.setVisible(False)
         self._content_layout.addWidget(self._divider)
 
-        # Settings button
         self._settings_btn = SettingsButton(Icons.SETTINGS, "Settings", self._shell_vm, self._theme_service)
         self._content_layout.addWidget(self._settings_btn)
 
@@ -463,7 +485,6 @@ class SidebarView:
         self._apply_styles()
 
     def _apply_styles(self) -> None:
-        """Apply theme styles using ThemeService."""
         tokens = self._theme_service.tokens
 
         self._container.setStyleSheet(
@@ -479,18 +500,15 @@ class SidebarView:
         self._divider.setStyleSheet(f"background-color: {tokens.border_subtle}; margin: 4px 12px;")
 
     def _on_nav_click(self, page_id: str) -> None:
-        """Handle navigation button click."""
         self._shell_vm.navigate_to(page_id)
 
     def _update_active(self, current_page: str) -> None:
-        """Update active button based on current page."""
         normalized = current_page.replace("daboard", "electrode")
         for btn in self._nav_buttons:
             btn_page = btn.page_id.replace("daboard", "electrode")
             btn.set_active(btn_page == normalized)
 
     def _update_expansion(self) -> None:
-        """Update expansion state of all buttons."""
         for btn in self._nav_buttons:
             btn.set_expanded(self._is_expanded)
         if self._settings_btn:
@@ -516,7 +534,9 @@ class SidebarView:
             self._is_expanded = is_expanded
             self._update_expansion()
 
-        self._update_active(current_page)
+        if current_page != self._current_page:
+            self._current_page = current_page
+            self._update_active(current_page)
 
         if self._settings_btn:
             self._settings_btn.set_current_range(data_range)

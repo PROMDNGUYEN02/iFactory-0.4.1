@@ -422,9 +422,12 @@ class UIContainer(QObject):
         self._initial_load_done = True
         logger.info("[UIContainer] Starting initial data load...")
 
-        if self._device_vm:
-            self._device_vm.load_devices()
+        # Trigger initial page load - this emits page_changed signal
+        # DeviceListViewModel listens to this and calls load_devices()
+        if self._page_manager:
+            self._page_manager.force_load_current_page()
 
+        # Start auto-refresh timer
         if self._refresh_timer:
             self._refresh_timer.start()
             logger.info("[UIContainer] Auto-refresh timer started")

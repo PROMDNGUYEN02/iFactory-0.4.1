@@ -1,3 +1,4 @@
+# File: application/common/dtos.py
 """
 Application Layer Data Transfer Objects.
 Pure data carriers for boundaries (Input/Output).
@@ -28,6 +29,11 @@ class DeviceStatusDTO:
     material_batch: Optional[str] = None
     feeding_time: Optional[datetime] = None
     input_count: int = 0  # Placeholder for daily/shift count
+
+    # Availability Data - NEW
+    availability: float = 0.0  # Percentage (0-100)
+    run_time_seconds: float = 0.0  # Total RUN time today in seconds
+    total_time_seconds: float = 0.0  # Total time from 00:00 to now in seconds
 
 
 @dataclass(frozen=True, slots=True)

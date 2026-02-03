@@ -2,8 +2,10 @@
 """
 Header View - MVVM Architecture.
 
-Binds to ShellViewModel for theme and sidebar state.
-Uses ThemeService for styling and icons.
+OPTIMIZED:
+1. Skip redundant theme updates
+2. Cached icon loading
+3. Batch style updates
 """
 
 from __future__ import annotations
@@ -27,10 +29,9 @@ class HeaderView:
     """
     Header view component.
 
-    Passive view that:
-    - Binds to ShellViewModel signals
-    - Uses ThemeService for styling and icons
-    - Delegates user actions to ViewModel
+    OPTIMIZED:
+    - Skip redundant theme/sidebar updates
+    - Cached styles
     """
 
     def __init__(
@@ -55,6 +56,7 @@ class HeaderView:
         self._close_btn = window_buttons[2] if len(window_buttons) > 2 else None
 
         self._current_expanded = shell_vm.sidebar_expanded
+        self._current_theme = theme_service.current_theme
 
         self._setup_logo_and_title()
         self._setup_connections()
@@ -63,7 +65,6 @@ class HeaderView:
         self._update_toggle_icon()
 
     def _setup_logo_and_title(self) -> None:
-        """Setup logo icon and application title using IconProvider."""
         if self._title_icon:
             self._load_logo()
 
@@ -72,25 +73,21 @@ class HeaderView:
             self._update_title_style()
 
     def _load_logo(self) -> None:
-        """Load and set the logo image using ThemeService."""
         if not self._title_icon:
             return
 
-        # Use ThemeService to get cached pixmap
         pixmap = self._theme_service.get_pixmap(Icons.LOGO, QSize(28, 28))
 
         if not pixmap.isNull():
             self._title_icon.setPixmap(pixmap)
             self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         else:
-            # Fallback to emoji
             self._title_icon.setText("🏭")
             self._title_icon.setStyleSheet("QLabel { font-size: 20px; padding: 4px; }")
             self._title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
             logger.warning("[HeaderView] Failed to load logo, using fallback")
 
     def _setup_connections(self) -> None:
-        """Connect UI events to ViewModel methods."""
         if self._toggle_btn:
             self._toggle_btn.clicked.connect(self._shell_vm.toggle_sidebar)
 
@@ -104,23 +101,28 @@ class HeaderView:
             self._close_btn.clicked.connect(self._on_close)
 
     def _bind_viewmodel(self) -> None:
-        """Bind to ViewModel signals."""
         self._shell_vm.themeChanged.connect(self._on_theme_changed)
         self._shell_vm.sidebarChanged.connect(self._on_sidebar_changed)
 
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
-        """Handle theme change from ViewModel."""
+        """Handle theme change - OPTIMIZED."""
+        if theme == self._current_theme:
+            return
+
+        self._current_theme = theme
         self._update_toggle_icon()
         self._update_title_style()
 
     @Slot(bool)
     def _on_sidebar_changed(self, expanded: bool) -> None:
-        """Handle sidebar change from ViewModel."""
-        if expanded != self._current_expanded:
-            self._current_expanded = expanded
-            self._update_visibility()
-            self._update_toggle_icon()
+        """Handle sidebar change - OPTIMIZED."""
+        if expanded == self._current_expanded:
+            return
+
+        self._current_expanded = expanded
+        self._update_visibility()
+        self._update_toggle_icon()
 
     def _on_minimize(self) -> None:
         window = self._container.window()
@@ -141,7 +143,6 @@ class HeaderView:
             window.close()
 
     def _update_visibility(self) -> None:
-        """Update title label and icon visibility."""
         if self._title_label:
             self._title_label.setVisible(self._current_expanded)
 
@@ -149,7 +150,6 @@ class HeaderView:
             self._title_icon.setVisible(self._current_expanded)
 
     def _update_title_style(self) -> None:
-        """Update title label style using ThemeService tokens."""
         if not self._title_label:
             return
 
@@ -167,14 +167,10 @@ class HeaderView:
         )
 
     def _update_toggle_icon(self) -> None:
-        """Update toggle button icon using enum-based icons."""
         if not self._toggle_btn:
             return
 
-        # Use Icons enum - ThemeService handles theme-appropriate path
         icon_enum = Icons.LEFT_PANEL_CLOSE if self._current_expanded else Icons.LEFT_PANEL_OPEN
-
-        # Get cached icon from ThemeService
         icon = self._theme_service.get_icon(icon_enum)
         tokens = self._theme_service.tokens
 
@@ -190,16 +186,15 @@ class HeaderView:
                     padding: 4px;
                 }}
                 QPushButton:hover {{
-                    background: {tokens.get_rgba("hover", 0.5)};
+                    background: {tokens.interactive_hover};
                     border-radius: 4px;
                 }}
             """
             )
         else:
-            # Fallback to text arrow
             arrow_text = "◀" if self._current_expanded else "▶"
             self._toggle_btn.setText(arrow_text)
-            self._toggle_btn.setIcon(icon)  # Clear any existing icon
+            self._toggle_btn.setIcon(icon)
             self._toggle_btn.setStyleSheet(
                 """
                 QPushButton {

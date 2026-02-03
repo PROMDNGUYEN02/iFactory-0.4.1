@@ -3,13 +3,6 @@
 Page Device Manager.
 
 Presentation Layer service that manages which devices are visible on each page.
-This is a UI concept - it determines which device IDs to pass to the Application Layer.
-
-Responsibilities:
-- Load device-to-page mappings from configuration
-- Track current page state
-- Emit signals when page changes (for UI coordination)
-- Provide device IDs for the current page to controllers
 """
 
 from __future__ import annotations
@@ -28,17 +21,8 @@ logger = logging.getLogger(__name__)
 class PageDeviceManager(QObject):
     """
     Manages device visibility per page.
-
-    This is a Presentation Layer service that:
-    1. Knows which devices belong to which UI pages
-    2. Tracks the current page
-    3. Provides device IDs to controllers for sync operations
-
-    The Application Layer (SyncOrchestrator) receives explicit device IDs
-    from controllers - it has no knowledge of "pages".
     """
 
-    # Signals for UI coordination
     page_changed = Signal(str, list)  # (page_name, device_codes)
     devices_updated = Signal(str, list)  # (page_name, device_codes)
 
@@ -52,6 +36,7 @@ class PageDeviceManager(QObject):
         self._current_page = "electrode_page"
         self._page_devices: Dict[str, List[str]] = {}
         self._all_devices: Set[str] = set()
+        self._raw_config: Dict = {}
 
         self._load_config()
 
@@ -63,26 +48,30 @@ class PageDeviceManager(QObject):
 
         try:
             text = self._config_path.read_text(encoding="utf-8")
-            data = json.loads(text)
+            self._raw_config = json.loads(text)
 
-            for area_key, area_config in data.items():
+            for area_key, area_config in self._raw_config.items():
                 if not isinstance(area_config, dict):
                     continue
 
                 page_name = self._map_area_to_page(area_key)
-                devices_list = area_config.get("devices", [])
+                devices_section = area_config.get("devices", [])
+                device_codes = self._extract_device_codes(devices_section)
 
-                if isinstance(devices_list, list):
-                    device_codes = self._extract_device_codes(devices_list)
+                if device_codes:
+                    if page_name not in self._page_devices:
+                        self._page_devices[page_name] = []
 
-                    if device_codes:
-                        if page_name not in self._page_devices:
-                            self._page_devices[page_name] = []
+                    existing = set(self._page_devices[page_name])
+                    new_devices = [d for d in device_codes if d not in existing]
 
-                        self._page_devices[page_name].extend(device_codes)
-                        self._all_devices.update(device_codes)
+                    self._page_devices[page_name].extend(new_devices)
+                    self._all_devices.update(device_codes)
 
-                        logger.info(f"[PageDeviceManager] Loaded {len(device_codes)} devices " f"for {page_name}: {device_codes}")
+                    logger.info(f"[PageDeviceManager] Loaded {len(device_codes)} devices " f"for {page_name} from {area_key}: {device_codes[:5]}...")
+
+            for page, devices in self._page_devices.items():
+                logger.info(f"[PageDeviceManager] {page}: {len(devices)} devices total")
 
             total = len(self._all_devices)
             logger.info(f"[PageDeviceManager] Loaded {total} total unique devices from config")
@@ -90,42 +79,45 @@ class PageDeviceManager(QObject):
         except Exception as e:
             logger.error(f"[PageDeviceManager] Failed to load config: {e}")
 
-    def _extract_device_codes(self, devices_list: List) -> List[str]:
-        """Extract device codes from config list."""
+    def _extract_device_codes(self, devices_section) -> List[str]:
+        """Extract device codes from config section."""
         device_codes = []
-        for dev in devices_list:
-            if isinstance(dev, dict):
-                device_id = dev.get("id") or dev.get("device_code") or dev.get("code")
-                if device_id:
-                    device_codes.append(device_id)
-            elif isinstance(dev, str):
-                device_codes.append(dev)
+
+        if isinstance(devices_section, list):
+            for dev in devices_section:
+                if isinstance(dev, dict):
+                    device_id = dev.get("id") or dev.get("device_code") or dev.get("code") or dev.get("device_id")
+                    if device_id:
+                        device_codes.append(device_id)
+                elif isinstance(dev, str):
+                    device_codes.append(dev)
+
+        elif isinstance(devices_section, dict):
+            meta_keys = {"ref_width", "ref_height", "min_scale", "max_scale"}
+            for key in devices_section:
+                if key not in meta_keys:
+                    device_codes.append(key)
+
         return device_codes
 
     def _map_area_to_page(self, area_key: str) -> str:
         """Map area key from config to page name."""
         area_lower = area_key.lower()
 
-        if "electrode" in area_lower or "daboard" in area_lower:
+        if "electrode" in area_lower:
             return "electrode_page"
-        elif "order" in area_lower:
+        if "assembly" in area_lower:
             return "assembly_page"
-        else:
+        if "daboard" in area_lower or "dashboard" in area_lower:
             return "electrode_page"
+        if "order" in area_lower:
+            return "assembly_page"
+
+        logger.warning(f"[PageDeviceManager] Unknown area key: {area_key}")
+        return "electrode_page"
 
     def set_current_page(self, page_name: str) -> List[str]:
-        """
-        Set current page and return devices for that page.
-
-        Emits page_changed signal for UI coordination.
-        Controllers listen to this signal and call sync with the device IDs.
-
-        Args:
-            page_name: Name of the page to switch to.
-
-        Returns:
-            List of device IDs for the new page.
-        """
+        """Set current page and emit signal."""
         normalized = self._normalize_page_name(page_name)
 
         if normalized != self._current_page:
@@ -134,12 +126,24 @@ class PageDeviceManager(QObject):
 
             logger.info(f"[PageDeviceManager] Page changed to {normalized}: " f"{len(devices)} devices")
 
-            # Emit signal - controllers will handle sync
             self.page_changed.emit(normalized, devices)
-
             return devices
 
         return self.get_current_devices()
+
+    def force_load_current_page(self) -> List[str]:
+        """
+        Force emit page_changed signal for current page.
+
+        Used for initial load when page hasn't changed but we need to trigger
+        the signal for DeviceListViewModel to start loading.
+        """
+        devices = self.get_page_devices(self._current_page)
+
+        logger.info(f"[PageDeviceManager] Force loading {self._current_page}: " f"{len(devices)} devices")
+
+        self.page_changed.emit(self._current_page, devices)
+        return devices
 
     def _normalize_page_name(self, page_name: str) -> str:
         """Normalize page name to consistent format."""
@@ -153,18 +157,14 @@ class PageDeviceManager(QObject):
         return self._current_page
 
     def get_current_devices(self) -> List[str]:
-        """
-        Get device IDs for the current page.
-
-        This is the primary method controllers use to get device IDs
-        to pass to the Application Layer.
-        """
+        """Get device IDs for the current page."""
         return self.get_page_devices(self._current_page)
 
     def get_page_devices(self, page_name: str) -> List[str]:
         """Get device IDs for a specific page."""
         normalized = self._normalize_page_name(page_name)
-        return list(self._page_devices.get(normalized, []))
+        devices = self._page_devices.get(normalized, [])
+        return list(devices)
 
     def get_all_devices(self) -> List[str]:
         """Get all known device IDs across all pages."""
@@ -179,6 +179,10 @@ class PageDeviceManager(QObject):
         if page_name:
             return len(self.get_page_devices(page_name))
         return len(self._all_devices)
+
+    def get_layout_config(self, area_key: str) -> Dict:
+        """Get raw layout config for an area key."""
+        return self._raw_config.get(area_key, {})
 
 
 __all__ = ["PageDeviceManager"]

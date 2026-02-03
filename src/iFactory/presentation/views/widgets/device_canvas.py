@@ -1,11 +1,14 @@
+# File: presentation/views/widgets/device_canvas.py
 """
 Device Canvas - Factory floor visualization.
 
-OPTIMIZATIONS:
+OPTIMIZED:
 1. ColorRegistry for cached colors
-2. Removed per-item QGraphicsDropShadowEffect (memory intensive)
-3. Hover effect drawn directly in paint instead of effect
+2. No per-item QGraphicsDropShadowEffect
+3. Hover effect drawn directly in paint
 4. Cached pixmaps and fonts
+5. Batch theme updates
+6. Skip redundant theme updates
 """
 
 from __future__ import annotations
@@ -48,10 +51,11 @@ class DeviceIconItem(QGraphicsObject):
     """
     Individual device icon on the canvas.
 
-    OPTIMIZATIONS:
+    OPTIMIZED:
     - Uses ColorRegistry for cached colors
-    - No QGraphicsDropShadowEffect (draws glow manually when hovered)
+    - No QGraphicsDropShadowEffect
     - Cached pixmaps via ThemeService
+    - Skip redundant theme updates
     """
 
     def __init__(
@@ -293,15 +297,18 @@ class DeviceIconItem(QGraphicsObject):
         self.setToolTip(tooltip_text)
 
     def update_theme(self, is_dark: bool) -> None:
-        if is_dark != self._is_dark:
-            self._is_dark = is_dark
-            self._load_icon()
+        """Update theme - OPTIMIZED: skip if no change."""
+        if is_dark == self._is_dark:
+            return  # No change needed
 
-            text_color = "#E0E0E0" if is_dark else "#2c3e50"
-            text_brush = self._colors.get_brush(text_color)
-            self.label.setBrush(text_brush)
-            self.output_badge.setBrush(text_brush)
-            self.update()
+        self._is_dark = is_dark
+        self._load_icon()
+
+        text_color = "#E0E0E0" if is_dark else "#2c3e50"
+        text_brush = self._colors.get_brush(text_color)
+        self.label.setBrush(text_brush)
+        self.output_badge.setBrush(text_brush)
+        # Don't call update() here - parent will batch it
 
     def hoverEnterEvent(self, event) -> None:
         self._is_hovered = True
@@ -352,10 +359,11 @@ class DeviceCanvasWidget(QWidget):
     """
     Canvas widget displaying factory floor with device icons.
 
-    OPTIMIZATIONS:
+    OPTIMIZED:
     - Uses ColorRegistry for all colors
     - ThemeService for cached pixmaps
-    - No per-item effects
+    - Batch theme updates
+    - Skip redundant renders
     """
 
     device_clicked = Signal(str)
@@ -437,11 +445,14 @@ class DeviceCanvasWidget(QWidget):
             logger.error("Failed to init canvas items: %s", e)
 
     def _get_background_path(self, is_dark: bool) -> str:
+        """Get background image path - FIX: use correct enum names."""
         key = self.area_key.lower()
 
         if "electrode" in key or "daboard" in key:
+            # FIX: lowercase 'electrode' in enum name
             icon = Icons.electrode_LAYOUT
         else:
+            # FIX: lowercase 'assembly' in enum name
             icon = Icons.assembly_LAYOUT
 
         if self._theme_service:
@@ -462,22 +473,43 @@ class DeviceCanvasWidget(QWidget):
         return None
 
     def render_state(self, devices_state: Dict[str, Any], is_dark: bool) -> None:
-        if is_dark != self._is_dark:
+        """
+        Render devices - OPTIMIZED theme handling.
+
+        Only updates theme-dependent elements when theme actually changes.
+        Uses batch updates for better performance.
+        """
+        theme_changed = is_dark != self._is_dark
+
+        if theme_changed:
             self._is_dark = is_dark
+            self._update_theme_batch(is_dark)
 
-            if self._bg_item:
-                bg_path = self._get_background_path(is_dark)
-                pixmap = self._load_background_pixmap(bg_path)
-                if pixmap:
-                    self._bg_item.setPixmap(pixmap)
-
-            for item in self._device_items.values():
-                item.update_theme(is_dark)
-
+        # Update live data
         for dev_id, vm in devices_state.items():
             item = self._device_items.get(dev_id)
             if item:
                 item.update_live_data(vm)
+
+    def _update_theme_batch(self, is_dark: bool) -> None:
+        """Batch update all theme-dependent elements."""
+        # Update background
+        if self._bg_item:
+            bg_path = self._get_background_path(is_dark)
+            pixmap = self._load_background_pixmap(bg_path)
+            if pixmap:
+                self._bg_item.setPixmap(pixmap)
+
+        # Batch update device icons - disable scene updates during batch
+        self.scene.blockSignals(True)
+        try:
+            for item in self._device_items.values():
+                item.update_theme(is_dark)
+        finally:
+            self.scene.blockSignals(False)
+
+        # Single scene update after batch
+        self.scene.update()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

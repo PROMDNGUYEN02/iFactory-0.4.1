@@ -604,6 +604,247 @@ class MssqlAdapter(IRemoteDataSource):
 
         return metrics
 
+    async def fetch_today_run_times(
+        self,
+        equipment_codes: List[str],
+    ) -> Dict[str, float]:
+        """
+        Fetch total RUN time today for multiple devices in a single query.
+
+        Only counts time within today (00:00 to now).
+
+        FIXED: Properly handles records with NULL END_TIME that started before today.
+        """
+        if not await self._enter_operation():
+            return {code: 0.0 for code in equipment_codes}
+
+        success = False
+        try:
+            if not self._engine or not equipment_codes:
+                return {code: 0.0 for code in equipment_codes}
+
+            now = datetime.now()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            async def _do_fetch():
+                # FIXED query: Only count time that falls within today
+                #
+                # For each record:
+                # - effective_start = MAX(START_TIME, today_start)
+                # - effective_end = MIN(COALESCE(END_TIME, now), now)
+                # - duration = effective_end - effective_start (only if positive)
+                #
+                # Filter: Only records that OVERLAP with today's range [today_start, now]
+                # - Must have started before now: START_TIME < now
+                # - Must end after today started: END_TIME > today_start OR END_TIME IS NULL
+                # - For NULL END_TIME, we use 'now' as the end time
+
+                query_str = """
+                SELECT 
+                    S.EQUIP_CODE,
+                    SUM(
+                        DATEDIFF(
+                            SECOND,
+                            -- effective_start: MAX(START_TIME, today_start)
+                            CASE 
+                                WHEN S.START_TIME > :today_start THEN S.START_TIME 
+                                ELSE :today_start 
+                            END,
+                            -- effective_end: MIN(COALESCE(END_TIME, now), now)
+                            CASE 
+                                WHEN S.END_TIME IS NULL THEN :now
+                                WHEN S.END_TIME < :now THEN S.END_TIME
+                                ELSE :now 
+                            END
+                        )
+                    ) as run_seconds
+                FROM TT_EQ_STATUS S
+                WHERE S.EQUIP_CODE IN :codes
+                AND S.EQUIP_STATUS = 1
+                AND (S.DEL_FLAG = '0' OR S.DEL_FLAG IS NULL)
+                -- Record must have started before now
+                AND S.START_TIME < :now
+                -- Record must overlap with today: ends after today_start OR still running
+                AND (
+                    S.END_TIME > :today_start 
+                    OR S.END_TIME IS NULL
+                )
+                -- Additional safety: effective_start < effective_end
+                -- This ensures we only count positive durations
+                AND (
+                    CASE 
+                        WHEN S.END_TIME IS NULL THEN :now
+                        WHEN S.END_TIME < :now THEN S.END_TIME
+                        ELSE :now 
+                    END
+                    >
+                    CASE 
+                        WHEN S.START_TIME > :today_start THEN S.START_TIME 
+                        ELSE :today_start 
+                    END
+                )
+                GROUP BY S.EQUIP_CODE
+                """
+
+                if self._disposing:
+                    return {}
+
+                async with self._engine.connect() as conn:
+                    if self._disposing:
+                        return {}
+
+                    stmt = text(query_str)
+                    stmt = stmt.bindparams(bindparam("codes", expanding=True))
+
+                    result = await conn.execute(
+                        stmt,
+                        {
+                            "codes": tuple(equipment_codes),
+                            "today_start": today_start,
+                            "now": now,
+                        },
+                    )
+                    rows = result.fetchall()
+
+                    # Build result dict - initialize all codes with 0
+                    run_times = {code.upper(): 0.0 for code in equipment_codes}
+                    for row in rows:
+                        code = str(row[0]).strip().upper()
+                        seconds = float(row[1]) if row[1] else 0.0
+                        # Ensure non-negative and cap at total_seconds_today
+                        total_seconds_today = (now - today_start).total_seconds()
+                        run_times[code] = min(max(0.0, seconds), total_seconds_today)
+
+                    return run_times
+
+            result = await retry_with_backoff(
+                lambda: self._execute_with_timeout(
+                    _do_fetch(),
+                    operation_name="fetch_today_run_times",
+                ),
+                self._config.retry,
+                "fetch_today_run_times",
+            )
+            success = True
+
+            logger.debug(f"[MssqlAdapter] Fetched run times for {len(equipment_codes)} devices")
+            return result
+
+        except Exception as e:
+            if not self._is_disposed and not self._disposing:
+                logger.error(f"[MssqlAdapter] Run times fetch error: {e}")
+            return {code.upper(): 0.0 for code in equipment_codes}
+        finally:
+            await self._exit_operation(success)
+
+    async def fetch_single_device_run_time(
+        self,
+        equipment_code: str,
+    ) -> float:
+        """
+        Fetch RUN time today for a single device.
+
+        Optimized for on-demand fetching when user clicks a device.
+
+        Args:
+            equipment_code: Single equipment code to query
+
+        Returns:
+            Run time in seconds (0.0 if error or no data)
+        """
+        if not await self._enter_operation():
+            return 0.0
+
+        success = False
+        try:
+            if not self._engine or not equipment_code:
+                return 0.0
+
+            now = datetime.now()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            total_seconds_today = (now - today_start).total_seconds()
+
+            async def _do_fetch():
+                query_str = """
+                SELECT 
+                    SUM(
+                        DATEDIFF(
+                            SECOND,
+                            CASE 
+                                WHEN S.START_TIME > :today_start THEN S.START_TIME 
+                                ELSE :today_start 
+                            END,
+                            CASE 
+                                WHEN S.END_TIME IS NULL THEN :now
+                                WHEN S.END_TIME < :now THEN S.END_TIME
+                                ELSE :now 
+                            END
+                        )
+                    ) as run_seconds
+                FROM TT_EQ_STATUS S
+                WHERE S.EQUIP_CODE = :code
+                AND S.EQUIP_STATUS = 1
+                AND (S.DEL_FLAG = '0' OR S.DEL_FLAG IS NULL)
+                AND S.START_TIME < :now
+                AND (S.END_TIME > :today_start OR S.END_TIME IS NULL)
+                AND (
+                    CASE 
+                        WHEN S.END_TIME IS NULL THEN :now
+                        WHEN S.END_TIME < :now THEN S.END_TIME
+                        ELSE :now 
+                    END
+                    >
+                    CASE 
+                        WHEN S.START_TIME > :today_start THEN S.START_TIME 
+                        ELSE :today_start 
+                    END
+                )
+                """
+
+                if self._disposing:
+                    return 0.0
+
+                async with self._engine.connect() as conn:
+                    if self._disposing:
+                        return 0.0
+
+                    result = await conn.execute(
+                        text(query_str),
+                        {
+                            "code": equipment_code.upper(),
+                            "today_start": today_start,
+                            "now": now,
+                        },
+                    )
+                    row = result.fetchone()
+
+                    if row and row[0]:
+                        seconds = float(row[0])
+                        # Cap at total seconds today
+                        return min(max(0.0, seconds), total_seconds_today)
+                    return 0.0
+
+            result = await retry_with_backoff(
+                lambda: self._execute_with_timeout(
+                    _do_fetch(),
+                    timeout=10.0,  # Shorter timeout for single device
+                    operation_name=f"fetch_run_time({equipment_code})",
+                ),
+                self._config.retry,
+                f"fetch_run_time({equipment_code})",
+            )
+            success = True
+
+            logger.debug(f"[MssqlAdapter] Run time for {equipment_code}: {result:.0f}s")
+            return result
+
+        except Exception as e:
+            if not self._is_disposed and not self._disposing:
+                logger.error(f"[MssqlAdapter] Run time fetch error for {equipment_code}: {e}")
+            return 0.0
+        finally:
+            await self._exit_operation(success)
+
     async def dispose(self) -> None:
         """Dispose with proper waiting for active operations."""
         if self._is_disposed:

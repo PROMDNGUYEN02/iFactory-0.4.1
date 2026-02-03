@@ -2,9 +2,14 @@
 """
 Right Panel - Device details view.
 
-Uses ThemeService for all styling and icons.
-"""
+OPTIMIZED:
+- Cached style strings per theme
+- Skip redundant renders
+- Lazy style computation
 
+NEW:
+- Availability display with progress bar
+"""
 from __future__ import annotations
 
 import logging
@@ -29,7 +34,16 @@ logger = logging.getLogger(__name__)
 
 
 class RightPanelView:
-    """Right panel showing device details using ThemeService."""
+    """
+    Right panel showing device details.
+
+    OPTIMIZED:
+    - Cached styles per theme
+    - Skip redundant renders
+
+    NEW:
+    - Availability display below OEE
+    """
 
     def __init__(
         self,
@@ -47,6 +61,8 @@ class RightPanelView:
         self._last_device_id: Optional[str] = None
         self._last_render_data: Optional[Dict] = None
         self._is_panel_open = False
+        self._current_theme = theme_service.current_theme
+        self._cached_styles: Dict[str, Dict[str, str]] = {}
 
         self._layout: Optional[QVBoxLayout] = None
         self._setup()
@@ -54,14 +70,12 @@ class RightPanelView:
         self._bind_viewmodels()
 
     def _bind_viewmodels(self) -> None:
-        """Bind to ViewModel signals."""
         self._device_vm.selectionChanged.connect(self._on_selection_changed)
         self._shell_vm.themeChanged.connect(self._on_theme_changed)
         self._shell_vm.rightPanelChanged.connect(self._on_panel_changed)
 
     @Slot(object)
     def _on_selection_changed(self, selection) -> None:
-        """Handle device selection change."""
         if selection.has_selection:
             device_id = selection.selected_device_id
             is_different_device = device_id != self._last_device_id
@@ -81,12 +95,15 @@ class RightPanelView:
 
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
-        """Handle theme change."""
+        """Handle theme change - OPTIMIZED."""
+        if theme == self._current_theme:
+            return
+
+        self._current_theme = theme
         self._apply_theme_styles()
 
     @Slot(bool)
     def _on_panel_changed(self, expanded: bool) -> None:
-        """Handle panel expansion change."""
         self._is_panel_open = expanded
         width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
         self._container.setFixedWidth(width)
@@ -95,7 +112,6 @@ class RightPanelView:
             self._last_device_id = None
 
     def _setup(self) -> None:
-        """Setup UI structure."""
         if not self._container:
             return
 
@@ -107,7 +123,7 @@ class RightPanelView:
         self._layout.setContentsMargins(16, 20, 16, 20)
         self._layout.setSpacing(12)
 
-        # Header row
+        # Header with title and status badge
         header_layout = QHBoxLayout()
         self._title = QLabel("SELECT DEVICE")
         self._title.setObjectName("panel_title")
@@ -125,7 +141,7 @@ class RightPanelView:
         self._desc.setWordWrap(True)
         self._layout.addWidget(self._desc)
 
-        # Last update
+        # Last update time
         self._last_update = QLabel("Last Update: --")
         self._last_update.setObjectName("last_update")
         self._layout.addWidget(self._last_update)
@@ -142,7 +158,7 @@ class RightPanelView:
         mat_layout.addWidget(self._fed_time)
         self._layout.addWidget(self._mat_frame)
 
-        # OEE progress
+        # OEE
         self._lbl_oee = QLabel("OEE: 0%")
         self._bar_oee = QProgressBar()
         self._bar_oee.setTextVisible(False)
@@ -150,7 +166,23 @@ class RightPanelView:
         self._layout.addWidget(self._lbl_oee)
         self._layout.addWidget(self._bar_oee)
 
-        # Yield progress
+        # ================================================================
+        # Availability - NEW SECTION
+        # ================================================================
+        self._lbl_availability = QLabel("Availability: 0%")
+        self._lbl_availability.setObjectName("lbl_availability")
+        self._bar_availability = QProgressBar()
+        self._bar_availability.setTextVisible(False)
+        self._bar_availability.setFixedHeight(8)
+        self._bar_availability.setObjectName("bar_availability")
+        self._lbl_run_time = QLabel("⏱️ Run: 00:00:00 / Total: 00:00:00")
+        self._lbl_run_time.setObjectName("lbl_run_time")
+        self._layout.addWidget(self._lbl_availability)
+        self._layout.addWidget(self._bar_availability)
+        self._layout.addWidget(self._lbl_run_time)
+        # ================================================================
+
+        # Yield Rate
         self._lbl_yield = QLabel("Yield Rate: 0%")
         self._bar_yield = QProgressBar()
         self._bar_yield.setTextVisible(False)
@@ -172,7 +204,7 @@ class RightPanelView:
         details_layout.addWidget(self._cycle)
         self._layout.addWidget(self._details_frame)
 
-        # Error label
+        # Error status
         self._error = QLabel("Last Error: None")
         self._error.setWordWrap(True)
         self._layout.addWidget(self._error)
@@ -180,7 +212,6 @@ class RightPanelView:
         self._layout.addStretch()
 
     def _clear_layout(self) -> None:
-        """Clear existing layout items."""
         if not self._layout:
             return
         while self._layout.count():
@@ -188,95 +219,151 @@ class RightPanelView:
             if item.widget():
                 item.widget().deleteLater()
 
-    def _apply_theme_styles(self) -> None:
-        """Apply theme styles using ThemeService tokens."""
+    def _get_cached_styles(self) -> Dict[str, str]:
+        """Get or compute cached styles for current theme."""
+        if self._current_theme in self._cached_styles:
+            return self._cached_styles[self._current_theme]
+
         tokens = self._theme_service.tokens
-
-        # Panel container
-        self._container.setStyleSheet(
-            f"""
-            QFrame#right_slide_menu_frame {{
-                background-color: {tokens.get_rgba("slide.bg", 0.98)};
-                border: none;
-                border-left: 1px solid {tokens.get_rgba("border", 0.5)};
-            }}
-        """
-        )
-
-        # Text styles
-        self._title.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {tokens.app_fg};")
-        self._desc.setStyleSheet(f"font-size: 11px; color: {tokens.hint};")
-        self._last_update.setStyleSheet(f"font-size: 11px; color: {tokens.hint};")
-
-        # Card frames
         card_style = self._theme_service.get_card_style()
-        self._mat_frame.setStyleSheet(f"QFrame#mat_frame {{ {card_style} }}")
-        self._details_frame.setStyleSheet(f"QFrame#details_frame {{ {card_style} }}")
-
-        self._batch.setStyleSheet(f"font-weight: 600; color: {tokens.app_fg};")
-        self._fed_time.setStyleSheet(f"font-size: 10px; color: {tokens.hint};")
-
-        # Labels
-        self._lbl_oee.setStyleSheet(f"font-weight: 600; margin-top: 6px; color: {tokens.app_fg};")
-        self._lbl_yield.setStyleSheet(f"font-weight: 600; margin-top: 4px; color: {tokens.app_fg};")
-
-        # Progress bars
         bar_style = self._theme_service.get_progress_bar_style()
-        self._bar_oee.setStyleSheet(bar_style)
-        self._bar_yield.setStyleSheet(bar_style)
 
-        # Detail labels
+        styles = {
+            "container": f"""
+                QFrame#right_slide_menu_frame {{
+                    background-color: {tokens.get_rgba("slide.bg", 0.98)};
+                    border: none;
+                    border-left: 1px solid {tokens.get_rgba("border", 0.5)};
+                }}
+            """,
+            "title": f"font-size: 14px; font-weight: 700; color: {tokens.app_fg};",
+            "desc": f"font-size: 11px; color: {tokens.hint};",
+            "last_update": f"font-size: 11px; color: {tokens.hint};",
+            "card_frame": f"QFrame {{ {card_style} }}",
+            "batch": f"font-weight: 600; color: {tokens.app_fg};",
+            "fed_time": f"font-size: 10px; color: {tokens.hint};",
+            "lbl_oee": f"font-weight: 600; margin-top: 6px; color: {tokens.app_fg};",
+            "lbl_availability": f"font-weight: 600; margin-top: 6px; color: {tokens.app_fg};",
+            "lbl_run_time": f"font-size: 10px; color: {tokens.hint}; margin-bottom: 4px;",
+            "lbl_yield": f"font-weight: 600; margin-top: 4px; color: {tokens.app_fg};",
+            "bar_style": bar_style,
+            "detail_label": f"color: {tokens.app_fg};",
+        }
+
+        self._cached_styles[self._current_theme] = styles
+        return styles
+
+    def _apply_theme_styles(self) -> None:
+        """Apply theme styles - CACHED."""
+        styles = self._get_cached_styles()
+
+        self._container.setStyleSheet(styles["container"])
+        self._title.setStyleSheet(styles["title"])
+        self._desc.setStyleSheet(styles["desc"])
+        self._last_update.setStyleSheet(styles["last_update"])
+        self._mat_frame.setStyleSheet(styles["card_frame"].replace("QFrame", "QFrame#mat_frame"))
+        self._details_frame.setStyleSheet(styles["card_frame"].replace("QFrame", "QFrame#details_frame"))
+        self._batch.setStyleSheet(styles["batch"])
+        self._fed_time.setStyleSheet(styles["fed_time"])
+        self._lbl_oee.setStyleSheet(styles["lbl_oee"])
+        self._lbl_availability.setStyleSheet(styles["lbl_availability"])
+        self._lbl_run_time.setStyleSheet(styles["lbl_run_time"])
+        self._lbl_yield.setStyleSheet(styles["lbl_yield"])
+        self._bar_oee.setStyleSheet(styles["bar_style"])
+        self._bar_availability.setStyleSheet(styles["bar_style"])
+        self._bar_yield.setStyleSheet(styles["bar_style"])
+
         for label in [self._inputs, self._outputs, self._cycle]:
-            label.setStyleSheet(f"color: {tokens.app_fg};")
+            label.setStyleSheet(styles["detail_label"])
+
+    def _format_run_time(self, seconds: float) -> str:
+        """Format run time seconds to HH:MM:SS."""
+        total_seconds = int(max(0, seconds))  # Ensure non-negative
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        secs = total_seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
     def _render_device_from_model(self, device) -> None:
-        """Render device from DeviceDisplayModel."""
+        """Render device information from DeviceDisplayModel."""
         tokens = self._theme_service.tokens
 
         if hasattr(device, "device_id"):
+            # Title and description
             self._title.setText(str(device.display_name))
             self._desc.setText(str(device.description) if device.description else "")
             self._desc.setVisible(bool(device.description))
 
+            # Last update
             if device.last_update:
                 clean_time = str(device.last_update).replace("T", " ").split(".")[0]
                 self._last_update.setText(f"🕒 {clean_time}")
             else:
                 self._last_update.setText("🕒 --")
 
+            # Status badge
             self._status_badge.setText(str(device.status_name).upper())
             self._status_badge.setStyleSheet(
                 f"background-color: {device.status_color}; color: white; font-weight: 600; "
                 f"padding: 4px 12px; border-radius: 10px; font-size: 10px;"
             )
 
+            # Material info
             self._batch.setText(f"📦 {device.material_batch}")
             self._fed_time.setText(f"⏰ Fed: {device.feeding_time}")
 
-            # OEE with dynamic color
+            # OEE
             oee_val = float(device.oee) if device.oee else 0
             self._lbl_oee.setText(f"OEE: {oee_val:.1f}%")
             self._bar_oee.setValue(int(min(oee_val, 100)))
 
             if oee_val > 85:
-                bar_color = tokens.success
+                oee_bar_color = tokens.success
             elif oee_val > 60:
-                bar_color = tokens.warning
+                oee_bar_color = tokens.warning
             else:
-                bar_color = tokens.error
+                oee_bar_color = tokens.error
 
-            self._bar_oee.setStyleSheet(self._theme_service.get_progress_bar_style(bar_color))
+            self._bar_oee.setStyleSheet(self._theme_service.get_progress_bar_style(oee_bar_color))
 
-            # Yield
+            # ================================================================
+            # Availability - FIXED: Added total_time_seconds
+            # ================================================================
+            availability_val = float(device.availability) if hasattr(device, "availability") else 0.0
+            run_time_seconds = float(device.run_time_seconds) if hasattr(device, "run_time_seconds") else 0.0
+            total_time_seconds = float(device.total_time_seconds) if hasattr(device, "total_time_seconds") else 0.0
+
+            self._lbl_availability.setText(f"📊 Availability: {availability_val:.1f}%")
+            self._bar_availability.setValue(int(min(availability_val, 100)))
+
+            # Format run time and total time as HH:MM:SS
+            run_time_str = self._format_run_time(run_time_seconds)
+            total_time_str = self._format_run_time(total_time_seconds)
+            self._lbl_run_time.setText(f"⏱️ Run: {run_time_str} / Total: {total_time_str}")
+
+            # Color coding for availability bar
+            if availability_val > 80:
+                avail_bar_color = tokens.success
+            elif availability_val > 50:
+                avail_bar_color = tokens.warning
+            else:
+                avail_bar_color = tokens.error
+
+            self._bar_availability.setStyleSheet(self._theme_service.get_progress_bar_style(avail_bar_color))
+            # ================================================================
+
+            # Yield Rate
             yield_val = float(device.yield_rate) if device.yield_rate else 0
             self._lbl_yield.setText(f"Yield: {yield_val:.1f}%")
             self._bar_yield.setValue(int(min(yield_val, 100)))
             self._bar_yield.setStyleSheet(self._theme_service.get_progress_bar_style(tokens.accent))
 
+            # Details
             self._inputs.setText(f"📥 Inputs: {device.input_count:,}")
             self._outputs.setText(f"📦 Outputs: {device.output_count:,}")
             self._cycle.setText(f"⏱️ Cycle: {device.cycle_time}s")
 
+            # Error status
             if device.last_error:
                 self._error.setText(f"⚠️ {device.last_error}")
                 self._error.setStyleSheet(f"color: {tokens.error}; font-weight: 600;")
@@ -284,10 +371,11 @@ class RightPanelView:
                 self._error.setText("✅ Healthy")
                 self._error.setStyleSheet(f"color: {tokens.success};")
         else:
+            # Fallback to dict-based rendering
             self._render_device_info(device, device.get("device_id", "Unknown"))
 
     def _show_no_selection(self) -> None:
-        """Show no device selected state."""
+        """Show default state when no device is selected."""
         tokens = self._theme_service.tokens
 
         self._title.setText("SELECT DEVICE")
@@ -302,6 +390,12 @@ class RightPanelView:
         self._fed_time.setText("⏰ Fed: --")
         self._lbl_oee.setText("OEE: 0%")
         self._bar_oee.setValue(0)
+
+        # Availability
+        self._lbl_availability.setText("📊 Availability: 0%")
+        self._bar_availability.setValue(0)
+        self._lbl_run_time.setText("⏱️ Run: 00:00:00 / Total: 00:00:00")
+
         self._lbl_yield.setText("Yield: 0%")
         self._bar_yield.setValue(0)
         self._inputs.setText("📥 Inputs: 0")
@@ -311,7 +405,7 @@ class RightPanelView:
         self._error.setStyleSheet(f"color: {tokens.hint};")
 
     def _show_loading_device(self, device_id: str) -> None:
-        """Show loading state for selected device."""
+        """Show loading state for a device."""
         tokens = self._theme_service.tokens
 
         self._title.setText(device_id)
@@ -326,6 +420,12 @@ class RightPanelView:
         self._fed_time.setText("⏰ Fed: --")
         self._lbl_oee.setText("OEE: --%")
         self._bar_oee.setValue(0)
+
+        # Availability
+        self._lbl_availability.setText("📊 Availability: --%")
+        self._bar_availability.setValue(0)
+        self._lbl_run_time.setText("⏱️ Run: --:--:-- / Total: --:--:--")
+
         self._lbl_yield.setText("Yield: --%")
         self._bar_yield.setValue(0)
         self._inputs.setText("📥 Inputs: --")
@@ -357,6 +457,11 @@ class RightPanelView:
         cycle_time = get_val("cycle_time") or 0
         last_error = get_val("last_error")
 
+        # Availability
+        availability = get_val("availability") or 0
+        run_time_seconds = get_val("run_time_seconds") or 0
+        total_time_seconds = get_val("total_time_seconds") or 0
+
         self._title.setText(str(display_name))
         self._desc.setText(str(description) if description else "")
         self._desc.setVisible(bool(description))
@@ -375,6 +480,7 @@ class RightPanelView:
         self._batch.setText(f"📦 {material_batch}")
         self._fed_time.setText(f"⏰ Fed: {feeding_time}")
 
+        # OEE
         oee_val = float(oee) if oee else 0
         self._lbl_oee.setText(f"OEE: {oee_val:.1f}%")
         self._bar_oee.setValue(int(min(oee_val, 100)))
@@ -388,6 +494,28 @@ class RightPanelView:
 
         self._bar_oee.setStyleSheet(self._theme_service.get_progress_bar_style(bar_color))
 
+        # Availability
+        availability_val = float(availability) if availability else 0
+        run_time_val = float(run_time_seconds) if run_time_seconds else 0
+        total_time_val = float(total_time_seconds) if total_time_seconds else 0
+
+        self._lbl_availability.setText(f"📊 Availability: {availability_val:.1f}%")
+        self._bar_availability.setValue(int(min(availability_val, 100)))
+
+        run_time_str = self._format_run_time(run_time_val)
+        total_time_str = self._format_run_time(total_time_val)
+        self._lbl_run_time.setText(f"⏱️ Run: {run_time_str} / Total: {total_time_str}")
+
+        if availability_val > 80:
+            avail_bar_color = tokens.success
+        elif availability_val > 50:
+            avail_bar_color = tokens.warning
+        else:
+            avail_bar_color = tokens.error
+
+        self._bar_availability.setStyleSheet(self._theme_service.get_progress_bar_style(avail_bar_color))
+
+        # Yield
         yield_val = float(yield_rate) if yield_rate else 0
         self._lbl_yield.setText(f"Yield: {yield_val:.1f}%")
         self._bar_yield.setValue(int(min(yield_val, 100)))

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..entities.device import Device
@@ -94,6 +95,34 @@ class DeviceRepository(ABC):
     @abstractmethod
     async def count(self) -> int:
         """Count total devices."""
+        pass
+
+    # --- Availability Calculation ---
+
+    @abstractmethod
+    async def get_today_run_time(self, code: str) -> float:
+        """
+        Get total RUN time (in seconds) for a device from 00:00 today until now.
+
+        Args:
+            code: Equipment code (uppercase)
+
+        Returns:
+            Total seconds the device was in RUNNING status today
+        """
+        pass
+
+    @abstractmethod
+    async def get_today_run_time_bulk(self, codes: List[str]) -> Dict[str, float]:
+        """
+        Get total RUN time for multiple devices in a single query.
+
+        Args:
+            codes: List of equipment codes
+
+        Returns:
+            Dictionary mapping equipment code to run time in seconds
+        """
         pass
 
 

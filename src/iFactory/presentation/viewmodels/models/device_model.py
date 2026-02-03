@@ -1,3 +1,4 @@
+# File: presentation/viewmodels/models/device_model.py
 """
 Device Data Models.
 
@@ -39,6 +40,11 @@ class DeviceDisplayModel:
     feeding_time: str = "--"
     last_error: Optional[str] = None
 
+    # Availability Data - NEW
+    availability: float = 0.0  # Percentage (0-100)
+    run_time_seconds: float = 0.0  # Total RUN time today
+    total_time_seconds: float = 0.0  # Total time from 00:00 to now
+
     @property
     def id(self) -> str:
         return self.device_id
@@ -54,6 +60,20 @@ class DeviceDisplayModel:
     @property
     def formatted_cycle_time(self) -> str:
         return f"{self.cycle_time:.2f}s"
+
+    @property
+    def formatted_availability(self) -> str:
+        """Format availability as percentage string."""
+        return f"{self.availability:.1f}%"
+
+    @property
+    def formatted_run_time(self) -> str:
+        """Format run time as HH:MM:SS."""
+        total_seconds = int(self.run_time_seconds)
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     @staticmethod
     def empty(device_id: str) -> "DeviceDisplayModel":
@@ -94,6 +114,10 @@ class DeviceDisplayModel:
             "feeding_time": self.feeding_time,
             "last_error": self.last_error,
             "equip_name": self.display_name,
+            # Availability fields - NEW
+            "availability": self.availability,
+            "run_time_seconds": self.run_time_seconds,
+            "total_time_seconds": self.total_time_seconds,
         }
 
 

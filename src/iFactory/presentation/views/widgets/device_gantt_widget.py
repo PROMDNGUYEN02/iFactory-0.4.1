@@ -2,24 +2,17 @@
 """
 Device Gantt Widget - Optimized for 50px height.
 
-Layout (50px total):
-┌────────┬──────────────────────────────────────────────────┐
-│ DEVICE │ ████████DATA████████░░░░FUTURE░░░░│              │
-│  CODE  │ 0      6      12      18    ▼     24             │
-└────────┴──────────────────────────────────────────────────┘
-
-Features:
-1. Device label on the left (50px width)
-2. Gantt bar with status colors
-3. Hour markers (0, 6, 12, 18, 24)
-4. Future zone with diagonal stripes
-5. Current time indicator (red triangle)
+OPTIMIZED:
+1. Skip redundant renders using render_id
+2. Lazy theme updates
+3. Cached color lookups
+4. Efficient segment precomputation
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, QRectF, Signal, QTimer, Slot, QPointF
@@ -60,13 +53,11 @@ WIDGET_PADDING = 2
 DEVICE_LABEL_WIDTH = 50
 LABEL_SPACING = 4
 
-# Internal view layout
 BAR_TOP = 2
 BAR_HEIGHT = 26
 RULER_GAP = 1
 RULER_HEIGHT = 12
 
-# Hour marker settings
 TICK_HEIGHT_MAJOR = 4
 TICK_HEIGHT_MINOR = 2
 FONT_SIZE_HOUR = 8
@@ -134,7 +125,6 @@ class GanttSegmentItem(QGraphicsRectItem):
         if GanttSegmentItem._colors is None:
             GanttSegmentItem._colors = get_color_registry()
 
-        # Apply gradient fill
         start_color, end_color = self._colors.get_status_gradient_colors(status_code)
         gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
         gradient.setColorAt(0, start_color)
@@ -180,16 +170,14 @@ class DeviceGanttDisplayWidget(QWidget):
     """
     Compact Gantt chart widget - 50px height.
 
-    Layout:
-    ┌────────┬──────────────────────────────────────────────────┐
-    │ DEVICE │ ████████DATA████████░░░░FUTURE░░░░│              │
-    │  CODE  │ 0      6      12      18    ▼     24             │
-    └────────┴──────────────────────────────────────────────────┘
+    OPTIMIZED:
+    1. Skip redundant renders using render_id
+    2. Lazy theme updates (no double render)
+    3. Cached color lookups
     """
 
     device_clicked = Signal(str)
 
-    # Loading animation
     LOADING_FPS = 10
     LOADING_INTERVAL_MS = 1000 // LOADING_FPS
 
@@ -212,10 +200,10 @@ class DeviceGanttDisplayWidget(QWidget):
         self._device_code: Optional[str] = None
         self._device_name: str = ""
         self._precomputed_segments: List[PrecomputedGanttSegment] = []
-        self._start_time: Optional[datetime] = None  # 00:00 today
-        self._end_time: Optional[datetime] = None  # 24:00 today
-        self._current_time: Optional[datetime] = None  # Now
-        self._total_seconds: float = 86400  # 24 hours
+        self._start_time: Optional[datetime] = None
+        self._end_time: Optional[datetime] = None
+        self._current_time: Optional[datetime] = None
+        self._total_seconds: float = 86400
 
         # UI state
         self._is_loading: bool = False
@@ -223,6 +211,7 @@ class DeviceGanttDisplayWidget(QWidget):
         self._loading_timer: Optional[QTimer] = None
         self._is_visible: bool = True
         self._last_render_id: str = ""
+        self._current_theme: str = theme_service.current_theme
 
         self._setup_ui()
         self._theme_service.themeChanged.connect(self._on_theme_changed)
@@ -232,21 +221,18 @@ class DeviceGanttDisplayWidget(QWidget):
         return self._theme_service.tokens
 
     def _setup_ui(self) -> None:
-        """Setup compact layout for 50px height."""
         self.setFixedHeight(WIDGET_HEIGHT)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(WIDGET_PADDING, WIDGET_PADDING, WIDGET_PADDING, WIDGET_PADDING)
         layout.setSpacing(LABEL_SPACING)
 
-        # Device label (left)
         self._device_label = QLabel("--")
         self._device_label.setFixedSize(DEVICE_LABEL_WIDTH, WIDGET_HEIGHT - WIDGET_PADDING * 2)
         self._device_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._device_label.setObjectName("gantt_device_label")
         layout.addWidget(self._device_label)
 
-        # Gantt chart view (right)
         view_height = WIDGET_HEIGHT - WIDGET_PADDING * 2
 
         self._scene = QGraphicsScene(self)
@@ -265,8 +251,15 @@ class DeviceGanttDisplayWidget(QWidget):
 
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
+        """Handle theme change - OPTIMIZED."""
+        if theme == self._current_theme:
+            return  # No change
+
+        self._current_theme = theme
         self._apply_theme()
-        if self._device_code:
+
+        # Only re-render if we have data
+        if self._device_code and self._precomputed_segments:
             self._render_timeline()
 
     def _apply_theme(self) -> None:
@@ -296,11 +289,11 @@ class DeviceGanttDisplayWidget(QWidget):
         )
 
     def set_theme(self, is_dark: bool) -> None:
-        """Compatibility method."""
+        """Compatibility method - now a no-op to prevent double rendering."""
+        # Theme is already handled by themeChanged signal
         pass
 
     def _update_label_style(self, bg_color: str) -> None:
-        """Update device label with specific background color."""
         tokens = self.tokens
         self._device_label.setStyleSheet(
             f"""
@@ -316,7 +309,6 @@ class DeviceGanttDisplayWidget(QWidget):
         )
 
     def show_placeholder(self) -> None:
-        """Show empty placeholder state."""
         self._stop_loading_animation()
         self._device_code = None
         self._device_label.setText("--")
@@ -332,7 +324,6 @@ class DeviceGanttDisplayWidget(QWidget):
 
         self._scene.setSceneRect(0, 0, view_width, view_height)
 
-        # Placeholder text
         text_color = self._colors.get_color(self.tokens.text_muted)
         font = self._colors.get_font(self.tokens.font_family, 10)
         text = self._scene.addSimpleText("← Select a device", font)
@@ -349,28 +340,18 @@ class DeviceGanttDisplayWidget(QWidget):
         end_time: datetime,
         current_time: Optional[datetime] = None,
     ) -> None:
-        """
-        Render Gantt chart for a device.
-
-        Args:
-            device_code: Equipment code (e.g., "CWD01")
-            device_name: Display name
-            segments: Status segments (historical data only, 00:00 to now)
-            start_time: 00:00 of current day
-            end_time: 24:00 of current day
-            current_time: Current time (for future zone rendering)
-        """
+        """Render Gantt chart - OPTIMIZED with render_id check."""
         segment_count = len(segments) if segments else 0
         is_loading = "(Loading...)" in device_name
 
-        render_id = f"{device_code}:{segment_count}:{'L' if is_loading else 'D'}"
+        # Create render ID to skip duplicate renders
+        render_id = f"{device_code}:{segment_count}:{'L' if is_loading else 'D'}:{self._current_theme}"
         if not is_loading and render_id == self._last_render_id:
-            return
+            return  # Skip duplicate render
 
         if not is_loading:
-            logger.info(f"[GanttWidget] render: {device_code}, {segment_count} segments")
+            logger.debug(f"[GanttWidget] render: {device_code}, {segment_count} segments")
 
-        # Update state
         self._last_render_id = render_id
         self._device_code = device_code
         self._device_name = device_name
@@ -380,15 +361,12 @@ class DeviceGanttDisplayWidget(QWidget):
         self._total_seconds = (end_time - start_time).total_seconds()
         self._is_loading = is_loading
 
-        # Update device label
         label_text = device_code[:6] if len(device_code) > 6 else device_code
         self._device_label.setText(label_text)
 
-        # Color label based on current status
         current_color = self._get_current_status_color(segments)
         self._update_label_style(current_color)
 
-        # Precompute segments
         self._precompute_segments(segments or [])
 
         if self._is_loading and not self._precomputed_segments:
@@ -398,7 +376,6 @@ class DeviceGanttDisplayWidget(QWidget):
             self._render_timeline()
 
     def _get_current_status_color(self, segments: List[Dict[str, Any]]) -> str:
-        """Get color for the most recent status."""
         if not segments:
             return self.tokens.text_muted
 
@@ -408,11 +385,9 @@ class DeviceGanttDisplayWidget(QWidget):
             if end_time and end_time >= now:
                 return Status.get_color(int(seg.get("status_code", 0)))
 
-        # Default to last segment's color
         return Status.get_color(int(segments[-1].get("status_code", 0)))
 
     def _precompute_segments(self, segments: List[Dict[str, Any]]) -> None:
-        """Pre-compute segment geometry for rendering."""
         self._precomputed_segments.clear()
 
         if not segments or not self._start_time:
@@ -429,7 +404,6 @@ class DeviceGanttDisplayWidget(QWidget):
             if not start or not end:
                 continue
 
-            # Parse datetime if string
             if isinstance(start, str):
                 try:
                     start = datetime.fromisoformat(start.replace("Z", ""))
@@ -441,14 +415,12 @@ class DeviceGanttDisplayWidget(QWidget):
                 except:
                     continue
 
-            # Clip to valid range (start_time to current_time)
             clipped_start = max(start, self._start_time)
             clipped_end = min(end, clip_end)
 
             if clipped_start >= clipped_end:
                 continue
 
-            # Calculate geometry
             start_offset = (clipped_start - self._start_time).total_seconds()
             duration = (clipped_end - clipped_start).total_seconds()
 
@@ -471,7 +443,6 @@ class DeviceGanttDisplayWidget(QWidget):
             )
 
     def _render_timeline(self) -> None:
-        """Render the complete timeline."""
         self._scene.clear()
 
         if not self._device_code or not self._start_time:
@@ -486,20 +457,16 @@ class DeviceGanttDisplayWidget(QWidget):
 
         tokens = self.tokens
 
-        # Background
         bg = self._colors.get_color(tokens.surface_card)
         self._scene.addRect(QRectF(0, 0, view_width, view_height), QPen(Qt.PenStyle.NoPen), QBrush(bg))
 
-        # Calculate positions based on actual viewport
         bar_y = BAR_TOP
         bar_h = BAR_HEIGHT
         ruler_y = bar_y + bar_h + RULER_GAP
 
-        # 1. Track background
         track_color = self._colors.get_color(tokens.interactive_hover)
         self._scene.addRect(QRectF(0, bar_y, view_width, bar_h), QPen(Qt.PenStyle.NoPen), QBrush(track_color))
 
-        # 2. Segments
         if self._precomputed_segments:
             for seg in self._precomputed_segments:
                 if 0 <= seg.x <= view_width:
@@ -509,17 +476,11 @@ class DeviceGanttDisplayWidget(QWidget):
         elif self._is_loading:
             self._render_loading_bar(view_width, bar_h, bar_y)
 
-        # 3. Future zone (now to 24:00)
         self._render_future_zone(view_width, bar_h, bar_y)
-
-        # 4. Hour markers with labels
         self._render_hour_markers(view_width, ruler_y)
-
-        # 5. Current time indicator
         self._render_now_indicator(view_width, bar_y, bar_h)
 
     def _render_future_zone(self, view_width: float, bar_h: float, bar_y: float) -> None:
-        """Render future zone with diagonal stripes."""
         if not self._current_time or not self._start_time:
             return
 
@@ -537,7 +498,6 @@ class DeviceGanttDisplayWidget(QWidget):
         self._scene.addRect(QRectF(future_x, bar_y, future_w, bar_h), QPen(Qt.PenStyle.NoPen), stripe_brush)
 
     def _render_hour_markers(self, view_width: float, ruler_y: float) -> None:
-        """Render hour markers with varying tick heights and selective labels."""
         if not self._start_time:
             return
 
@@ -546,25 +506,19 @@ class DeviceGanttDisplayWidget(QWidget):
         text_color = self._colors.get_color(tokens.text_primary)
         font = self._colors.get_font("Consolas", FONT_SIZE_HOUR)
 
-        # Hours that show labels: 0, 6, 12, 18, 24
         label_hours = {0, 6, 12, 18, 24}
-        # Hours with long ticks: 0, 3, 6, 9, 12, 15, 18, 21, 24
         major_tick_hours = {0, 3, 6, 9, 12, 15, 18, 21, 24}
 
-        for hour in range(25):  # 0 to 24 inclusive
-            # Calculate x position
+        for hour in range(25):
             x = (hour * 3600 / self._total_seconds) * view_width
 
-            # Determine tick height
             if hour in major_tick_hours:
                 tick_height = TICK_HEIGHT_MAJOR
             else:
                 tick_height = TICK_HEIGHT_MINOR
 
-            # Draw tick
             self._scene.addLine(x, ruler_y, x, ruler_y + tick_height, tick_pen)
 
-            # Draw label only for 0, 6, 12, 18, 24
             if hour in label_hours:
                 label = str(hour)
                 text_item = self._scene.addSimpleText(label, font)
@@ -573,7 +527,6 @@ class DeviceGanttDisplayWidget(QWidget):
                 text_rect = text_item.boundingRect()
                 text_w = text_rect.width()
 
-                # Position label centered, clamped to bounds
                 label_x = x - text_w / 2
                 if hour == 0:
                     label_x = max(1, label_x)
@@ -583,7 +536,6 @@ class DeviceGanttDisplayWidget(QWidget):
                 text_item.setPos(label_x, ruler_y + TICK_HEIGHT_MAJOR + 1)
 
     def _render_now_indicator(self, view_width: float, bar_y: float, bar_h: float) -> None:
-        """Render current time indicator (red line with triangle)."""
         if not self._current_time or not self._start_time or not self._end_time:
             return
 
@@ -595,10 +547,8 @@ class DeviceGanttDisplayWidget(QWidget):
 
         error_color = self._colors.get_color(self.tokens.error)
 
-        # Vertical line
         self._scene.addLine(x, bar_y, x, bar_y + bar_h, QPen(error_color, 2))
 
-        # Triangle at bottom pointing up
         triangle = QPolygonF(
             [
                 QPointF(x - 4, bar_y + bar_h),
@@ -610,7 +560,6 @@ class DeviceGanttDisplayWidget(QWidget):
         tri.setToolTip(f"Now: {self._current_time.strftime('%H:%M')}")
 
     def _render_loading_bar(self, view_width: float, bar_h: float, bar_y: float) -> None:
-        """Loading shimmer animation."""
         tokens = self.tokens
         gradient = QLinearGradient(0, 0, view_width, 0)
 
@@ -672,7 +621,6 @@ class DeviceGanttDisplayWidget(QWidget):
             self.show_placeholder()
 
     def _recompute_geometry(self) -> None:
-        """Recompute segment positions on resize."""
         if not self._total_seconds or not self._precomputed_segments:
             return
 

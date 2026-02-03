@@ -1,4 +1,4 @@
-# src/iFactory/infrastructure/persistence/sqlalchemy/repositories/device_repository.py
+# File: infrastructure/persistence/sqlalchemy/repositories/device_repository.py
 """
 Device Repository - Compatible with original interface.
 
@@ -8,19 +8,21 @@ Uses simple return types (Optional, Sequence) to match DeviceRepository ABC.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple, TypeVar
 
-from sqlalchemy import select, delete, func, update
+from sqlalchemy import select, delete, func, update, and_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iFactory.domain.entities.device import Device
+from iFactory.domain.enums.machine_status import MachineStatus
 from iFactory.domain.repositories.device_repository import DeviceRepository
 from iFactory.domain.value_objects.equipment_code import EquipmentCode
 from iFactory.domain.value_objects.material_input import MaterialInput
 from iFactory.infrastructure.persistence.sqlalchemy.models import (
     DeviceModel,
     LatestMaterialInputModel,
+    StatusHistoryModel,
 )
 from iFactory.infrastructure.persistence.sqlalchemy.mapper import SQLAlchemyMapper
 
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 DEFAULT_BATCH_SIZE = 100
+
+# Status code for RUNNING
+RUNNING_STATUS = MachineStatus.RUNNING.value  # = 1
 
 
 def _chunked(items: List[T], size: int) -> Iterator[List[T]]:
@@ -244,6 +249,132 @@ class SqlAlchemyDeviceRepository(DeviceRepository):
     def get_stats(self) -> Dict[str, int]:
         """Get repository statistics."""
         return self._stats.copy()
+
+    # ========================================================================
+    # Availability Calculation - NEW
+    # ========================================================================
+
+    async def get_today_run_time(self, code: str) -> float:
+        """
+        Get total RUN time (in seconds) for a device from 00:00 today until now.
+
+        Calculates by summing durations of all RUNNING status periods today.
+        Handles ongoing periods (end_time is NULL) by using current time.
+
+        Args:
+            code: Equipment code (will be uppercased)
+
+        Returns:
+            Total seconds the device was in RUNNING status today
+        """
+        try:
+            self._stats["queries"] += 1
+
+            now = datetime.now()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Query all RUNNING periods that overlap with today
+            # A period overlaps if: start_time < now AND (end_time > today_start OR end_time IS NULL)
+            stmt = select(
+                StatusHistoryModel.start_time,
+                StatusHistoryModel.end_time,
+            ).where(
+                and_(
+                    StatusHistoryModel.equip_code == code.upper(),
+                    StatusHistoryModel.equip_status == RUNNING_STATUS,
+                    StatusHistoryModel.start_time < now,
+                    # Period must extend into today
+                    ((StatusHistoryModel.end_time > today_start) | (StatusHistoryModel.end_time.is_(None))),
+                )
+            )
+
+            result = await self._session.execute(stmt)
+            rows = result.all()
+
+            total_seconds = 0.0
+
+            for start_time, end_time in rows:
+                # Clamp start to today_start (ignore time before midnight)
+                effective_start = max(start_time, today_start)
+
+                # Use current time if period is ongoing
+                effective_end = end_time if end_time else now
+
+                # Clamp end to now (don't count future time)
+                effective_end = min(effective_end, now)
+
+                # Calculate duration
+                if effective_end > effective_start:
+                    duration = (effective_end - effective_start).total_seconds()
+                    total_seconds += duration
+
+            logger.debug(f"[Availability] {code}: {total_seconds:.1f}s RUN time today")
+            return total_seconds
+
+        except Exception as e:
+            logger.error(f"Error calculating run time for {code}: {e}")
+            return 0.0
+
+    async def get_today_run_time_bulk(self, codes: List[str]) -> Dict[str, float]:
+        """
+        Get total RUN time for multiple devices in a single optimized query.
+
+        Args:
+            codes: List of equipment codes
+
+        Returns:
+            Dictionary mapping equipment code to run time in seconds
+        """
+        if not codes:
+            return {}
+
+        try:
+            self._stats["queries"] += 1
+
+            now = datetime.now()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            upper_codes = [c.upper() for c in codes]
+
+            # Query all RUNNING periods for all devices today
+            stmt = (
+                select(
+                    StatusHistoryModel.equip_code,
+                    StatusHistoryModel.start_time,
+                    StatusHistoryModel.end_time,
+                )
+                .where(
+                    and_(
+                        StatusHistoryModel.equip_code.in_(upper_codes),
+                        StatusHistoryModel.equip_status == RUNNING_STATUS,
+                        StatusHistoryModel.start_time < now,
+                        ((StatusHistoryModel.end_time > today_start) | (StatusHistoryModel.end_time.is_(None))),
+                    )
+                )
+                .order_by(StatusHistoryModel.equip_code)
+            )
+
+            result = await self._session.execute(stmt)
+            rows = result.all()
+
+            # Initialize all codes with 0
+            run_times: Dict[str, float] = {code.upper(): 0.0 for code in codes}
+
+            for equip_code, start_time, end_time in rows:
+                # Clamp times
+                effective_start = max(start_time, today_start)
+                effective_end = min(end_time if end_time else now, now)
+
+                if effective_end > effective_start:
+                    duration = (effective_end - effective_start).total_seconds()
+                    run_times[equip_code.upper()] += duration
+
+            logger.debug(f"[Availability] Bulk calculated run times for {len(codes)} devices")
+            return run_times
+
+        except Exception as e:
+            logger.error(f"Error calculating bulk run times: {e}")
+            # Return zeros for all codes on error
+            return {code.upper(): 0.0 for code in codes}
 
 
 __all__ = ["SqlAlchemyDeviceRepository"]

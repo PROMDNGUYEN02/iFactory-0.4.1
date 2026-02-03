@@ -2,7 +2,11 @@
 """
 Main Window - MVVM Architecture.
 
-FIXED: Render devices to BOTH canvases.
+OPTIMIZED:
+1. Batch theme updates
+2. Remove unpolish/polish (causes full widget tree traversal)
+3. Defer heavy canvas updates
+4. Single stylesheet application
 """
 
 from __future__ import annotations
@@ -48,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
-    """Main application window."""
+    """Main application window - OPTIMIZED."""
 
     def __init__(
         self,
@@ -71,6 +75,7 @@ class MainWindow(QMainWindow):
 
         self._prev_state: Dict[str, Any] = {}
         self._components_ready = False
+        self._is_applying_theme = False  # Prevent recursive theme updates
 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
@@ -83,17 +88,24 @@ class MainWindow(QMainWindow):
 
         self._setup_shortcuts()
         self._bind_viewmodels()
-        self._apply_theme(self._theme_service.current_theme)
+        self._apply_theme_initial()
         self._store.state_changed.connect(self._on_state_changed)
 
-        logger.info("[MainWindow] Initialized with MVVM and ThemeService")
+        logger.info("[MainWindow] Initialized with MVVM and ThemeService (OPTIMIZED)")
+
+    def _apply_theme_initial(self) -> None:
+        """Apply initial theme without triggering signals."""
+        stylesheet = self._theme_service.get_stylesheet()
+        if stylesheet:
+            self.setStyleSheet(stylesheet)
+        self._apply_page_theme()
 
     def _get_current_page(self) -> str:
         return self._shell_vm.current_page
 
     def _is_electrode_page(self) -> bool:
         page = self._get_current_page()
-        return "electrode" in page or "electrode" in page
+        return "electrode" in page
 
     def _is_assembly_page(self) -> bool:
         return "assembly" in self._get_current_page()
@@ -121,7 +133,7 @@ class MainWindow(QMainWindow):
 
     def _close_panel_only(self) -> None:
         self._shell_vm.close_right_panel()
-        logger.info("[MainWindow] Panel closed (device still selected)")
+        logger.debug("[MainWindow] Panel closed (device still selected)")
 
     def _bind_viewmodels(self) -> None:
         self._device_vm.devicesChanged.connect(self._on_devices_updated)
@@ -154,7 +166,6 @@ class MainWindow(QMainWindow):
             else:
                 devices_dict[code] = device
 
-        # FIXED: Render to BOTH canvases - each filters its own devices
         self.canvas_electrode.render_state(devices_dict, is_dark)
         self.canvas_assembly.render_state(devices_dict, is_dark)
 
@@ -193,7 +204,7 @@ class MainWindow(QMainWindow):
         if not self._components_ready:
             return
 
-        logger.info(f"[MainWindow] Chart ready: {chart.device_code}")
+        logger.debug(f"[MainWindow] Chart ready: {chart.device_code}")
 
         segments = [
             {
@@ -206,7 +217,6 @@ class MainWindow(QMainWindow):
             for seg in chart.segments
         ]
 
-        # Pass current_time for future zone rendering
         current_time = chart.current_time or datetime.now()
 
         if self._is_electrode_page():
@@ -216,7 +226,7 @@ class MainWindow(QMainWindow):
                 segments=segments,
                 start_time=chart.start_time,
                 end_time=chart.end_time,
-                current_time=current_time,  # NEW
+                current_time=current_time,
             )
             self.legend_electrode.render_stats({chart.device_code: segments}, chart.start_time, chart.end_time)
 
@@ -227,7 +237,7 @@ class MainWindow(QMainWindow):
                 segments=segments,
                 start_time=chart.start_time,
                 end_time=chart.end_time,
-                current_time=current_time,  # NEW
+                current_time=current_time,
             )
             self.legend_assembly.render_stats({chart.device_code: segments}, chart.start_time, chart.end_time)
 
@@ -258,7 +268,60 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
-        self._apply_theme(theme)
+        """Handle theme change - OPTIMIZED batch update."""
+        if self._is_applying_theme:
+            return  # Prevent recursive calls
+
+        self._is_applying_theme = True
+        try:
+            self._apply_theme_optimized(theme)
+        finally:
+            self._is_applying_theme = False
+
+    def _apply_theme_optimized(self, theme: str) -> None:
+        """
+        Apply theme with minimal repaints.
+
+        OPTIMIZATIONS:
+        1. Single setStyleSheet call
+        2. NO unpolish/polish (causes full widget tree traversal)
+        3. Defer heavy updates to next event loop tick
+        """
+        logger.debug(f"[MainWindow] Applying theme: {theme}")
+
+        # Get cached stylesheet (ThemeService handles caching)
+        stylesheet = self._theme_service.get_stylesheet()
+
+        if stylesheet:
+            # Single stylesheet application
+            self.setStyleSheet(stylesheet)
+            # NOTE: Removed style().unpolish() and style().polish()
+            # These are expensive and Qt handles style updates automatically
+
+        # Defer page-specific styles to avoid blocking
+        QTimer.singleShot(0, self._apply_page_theme)
+
+        # Defer canvas updates (heavy operations)
+        if self._components_ready:
+            QTimer.singleShot(16, self._update_canvas_themes_deferred)  # ~1 frame delay
+
+    def _update_canvas_themes_deferred(self) -> None:
+        """Update canvas themes in deferred manner."""
+        if not self._components_ready:
+            return
+
+        is_dark = self._theme_service.is_dark
+
+        # Update gantt widgets (lightweight)
+        self.device_gantt_electrode.set_theme(is_dark)
+        self.device_gantt_assembly.set_theme(is_dark)
+
+        # Canvas updates only if they have data
+        devices = self._device_vm.devices
+        if devices:
+            devices_dict = {k: v.to_dict() if hasattr(v, "to_dict") else v for k, v in devices.items()}
+            self.canvas_electrode.render_state(devices_dict, is_dark)
+            self.canvas_assembly.render_state(devices_dict, is_dark)
 
     @Slot(str)
     def _on_page_changed(self, page: str) -> None:
@@ -283,14 +346,14 @@ class MainWindow(QMainWindow):
     def _on_right_panel_changed(self, expanded: bool) -> None:
         width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
         self.ui.right_slide_menu_frame.setFixedWidth(width)
-        logger.info(f"[MainWindow] Right panel changed: expanded={expanded}, width={width}")
+        logger.debug(f"[MainWindow] Right panel changed: expanded={expanded}, width={width}")
 
     def _on_device_single_clicked(self, device_id: str) -> None:
-        logger.info(f"[MainWindow] Device single clicked: {device_id}")
+        logger.debug(f"[MainWindow] Device single clicked: {device_id}")
         self._device_vm.select_device(device_id, open_panel=False)
 
     def _on_device_double_clicked(self, device_id: str) -> None:
-        logger.info(f"[MainWindow] Device double clicked: {device_id}")
+        logger.debug(f"[MainWindow] Device double clicked: {device_id}")
         self._device_vm.select_device(device_id, open_panel=True)
 
     def _setup_shortcuts(self) -> None:
@@ -310,8 +373,6 @@ class MainWindow(QMainWindow):
         self.ui.title_frame.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
 
         if hasattr(self.ui, "electrode_page"):
-            self.ui.stackedWidget.setCurrentWidget(self.ui.electrode_page)
-        elif hasattr(self.ui, "electrode_page"):
             self.ui.stackedWidget.setCurrentWidget(self.ui.electrode_page)
 
     def _init_shell(self) -> None:
@@ -427,31 +488,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(widget)
         return widget
 
-    def _apply_theme(self, theme: str) -> None:
-        self._theme_service.set_theme(theme)
-
-        stylesheet = self._theme_service.get_stylesheet()
-        if stylesheet:
-            self.setStyleSheet(stylesheet)
-            self.style().unpolish(self)
-            self.style().polish(self)
-
-        self._apply_page_theme()
-
-        if self._components_ready:
-            is_dark = self._theme_service.is_dark
-            self.device_gantt_electrode.set_theme(is_dark)
-            self.device_gantt_assembly.set_theme(is_dark)
-
     def _apply_page_theme(self) -> None:
+        """Apply page-specific theme - OPTIMIZED with batch operations."""
         tokens = self._theme_service.tokens
 
+        # Pre-compute all style strings
         page_style = f"background-color: {tokens.surface_app};"
-        for page_name in ["electrode_page", "assembly_page"]:
-            page = getattr(self.ui, page_name, None)
-            if page:
-                page.setStyleSheet(page_style)
-
         top_frame_style = f"""
             QFrame {{
                 background-color: {tokens.surface_card};
@@ -459,11 +501,6 @@ class MainWindow(QMainWindow):
                 border-bottom: 1px solid {tokens.border_default};
             }}
         """
-        for frame_name in ["electrode_top_frame", "assembly_top_frame"]:
-            frame = getattr(self.ui, frame_name, None)
-            if frame:
-                frame.setStyleSheet(top_frame_style)
-
         bottom_frame_style = f"""
             QFrame {{
                 background-color: {tokens.surface_card};
@@ -471,6 +508,18 @@ class MainWindow(QMainWindow):
                 border-top: 1px solid {tokens.border_default};
             }}
         """
+
+        # Apply in batch
+        for page_name in ["electrode_page", "assembly_page"]:
+            page = getattr(self.ui, page_name, None)
+            if page:
+                page.setStyleSheet(page_style)
+
+        for frame_name in ["electrode_top_frame", "assembly_top_frame"]:
+            frame = getattr(self.ui, frame_name, None)
+            if frame:
+                frame.setStyleSheet(top_frame_style)
+
         for frame_name in ["electrode_bottom_frame", "assembly_bottom_frame"]:
             frame = getattr(self.ui, frame_name, None)
             if frame:
