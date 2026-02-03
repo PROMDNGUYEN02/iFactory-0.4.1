@@ -1,8 +1,8 @@
-# File: shared/di/application_runner.py
+# src/iFactory/shared/di/application_runner.py
 """
-Application Runner - Fixed event loop handling.
+Application Runner - Compatible with dependency-injector based AppContainer.
 
-FIXED: Proper cleanup ordering with event loop.
+Handles Qt event loop integration with async initialization and cleanup.
 """
 
 from __future__ import annotations
@@ -26,9 +26,20 @@ _CLEANUP_TIMEOUT = 5.0
 
 
 class ApplicationRunner:
-    """Runs the Qt application with MVVM architecture."""
+    """
+    Runs the Qt application with MVVM architecture.
 
-    __slots__ = ("qt_app", "container", "_ui_container", "main_window", "_loop", "_cleanup_done")
+    Compatible with both old-style AppContainer and new dependency-injector based container.
+    """
+
+    __slots__ = (
+        "qt_app",
+        "container",
+        "_ui_container",
+        "main_window",
+        "_loop",
+        "_cleanup_done",
+    )
 
     def __init__(self, qt_app: QApplication) -> None:
         self.qt_app = qt_app
@@ -39,19 +50,23 @@ class ApplicationRunner:
         self._cleanup_done = False
 
     def run(self) -> int:
+        """Main entry point - runs the application."""
         try:
             self._loop = qasync.QEventLoop(self.qt_app)
             asyncio.set_event_loop(self._loop)
 
             with self._loop:
+                # Initialize
                 self._loop.run_until_complete(self._initialize())
 
                 if not self.main_window:
                     logger.error("No main window created!")
                     return 1
 
+                # Show window
                 self._show_window()
 
+                # Start deferred data loading
                 if self._ui_container:
                     self._ui_container.schedule_deferred_data_load()
 
@@ -61,7 +76,7 @@ class ApplicationRunner:
                 # Cleanup while loop is still valid
                 self._do_cleanup()
 
-                return exit_code
+                return exit_code if isinstance(exit_code, int) else 0
 
         except Exception as e:
             logger.exception(f"Application run failed: {e}")
@@ -72,23 +87,28 @@ class ApplicationRunner:
                 self._sync_cleanup()
 
     async def _initialize(self) -> None:
+        """Async initialization of all components."""
         try:
+            # Create and initialize container
             self.container = AppContainer()
             await self.container.initialize()
             logger.info("AppContainer initialized")
 
-            if hasattr(self.container, "get_ui_container"):
-                self._ui_container = self.container.get_ui_container()
+            # Get UI container
+            self._ui_container = self.container.get_ui_container()
 
             if not self._ui_container:
+                # Fallback: create UI container manually
                 logger.info("[ApplicationRunner] Creating UIContainer manually")
                 from iFactory.presentation.di.container import UIContainer
 
                 self._ui_container = UIContainer(self.container)
                 self._ui_container.initialize()
 
+            # Get main window
             self.main_window = self._ui_container.get_main_window()
 
+            # Run async initialization if available
             if hasattr(self._ui_container, "initialize_async"):
                 await self._ui_container.initialize_async()
 
@@ -99,6 +119,7 @@ class ApplicationRunner:
             raise
 
     def _show_window(self) -> None:
+        """Show the main window."""
         if self.main_window:
             self.main_window.show()
             self.qt_app.processEvents()
@@ -158,29 +179,17 @@ class ApplicationRunner:
 
     async def _async_cleanup(self) -> None:
         """Async cleanup for database connections."""
-        # Dispose MSSQL adapter
+        # Dispose container (handles all internal cleanup)
         if self.container:
-            remote_source = getattr(self.container, "remote_source", None)
-            if remote_source and hasattr(remote_source, "dispose"):
-                try:
-                    await remote_source.dispose()
-                    logger.info("Remote source disposed")
-                except Exception as e:
-                    logger.debug(f"Remote source dispose: {e}")
-
-        # Brief delay
-        await asyncio.sleep(0.1)
-
-        # Dispose container
-        if self.container and hasattr(self.container, "dispose"):
             try:
                 await self.container.dispose()
                 logger.info("Container disposed")
             except Exception as e:
-                logger.debug(f"Container dispose: {e}")
+                logger.debug(f"Container dispose error: {e}")
 
 
 def run_application() -> int:
+    """Entry point for running the application."""
     app = QApplication(sys.argv)
     return ApplicationRunner(app).run()
 

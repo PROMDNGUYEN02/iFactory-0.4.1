@@ -1,320 +1,374 @@
-# File: shared/di/app_container.py
+# src/iFactory/shared/di/app_container.py
 """
-Main Application DI Container - Remote-First Architecture with MVVM.
+Main Application DI Container - Enhanced with dependency-injector.
 
-Wires up Application Layer components (SyncOrchestrator, Handlers) and
-provides them to the Presentation Layer using MVVM pattern.
+Uses the dependency-injector library for professional DI management:
+- Lazy initialization
+- Proper lifecycle management
+- Wiring for automatic injection
+- Configuration overrides for testing
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Callable
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from iFactory.infrastructure.adapters.mssql_adapter import MssqlAdapter as MssqlDataSource
-from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
+from dependency_injector import containers, providers
+
 from iFactory.infrastructure.configuration.paths import PATHS
 from iFactory.infrastructure.configuration.db_settings import DatabaseConfig
 from iFactory.infrastructure.configuration.settings import SettingsManager
 
 if TYPE_CHECKING:
-    from iFactory.presentation.di.container import UIContainer
-    from iFactory.application.services.sync_orchestrator import SyncOrchestrator
     from iFactory.application.ports.uow import AbstractUnitOfWork
+    from iFactory.application.services.sync_orchestrator import SyncOrchestrator
+    from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
+    from iFactory.infrastructure.adapters.mssql_adapter import MssqlAdapter
     from iFactory.infrastructure.persistence.sqlalchemy.database import DatabaseManager
+    from iFactory.presentation.di.container import UIContainer
 
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# Factory Functions
+# ============================================================================
+
+
+def _create_device_adapter() -> Optional["DeviceFileAdapter"]:
+    """Factory for DeviceFileAdapter."""
+    try:
+        from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
+
+        adapter = DeviceFileAdapter()
+
+        mapping = adapter.get_display_to_remote_mapping()
+        mapped_count = sum(1 for k, v in mapping.items() if k != v)
+
+        if mapped_count:
+            logger.info(f"DeviceFileAdapter: {mapped_count} ID mappings configured")
+
+        return adapter
+    except Exception as e:
+        logger.warning(f"DeviceFileAdapter creation failed: {e}")
+        return None
+
+
+def _create_remote_source(db_config: DatabaseConfig) -> Optional["MssqlAdapter"]:
+    """Factory for remote data source."""
+    if not db_config.is_mssql_configured:
+        logger.info("MSSQL not configured - remote source disabled")
+        return None
+
+    try:
+        from iFactory.infrastructure.adapters.mssql_adapter import MssqlAdapter
+
+        # Use mssql_url property (handles both async and sync naming)
+        url = getattr(db_config, "mssql_async_url", None) or getattr(db_config, "mssql_url", None)
+        if url:
+            return MssqlAdapter(url)
+        return None
+    except Exception as e:
+        logger.error(f"Remote data source creation failed: {e}")
+        return None
+
+
+def _create_db_manager(db_config: DatabaseConfig) -> Optional["DatabaseManager"]:
+    """Factory for database manager."""
+    try:
+        from iFactory.infrastructure.persistence.sqlalchemy.database import DatabaseManager
+
+        return DatabaseManager(db_config.storage_db_url)
+    except Exception as e:
+        logger.error(f"Database manager creation failed: {e}")
+        return None
+
+
+def _create_null_uow_factory() -> Callable[[], "AbstractUnitOfWork"]:
+    """Create no-op UoW factory."""
+    from iFactory.application.ports.uow import AbstractUnitOfWork
+
+    class NullUnitOfWork(AbstractUnitOfWork):
+        devices = None
+        history = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def commit(self):
+            pass
+
+        async def rollback(self):
+            pass
+
+    return lambda: NullUnitOfWork()
+
+
+# ============================================================================
+# Infrastructure Container (dependency-injector)
+# ============================================================================
+
+
+class InfrastructureContainer(containers.DeclarativeContainer):
+    """Container for infrastructure components."""
+
+    config = providers.Configuration()
+
+    # Settings
+    settings_manager = providers.Singleton(SettingsManager)
+
+    # Database configuration
+    db_config = providers.Singleton(DatabaseConfig)
+
+    # Device file adapter (ID mapping)
+    device_file_adapter = providers.Singleton(_create_device_adapter)
+
+    # Remote data source (MSSQL) - depends on db_config
+    remote_data_source = providers.Singleton(
+        _create_remote_source,
+        db_config,
+    )
+
+    # Database manager (SQLite) - depends on db_config
+    database_manager = providers.Singleton(
+        _create_db_manager,
+        db_config,
+    )
+
+
+# ============================================================================
+# Main Application Container (Facade Pattern)
+# ============================================================================
+
+
 class AppContainer:
     """
-    Main Application Container.
+    Main Application Container - Facade over dependency-injector containers.
 
-    Responsibilities:
-    - Initialize infrastructure components (remote source, databases)
-    - Create Application Layer services (SyncOrchestrator)
-    - Provide dependencies to Presentation Layer (ViewModels)
+    This class provides the same interface as the old AppContainer while
+    using dependency-injector internally for infrastructure management.
 
-    Architecture:
-    - Remote-First: Device status fetched directly from MSSQL
-    - MVVM Pattern: ViewModels orchestrate Use Cases
-    - New Sync API: SyncOrchestrator receives explicit device IDs
-    - ID Mapping: DeviceFileAdapter maps display IDs <-> remote IDs
+    Usage:
+        container = AppContainer()
+        await container.initialize()
+
+        # Access components
+        settings = container.settings
+        sync_orch = container.sync_orchestrator
+
+        # Cleanup
+        await container.dispose()
     """
 
     __slots__ = (
         "_base_dir",
-        "_settings",
-        "_db_config",
-        "_db_manager",
-        "_remote_data_source",
-        "_device_file_adapter",  # NEW: For ID mapping
+        "_infrastructure",
         "_sync_orchestrator",
-        "_uow_factory",
         "_ui_container",
-        "_signal_bus",
+        "_uow_factory",
         "_initialized",
     )
 
     def __init__(self, base_dir: Optional[Path] = None) -> None:
-        self._base_dir = base_dir if base_dir is not None else PATHS.project_root
-        self._settings = None
-        self._db_config: Optional[DatabaseConfig] = None
-        self._db_manager: Optional["DatabaseManager"] = None
-        self._remote_data_source = None
-        self._device_file_adapter: Optional[DeviceFileAdapter] = None  # NEW
+        self._base_dir = base_dir or PATHS.project_root
+        self._infrastructure = InfrastructureContainer()
         self._sync_orchestrator: Optional["SyncOrchestrator"] = None
+        self._ui_container: Optional["UIContainer"] = None
         self._uow_factory: Optional[Callable[[], "AbstractUnitOfWork"]] = None
-        self._ui_container = None
-        self._signal_bus = None
         self._initialized = False
+
+        # Configure infrastructure
+        self._infrastructure.config.from_dict(
+            {
+                "base_dir": str(self._base_dir),
+                "debug": False,
+            }
+        )
 
     async def initialize(self) -> None:
         """Initialize all container components."""
         if self._initialized:
             return
 
-        logger.info("[AppContainer] Initializing with MVVM architecture...")
+        logger.info("[AppContainer] Initializing with dependency-injector...")
 
-        self._load_settings()
-        self._init_device_file_adapter()  # NEW: Initialize before infrastructure
-        await self._init_infrastructure()
-        self._init_application_layer()
+        # Ensure directories exist
+        PATHS.ensure_directories()
+
+        # Initialize database manager (async)
+        db_manager = self._infrastructure.database_manager()
+        if db_manager:
+            await db_manager.initialize()
+            logger.info("[AppContainer] Database manager initialized")
+
+        # Create UoW factory
+        self._init_uow_factory()
+
+        # Create sync orchestrator
+        self._init_sync_orchestrator()
+
+        # Initialize presentation layer
         self._init_presentation()
 
         self._initialized = True
         logger.info("[AppContainer] Initialization complete")
 
-    def _load_settings(self) -> None:
-        """Load application settings."""
-        try:
-            self._settings = SettingsManager()
-            self._db_config = DatabaseConfig()
-        except Exception as e:
-            logger.warning(f"Settings load failed: {e}")
-            self._db_config = DatabaseConfig()
+    def _init_uow_factory(self) -> None:
+        """Initialize Unit of Work factory."""
+        db_manager = self._infrastructure.database_manager()
 
-    def _init_device_file_adapter(self) -> None:
-        """Initialize device file adapter for ID mapping."""
-        try:
-            self._device_file_adapter = DeviceFileAdapter()
-
-            # Log mapping info for debugging
-            mapping = self._device_file_adapter.get_display_to_remote_mapping()
-            mapped_count = sum(1 for k, v in mapping.items() if k != v)
-
-            if mapped_count > 0:
-                logger.info(f"[AppContainer] DeviceFileAdapter: {mapped_count} devices with ID mapping")
-                # Log specific mappings for debugging
-                for display_id, remote_id in mapping.items():
-                    if display_id != remote_id:
-                        logger.debug(f"  {display_id} -> {remote_id}")
-            else:
-                logger.info("[AppContainer] DeviceFileAdapter: No ID mappings configured")
-
-        except Exception as e:
-            logger.warning(f"DeviceFileAdapter init failed: {e}")
-            self._device_file_adapter = None
-
-    async def _init_infrastructure(self) -> None:
-        """Initialize infrastructure components."""
-        PATHS.ensure_directories()
-
-        # Initialize remote source
-        if self._db_config and self._db_config.mssql_url:
+        if db_manager and db_manager.session_factory:
             try:
-                self._remote_data_source = MssqlDataSource(self._db_config.mssql_url)
-                logger.info("[AppContainer] MSSQL Remote Source configured")
-            except Exception as e:
-                logger.warning(f"Remote data source init failed: {e}")
+                from iFactory.infrastructure.persistence.sqlalchemy import SqlAlchemyUnitOfWork
+
+                self._uow_factory = lambda: SqlAlchemyUnitOfWork(db_manager.session_factory)
+                logger.info("[AppContainer] UoW factory configured")
+            except ImportError as e:
+                logger.warning(f"UoW factory import failed: {e}")
+                self._uow_factory = _create_null_uow_factory()
         else:
-            logger.info("[AppContainer] MSSQL not configured - offline mode")
+            self._uow_factory = _create_null_uow_factory()
+            logger.info("[AppContainer] Using null UoW factory")
 
-        # Initialize UoW factory for history caching
-        await self._init_uow_factory()
+    def _init_sync_orchestrator(self) -> None:
+        """Initialize sync orchestrator."""
+        remote_source = self._infrastructure.remote_data_source()
 
-    async def _init_uow_factory(self) -> None:
-        """Initialize Unit of Work factory for local caching."""
-        try:
-            from iFactory.infrastructure.persistence.sqlalchemy import (
-                DatabaseManager,
-                SqlAlchemyUnitOfWork,
-            )
-
-            sqlite_url = None
-            if self._db_config:
-                sqlite_url = getattr(self._db_config, "storage_db_url", None)
-                if not sqlite_url:
-                    sqlite_url = getattr(self._db_config, "sqlite_url", None)
-
-            if sqlite_url:
-                self._db_manager = DatabaseManager(sqlite_url)
-                await self._db_manager.initialize()
-
-                session_factory = self._db_manager.session_factory
-                self._uow_factory = lambda: SqlAlchemyUnitOfWork(session_factory)
-
-                logger.info("[AppContainer] UoW factory configured for history caching")
-            else:
-                self._uow_factory = None
-                logger.info("[AppContainer] No local database URL - history caching disabled")
-
-        except ImportError as e:
-            logger.warning(f"UoW factory init failed (import error): {e}")
-            self._uow_factory = None
-        except Exception as e:
-            logger.warning(f"UoW factory init failed: {e}")
-            self._uow_factory = None
-
-    def _init_application_layer(self) -> None:
-        """Initialize Application Layer services."""
-        if not self._remote_data_source:
+        if not remote_source:
             logger.warning("[AppContainer] No remote source - sync orchestrator disabled")
             return
 
         try:
-            from iFactory.application.services.sync_orchestrator import (
-                create_sync_orchestrator,
-            )
+            from iFactory.application.services.sync_orchestrator import create_sync_orchestrator
 
-            # KEY CHANGE: Pass device_file_adapter as id_mapper
             self._sync_orchestrator = create_sync_orchestrator(
-                remote_source=self._remote_data_source,
-                uow_factory=self._uow_factory or self._create_null_uow_factory(),
-                id_mapper=self._device_file_adapter,  # NEW: ID mapping support
+                remote_source=remote_source,
+                uow_factory=self._uow_factory or _create_null_uow_factory(),
+                id_mapper=self._infrastructure.device_file_adapter(),
                 on_sync_complete=self._on_sync_complete,
             )
-
-            logger.info("[AppContainer] SyncOrchestrator configured with ID mapping")
+            logger.info("[AppContainer] SyncOrchestrator configured")
 
         except Exception as e:
             logger.error(f"SyncOrchestrator init failed: {e}")
             self._sync_orchestrator = None
 
-    def _create_null_uow_factory(self) -> Callable:
-        """Create a no-op UoW factory when no local database is available."""
-        from iFactory.application.ports.uow import AbstractUnitOfWork
-
-        class NullUnitOfWork(AbstractUnitOfWork):
-            """No-op UoW for when local caching is disabled."""
-
-            devices = None
-            history = None
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-            async def commit(self):
-                pass
-
-            async def rollback(self):
-                pass
-
-        return lambda: NullUnitOfWork()
-
-    def _on_sync_complete(self, result) -> None:
-        """Handle sync completion from orchestrator."""
-        logger.debug(f"[AppContainer] Sync completed: {result.count} devices")
+    def _on_sync_complete(self, result: Any) -> None:
+        """Handle sync completion."""
+        logger.debug(f"[AppContainer] Sync completed: {getattr(result, 'count', 0)} devices")
 
     def _init_presentation(self) -> None:
-        """Initialize Presentation Layer with MVVM architecture."""
-        from iFactory.presentation.adapters.signal_bus import SignalBus
-        from iFactory.presentation.di.container import UIContainer
+        """Initialize presentation layer."""
+        try:
+            from iFactory.presentation.di.container import UIContainer
 
-        self._signal_bus = SignalBus()
-        self._ui_container = UIContainer(app_container=self)
-        self._ui_container.initialize()
+            # UIContainer expects an object with specific properties
+            self._ui_container = UIContainer(app_container=self)
+            self._ui_container.initialize()
+            logger.info("[AppContainer] UI container initialized")
 
-    # -------------------------------------------------------------------------
-    # Public Properties
-    # -------------------------------------------------------------------------
+        except Exception as e:
+            logger.error(f"Presentation init failed: {e}")
+            self._ui_container = None
+
+    # ========================================================================
+    # Public Properties (Interface for other components)
+    # ========================================================================
 
     @property
-    def remote_source(self):
+    def remote_source(self) -> Optional["MssqlAdapter"]:
         """Get remote data source."""
-        return self._remote_data_source
+        return self._infrastructure.remote_data_source()
 
     @property
-    def device_file_adapter(self) -> Optional[DeviceFileAdapter]:
-        """Get device file adapter (also serves as ID mapper)."""
-        return self._device_file_adapter
+    def device_file_adapter(self) -> Optional["DeviceFileAdapter"]:
+        """Get device file adapter."""
+        return self._infrastructure.device_file_adapter()
 
     @property
-    def id_mapper(self) -> Optional[DeviceFileAdapter]:
+    def id_mapper(self) -> Optional["DeviceFileAdapter"]:
         """Get ID mapper (alias for device_file_adapter)."""
-        return self._device_file_adapter
+        return self.device_file_adapter
 
     @property
     def sync_orchestrator(self) -> Optional["SyncOrchestrator"]:
-        """Get sync orchestrator for coordinated sync operations."""
+        """Get sync orchestrator."""
         return self._sync_orchestrator
 
     @property
-    def uow_factory(self) -> Optional[Callable]:
-        """Get UoW factory for local persistence operations."""
+    def uow_factory(self) -> Optional[Callable[[], "AbstractUnitOfWork"]]:
+        """Get UoW factory."""
         return self._uow_factory
 
     @property
-    def db_config(self) -> Optional[DatabaseConfig]:
+    def db_config(self) -> DatabaseConfig:
         """Get database configuration."""
-        return self._db_config
+        return self._infrastructure.db_config()
 
     @property
     def db_manager(self) -> Optional["DatabaseManager"]:
         """Get database manager."""
-        return self._db_manager
+        return self._infrastructure.database_manager()
+
+    @property
+    def settings(self) -> SettingsManager:
+        """Get settings manager."""
+        return self._infrastructure.settings_manager()
 
     def get_ui_container(self) -> Optional["UIContainer"]:
         """Get UI container."""
         return self._ui_container
 
-    # -------------------------------------------------------------------------
+    # ========================================================================
     # Lifecycle
-    # -------------------------------------------------------------------------
+    # ========================================================================
 
     async def dispose(self) -> None:
         """Dispose all resources."""
         logger.info("[AppContainer] Disposing...")
 
-        # Shutdown UI first (stops timers and async operations)
-        if self._ui_container and hasattr(self._ui_container, "shutdown"):
-            self._ui_container.shutdown()
+        # Shutdown UI first
+        if self._ui_container:
+            try:
+                self._ui_container.shutdown()
+            except Exception as e:
+                logger.warning(f"UI shutdown error: {e}")
             self._ui_container = None
 
-        # Wait a bit for pending operations to complete
-        import asyncio
+        # Brief delay for pending operations
+        await asyncio.sleep(0.1)
 
-        await asyncio.sleep(0.2)
-
-        # Dispose remote source with proper cleanup
-        if self._remote_data_source:
+        # Dispose remote source
+        remote = self._infrastructure.remote_data_source()
+        if remote:
             try:
-                # Cancel any pending operations first
-                if hasattr(self._remote_data_source, "cancel_pending"):
-                    await self._remote_data_source.cancel_pending()
-                await self._remote_data_source.dispose()
+                if hasattr(remote, "cancel_pending"):
+                    await remote.cancel_pending()
+                await remote.dispose()
             except Exception as e:
-                logger.warning(f"Error disposing remote source: {e}")
-            finally:
-                self._remote_data_source = None
+                logger.warning(f"Remote source dispose error: {e}")
 
         # Dispose database manager
-        if self._db_manager:
+        db_manager = self._infrastructure.database_manager()
+        if db_manager:
             try:
-                await self._db_manager.dispose()
+                await db_manager.dispose()
             except Exception as e:
-                logger.warning(f"Error disposing database manager: {e}")
-            finally:
-                self._db_manager = None
+                logger.warning(f"Database manager dispose error: {e}")
 
-        # Clear device file adapter cache
-        if self._device_file_adapter:
-            self._device_file_adapter.invalidate_cache()
-            self._device_file_adapter = None
+        # Clear device adapter cache
+        adapter = self._infrastructure.device_file_adapter()
+        if adapter and hasattr(adapter, "invalidate_cache"):
+            adapter.invalidate_cache()
+
+        # Reset container singletons
+        self._infrastructure.reset_singletons()
 
         self._sync_orchestrator = None
         self._uow_factory = None
@@ -322,7 +376,11 @@ class AppContainer:
 
         logger.info("[AppContainer] Disposed")
 
+    # Alias for backward compatibility
     cleanup = dispose
 
 
-__all__ = ["AppContainer"]
+__all__ = [
+    "AppContainer",
+    "InfrastructureContainer",
+]
