@@ -590,6 +590,20 @@ class MssqlAdapter(IRemoteDataSource):
         self._circuit_breaker.reset()
         logger.info("[MssqlAdapter] Circuit breaker reset manually")
 
+    def get_metrics(self) -> "RemoteMetrics":
+        """Get operation metrics."""
+        from iFactory.application.ports.remote import RemoteMetrics
+
+        # Return basic metrics from circuit breaker stats
+        metrics = RemoteMetrics()
+
+        # You can enhance this with actual tracking
+        metrics.total_requests = getattr(self, "_total_requests", 0)
+        metrics.successful_requests = getattr(self, "_successful_requests", 0)
+        metrics.failed_requests = getattr(self, "_failed_requests", 0)
+
+        return metrics
+
     async def dispose(self) -> None:
         """Dispose with proper waiting for active operations."""
         if self._is_disposed:

@@ -1,31 +1,43 @@
+# src/presentation/viewmodels/base.py - ENHANCED
 """
-Base ViewModel with Reactive Signals and UiState Pattern.
+Enhanced Base ViewModel with reactive properties and advanced features.
 
-This module provides the foundation for all ViewModels in the MVVM architecture.
-ViewModels are the sole owners of UI state and expose reactive signals for Views to bind to.
+Features:
+- Reactive computed properties
+- Automatic UI updates
+- Dispose pattern for cleanup
+- Command pattern with CanExecute
+- Property change tracking
+- Weak event pattern
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import weakref
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum, auto
-from typing import Any, Callable, Generic, List, Optional, TypeVar
+from enum import StrEnum, auto
+from functools import cached_property, wraps
+from typing import Any, Awaitable, Callable, Dict, Generic, List, Optional, Set, TypeVar, Union
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Property, Slot
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
-# UI State Pattern
-# =============================================================================
+T = TypeVar("T")
+TResult = TypeVar("TResult")
 
 
-class UiStateType(Enum):
-    """Enumeration of possible UI states."""
+# ============================================================================
+# UI State
+# ============================================================================
+
+
+class UiStateType(StrEnum):
+    """UI state types."""
 
     IDLE = auto()
     LOADING = auto()
@@ -34,25 +46,43 @@ class UiStateType(Enum):
     EMPTY = auto()
 
 
-T = TypeVar("T")
-
-
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class UiState(Generic[T]):
     """
-    Explicit UI state object replacing ad-hoc flags.
+    Immutable UI state container.
 
-    Usage:
-        state = UiState.loading()
-        state = UiState.success(data=devices)
-        state = UiState.error(message="Connection failed")
-        state = UiState.empty(message="No devices found")
+    Represents the current state of a UI component:
+    - Idle: Initial/waiting state
+    - Loading: Operation in progress
+    - Success: Operation completed with data
+    - Error: Operation failed with message
+    - Empty: No data available
     """
 
     type: UiStateType
-    data: Optional[Any] = None
+    data: Optional[T] = None
     message: str = ""
     timestamp: datetime = field(default_factory=datetime.now)
+
+    @classmethod
+    def idle(cls) -> "UiState[T]":
+        return cls(type=UiStateType.IDLE)
+
+    @classmethod
+    def loading(cls, message: str = "Loading...") -> "UiState[T]":
+        return cls(type=UiStateType.LOADING, message=message)
+
+    @classmethod
+    def success(cls, data: T = None, message: str = "") -> "UiState[T]":
+        return cls(type=UiStateType.SUCCESS, data=data, message=message)
+
+    @classmethod
+    def error(cls, message: str) -> "UiState[T]":
+        return cls(type=UiStateType.ERROR, message=message)
+
+    @classmethod
+    def empty(cls, message: str = "No data") -> "UiState[T]":
+        return cls(type=UiStateType.EMPTY, message=message)
 
     @property
     def is_loading(self) -> bool:
@@ -70,237 +100,547 @@ class UiState(Generic[T]):
     def is_empty(self) -> bool:
         return self.type == UiStateType.EMPTY
 
-    @property
-    def is_idle(self) -> bool:
-        return self.type == UiStateType.IDLE
+    def map(self, func: Callable[[T], TResult]) -> "UiState[TResult]":
+        """Transform success data."""
+        if self.is_success and self.data is not None:
+            return UiState.success(func(self.data), self.message)
+        return UiState(type=self.type, message=self.message)
+
+
+# ============================================================================
+# Reactive Property
+# ============================================================================
+
+
+class ReactiveProperty(Generic[T]):
+    """
+    Reactive property that notifies on change.
+
+    Usage:
+        class MyViewModel(BaseViewModel):
+            def __init__(self):
+                super().__init__()
+                self._count = ReactiveProperty(0, self._on_count_changed)
+
+            @property
+            def count(self) -> int:
+                return self._count.value
+
+            @count.setter
+            def count(self, value: int) -> None:
+                self._count.value = value
+
+            def _on_count_changed(self, old: int, new: int) -> None:
+                self.countChanged.emit(new)
+    """
+
+    def __init__(
+        self,
+        initial_value: T,
+        on_change: Optional[Callable[[T, T], None]] = None,
+        validator: Optional[Callable[[T], bool]] = None,
+    ):
+        self._value = initial_value
+        self._on_change = on_change
+        self._validator = validator
+        self._subscribers: List[weakref.ref] = []
 
     @property
-    def has_data(self) -> bool:
-        return self.data is not None
+    def value(self) -> T:
+        return self._value
 
-    # Factory methods
-    @staticmethod
-    def idle() -> "UiState":
-        return UiState(type=UiStateType.IDLE)
+    @value.setter
+    def value(self, new_value: T) -> None:
+        if self._value == new_value:
+            return
 
-    @staticmethod
-    def loading(message: str = "Loading...") -> "UiState":
-        return UiState(type=UiStateType.LOADING, message=message)
+        if self._validator and not self._validator(new_value):
+            logger.warning(f"Invalid value rejected: {new_value}")
+            return
 
-    @staticmethod
-    def success(data: Any = None, message: str = "") -> "UiState":
-        return UiState(type=UiStateType.SUCCESS, data=data, message=message)
+        old_value = self._value
+        self._value = new_value
 
-    @staticmethod
-    def error(message: str, data: Any = None) -> "UiState":
-        return UiState(type=UiStateType.ERROR, data=data, message=message)
+        if self._on_change:
+            self._on_change(old_value, new_value)
 
-    @staticmethod
-    def empty(message: str = "No data available") -> "UiState":
-        return UiState(type=UiStateType.EMPTY, message=message)
+        self._notify_subscribers(old_value, new_value)
+
+    def subscribe(
+        self,
+        callback: Callable[[T, T], None],
+    ) -> Callable[[], None]:
+        """Subscribe to changes. Returns unsubscribe function."""
+        ref = weakref.ref(callback)
+        self._subscribers.append(ref)
+
+        def unsubscribe():
+            try:
+                self._subscribers.remove(ref)
+            except ValueError:
+                pass
+
+        return unsubscribe
+
+    def _notify_subscribers(self, old: T, new: T) -> None:
+        """Notify all subscribers of change."""
+        dead_refs = []
+
+        for ref in self._subscribers:
+            callback = ref()
+            if callback is None:
+                dead_refs.append(ref)
+            else:
+                try:
+                    callback(old, new)
+                except Exception as e:
+                    logger.error(f"Subscriber error: {e}")
+
+        # Clean up dead references
+        for ref in dead_refs:
+            self._subscribers.remove(ref)
 
 
-# =============================================================================
+# ============================================================================
+# Command Pattern
+# ============================================================================
+
+
+class ICommand(ABC):
+    """Command interface with CanExecute support."""
+
+    @abstractmethod
+    def execute(self, parameter: Any = None) -> None:
+        """Execute the command."""
+        pass
+
+    @abstractmethod
+    def can_execute(self, parameter: Any = None) -> bool:
+        """Check if command can be executed."""
+        pass
+
+    @property
+    @abstractmethod
+    def is_executing(self) -> bool:
+        """Check if command is currently executing."""
+        pass
+
+
+class RelayCommand(ICommand):
+    """
+    Simple command implementation.
+
+    Usage:
+        self.save_command = RelayCommand(
+            execute=self._save,
+            can_execute=lambda: self.is_valid and not self.is_saving,
+        )
+    """
+
+    def __init__(
+        self,
+        execute: Callable[[Any], None],
+        can_execute: Optional[Callable[[Any], bool]] = None,
+    ):
+        self._execute = execute
+        self._can_execute = can_execute or (lambda _: True)
+        self._is_executing = False
+
+    def execute(self, parameter: Any = None) -> None:
+        if not self.can_execute(parameter):
+            return
+
+        self._is_executing = True
+        try:
+            self._execute(parameter)
+        finally:
+            self._is_executing = False
+
+    def can_execute(self, parameter: Any = None) -> bool:
+        if self._is_executing:
+            return False
+        return self._can_execute(parameter)
+
+    @property
+    def is_executing(self) -> bool:
+        return self._is_executing
+
+
+class AsyncRelayCommand(ICommand):
+    """
+    Async command implementation.
+
+    Usage:
+        self.load_command = AsyncRelayCommand(
+            execute=self._load_data,
+            can_execute=lambda: not self.is_loading,
+        )
+    """
+
+    def __init__(
+        self,
+        execute: Callable[[Any], Awaitable[None]],
+        can_execute: Optional[Callable[[Any], bool]] = None,
+        on_error: Optional[Callable[[Exception], None]] = None,
+    ):
+        self._execute = execute
+        self._can_execute = can_execute or (lambda _: True)
+        self._on_error = on_error
+        self._is_executing = False
+        self._current_task: Optional[asyncio.Task] = None
+
+    def execute(self, parameter: Any = None) -> None:
+        """Start async execution."""
+        if not self.can_execute(parameter):
+            return
+
+        self._is_executing = True
+
+        async def run():
+            try:
+                await self._execute(parameter)
+            except Exception as e:
+                if self._on_error:
+                    self._on_error(e)
+                else:
+                    logger.error(f"Command error: {e}")
+            finally:
+                self._is_executing = False
+                self._current_task = None
+
+        self._current_task = asyncio.create_task(run())
+
+    def can_execute(self, parameter: Any = None) -> bool:
+        if self._is_executing:
+            return False
+        return self._can_execute(parameter)
+
+    @property
+    def is_executing(self) -> bool:
+        return self._is_executing
+
+    def cancel(self) -> None:
+        """Cancel current execution."""
+        if self._current_task and not self._current_task.done():
+            self._current_task.cancel()
+            self._is_executing = False
+
+
+# ============================================================================
+# Property Change Tracking
+# ============================================================================
+
+
+class PropertyChangeTracker:
+    """
+    Tracks property changes for dirty checking.
+
+    Usage:
+        tracker = PropertyChangeTracker()
+        tracker.set("name", "John")
+        tracker.set("name", "Jane")
+
+        print(tracker.is_dirty)  # True
+        print(tracker.changed_properties)  # {"name"}
+
+        tracker.accept_changes()
+        print(tracker.is_dirty)  # False
+    """
+
+    def __init__(self):
+        self._original: Dict[str, Any] = {}
+        self._current: Dict[str, Any] = {}
+
+    def set(self, name: str, value: Any) -> None:
+        """Set a property value."""
+        if name not in self._original:
+            self._original[name] = value
+        self._current[name] = value
+
+    @property
+    def is_dirty(self) -> bool:
+        """Check if any property has changed."""
+        return self._original != self._current
+
+    @property
+    def changed_properties(self) -> Set[str]:
+        """Get names of changed properties."""
+        changed = set()
+        for name in self._current:
+            if name in self._original:
+                if self._original[name] != self._current[name]:
+                    changed.add(name)
+            else:
+                changed.add(name)
+        return changed
+
+    def accept_changes(self) -> None:
+        """Accept all changes (resets dirty state)."""
+        self._original = self._current.copy()
+
+    def reject_changes(self) -> None:
+        """Reject all changes (revert to original)."""
+        self._current = self._original.copy()
+
+    def get_original(self, name: str) -> Any:
+        """Get original value of property."""
+        return self._original.get(name)
+
+    def get_current(self, name: str) -> Any:
+        """Get current value of property."""
+        return self._current.get(name)
+
+
+# ============================================================================
 # Base ViewModel
-# =============================================================================
+# ============================================================================
 
 
 class BaseViewModel(QObject):
     """
-    Base class for all ViewModels.
+    Enhanced base class for all ViewModels.
 
-    Responsibilities:
-    - Own and manage UI state
-    - Expose reactive signals for Views to bind
-    - Orchestrate Use Cases (Application Layer)
-    - Transform data for UI consumption
-    - Contain ZERO business rules
-
-    Signals:
-    - stateChanged: Emitted when UI state changes
-    - errorOccurred: Emitted when an error occurs
-    - loadingChanged: Emitted when loading state changes
+    Features:
+    - UI state management
+    - Reactive properties
+    - Command support
+    - Dispose pattern
+    - Property change tracking
 
     Usage:
-        class DeviceListViewModel(BaseViewModel):
-            devicesChanged = Signal(list)
+        class DeviceViewModel(BaseViewModel):
+            nameChanged = Signal(str)
 
-            def load_devices(self):
-                self._set_loading(True)
-                # ... orchestrate use case
-                self._set_state(UiState.success(data=devices))
+            def __init__(self):
+                super().__init__()
+                self._name = ReactiveProperty("", self._on_name_changed)
+
+            @property
+            def name(self) -> str:
+                return self._name.value
+
+            @name.setter
+            def name(self, value: str) -> None:
+                self._name.value = value
+
+            def _on_name_changed(self, old: str, new: str) -> None:
+                self.nameChanged.emit(new)
     """
 
-    # Core signals - all ViewModels emit these
+    # Signals
     stateChanged = Signal(object)  # UiState
-    errorOccurred = Signal(str)  # Error message
-    loadingChanged = Signal(bool)  # Is loading
+    errorOccurred = Signal(str)
+    disposed = Signal()
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
-        self._state: UiState = UiState.idle()
+        self._ui_state: UiState = UiState.idle()
         self._is_disposed = False
-        self._subscriptions: List[Callable[[], None]] = []
+        self._disposables: List[Callable[[], None]] = []
+        self._property_tracker = PropertyChangeTracker()
 
-    # -------------------------------------------------------------------------
-    # State Management
-    # -------------------------------------------------------------------------
+    # ========================================================================
+    # UI State
+    # ========================================================================
 
     @property
     def state(self) -> UiState:
-        """Get current UI state."""
-        return self._state
+        """Current UI state."""
+        return self._ui_state
 
     @property
     def is_loading(self) -> bool:
-        """Check if currently loading."""
-        return self._state.is_loading
+        return self._ui_state.is_loading
 
     @property
-    def has_error(self) -> bool:
-        """Check if in error state."""
-        return self._state.is_error
+    def is_error(self) -> bool:
+        return self._ui_state.is_error
 
     @property
     def error_message(self) -> str:
-        """Get current error message."""
-        return self._state.message if self._state.is_error else ""
+        return self._ui_state.message if self._ui_state.is_error else ""
 
-    def _set_state(self, new_state: UiState) -> None:
-        """
-        Update UI state and emit signals.
-
-        This is the primary method for state updates.
-        Views should bind to stateChanged signal.
-        """
+    def _set_state(self, state: UiState) -> None:
+        """Update UI state."""
         if self._is_disposed:
             return
 
-        old_state = self._state
-        self._state = new_state
+        self._ui_state = state
+        self.stateChanged.emit(state)
 
-        # Emit state change
-        self.stateChanged.emit(new_state)
+        if state.is_error:
+            self.errorOccurred.emit(state.message)
 
-        # Emit loading change if needed
-        if old_state.is_loading != new_state.is_loading:
-            self.loadingChanged.emit(new_state.is_loading)
-
-        # Emit error if transitioning to error state
-        if new_state.is_error and not old_state.is_error:
-            self.errorOccurred.emit(new_state.message)
-
-        logger.debug(f"[{self.__class__.__name__}] State: {old_state.type.name} -> {new_state.type.name}")
-
-    def _set_loading(self, is_loading: bool, message: str = "Loading...") -> None:
-        """Convenience method to set loading state."""
-        if is_loading:
+    def _set_loading(self, loading: bool, message: str = "Loading...") -> None:
+        """Set loading state."""
+        if loading:
             self._set_state(UiState.loading(message))
-        elif self._state.is_loading:
+        else:
             self._set_state(UiState.idle())
 
     def _set_error(self, message: str) -> None:
-        """Convenience method to set error state."""
+        """Set error state."""
         self._set_state(UiState.error(message))
+        logger.error(f"[{self.__class__.__name__}] {message}")
 
-    def _set_success(self, data: Any = None, message: str = "") -> None:
-        """Convenience method to set success state."""
+    def _set_success(
+        self,
+        data: Any = None,
+        message: str = "",
+    ) -> None:
+        """Set success state."""
         self._set_state(UiState.success(data, message))
 
-    def _set_empty(self, message: str = "No data available") -> None:
-        """Convenience method to set empty state."""
+    def _set_empty(self, message: str = "No data") -> None:
+        """Set empty state."""
         self._set_state(UiState.empty(message))
 
-    # -------------------------------------------------------------------------
-    # Subscription Management
-    # -------------------------------------------------------------------------
-
-    def add_subscription(self, unsubscribe: Callable[[], None]) -> None:
-        """Track a subscription for cleanup."""
-        self._subscriptions.append(unsubscribe)
-
-    def _clear_subscriptions(self) -> None:
-        """Clear all tracked subscriptions."""
-        for unsub in self._subscriptions:
-            try:
-                unsub()
-            except Exception as e:
-                logger.warning(f"Error unsubscribing: {e}")
-        self._subscriptions.clear()
-
-    # -------------------------------------------------------------------------
+    # ========================================================================
     # Lifecycle
-    # -------------------------------------------------------------------------
+    # ========================================================================
+
+    @abstractmethod
+    def initialize(self) -> None:
+        """Initialize the ViewModel. Override in subclasses."""
+        pass
+
+    def add_disposable(self, dispose_func: Callable[[], None]) -> None:
+        """Add a cleanup function to be called on dispose."""
+        self._disposables.append(dispose_func)
 
     def dispose(self) -> None:
-        """
-        Clean up ViewModel resources.
-
-        Called when ViewModel is no longer needed.
-        Subclasses should override and call super().
-        """
+        """Clean up resources."""
         if self._is_disposed:
             return
 
         self._is_disposed = True
-        self._clear_subscriptions()
+
+        # Run all dispose functions
+        for dispose_func in self._disposables:
+            try:
+                dispose_func()
+            except Exception as e:
+                logger.error(f"Dispose error: {e}")
+
+        self._disposables.clear()
+        self.disposed.emit()
 
         logger.debug(f"[{self.__class__.__name__}] Disposed")
 
-    @abstractmethod
-    def initialize(self) -> None:
-        """
-        Initialize ViewModel.
+    @property
+    def is_disposed(self) -> bool:
+        return self._is_disposed
 
-        Called after construction to set up initial state.
-        Subclasses must implement this.
-        """
-        pass
+    # ========================================================================
+    # Property Tracking
+    # ========================================================================
+
+    def track_property(self, name: str, value: Any) -> None:
+        """Track a property for dirty checking."""
+        self._property_tracker.set(name, value)
+
+    @property
+    def is_dirty(self) -> bool:
+        """Check if any tracked property has changed."""
+        return self._property_tracker.is_dirty
+
+    def accept_changes(self) -> None:
+        """Accept all property changes."""
+        self._property_tracker.accept_changes()
+
+    def reject_changes(self) -> None:
+        """Reject all property changes."""
+        self._property_tracker.reject_changes()
 
 
-# =============================================================================
+# ============================================================================
 # Async ViewModel Mixin
-# =============================================================================
+# ============================================================================
 
 
 class AsyncViewModelMixin:
     """
-    Mixin for ViewModels that need async operations.
+    Mixin for async operation support.
 
-    Provides utilities for running async operations with proper
-    state management and error handling.
+    Provides helper methods for running async operations
+    with proper error handling and cancellation.
     """
 
     def __init__(self):
-        self._pending_operations: dict[str, bool] = {}
+        self._pending_tasks: List[asyncio.Task] = []
 
-    def _is_operation_pending(self, operation_id: str) -> bool:
-        """Check if an operation is pending."""
-        return self._pending_operations.get(operation_id, False)
-
-    def _mark_operation_started(self, operation_id: str) -> bool:
+    async def run_async(
+        self,
+        coro: Awaitable[T],
+        on_success: Optional[Callable[[T], None]] = None,
+        on_error: Optional[Callable[[Exception], None]] = None,
+        set_loading: bool = True,
+    ) -> Optional[T]:
         """
-        Mark an operation as started.
+        Run an async operation with proper handling.
 
-        Returns False if operation already pending (skip duplicate).
+        Args:
+            coro: Coroutine to run
+            on_success: Callback on success
+            on_error: Callback on error
+            set_loading: Whether to set loading state
+
+        Returns:
+            Result on success, None on error
         """
-        if self._pending_operations.get(operation_id, False):
-            return False
-        self._pending_operations[operation_id] = True
-        return True
+        if hasattr(self, "_is_disposed") and self._is_disposed:
+            return None
 
-    def _mark_operation_completed(self, operation_id: str) -> None:
-        """Mark an operation as completed."""
-        self._pending_operations.pop(operation_id, None)
+        if set_loading and hasattr(self, "_set_loading"):
+            self._set_loading(True)
 
-    def _cancel_all_operations(self) -> None:
-        """Cancel all pending operations."""
-        self._pending_operations.clear()
+        try:
+            result = await coro
+
+            if on_success:
+                on_success(result)
+
+            return result
+
+        except asyncio.CancelledError:
+            logger.debug("Async operation cancelled")
+            return None
+
+        except Exception as e:
+            logger.error(f"Async operation failed: {e}")
+
+            if on_error:
+                on_error(e)
+            elif hasattr(self, "_set_error"):
+                self._set_error(str(e))
+
+            return None
+
+        finally:
+            if set_loading and hasattr(self, "_set_loading"):
+                self._set_loading(False)
+
+    def cancel_pending_tasks(self) -> None:
+        """Cancel all pending async tasks."""
+        for task in self._pending_tasks:
+            if not task.done():
+                task.cancel()
+        self._pending_tasks.clear()
 
 
 __all__ = [
+    # State
     "UiState",
     "UiStateType",
+    # Reactive
+    "ReactiveProperty",
+    # Commands
+    "ICommand",
+    "RelayCommand",
+    "AsyncRelayCommand",
+    # Tracking
+    "PropertyChangeTracker",
+    # Base
     "BaseViewModel",
     "AsyncViewModelMixin",
 ]

@@ -1,19 +1,26 @@
+# src/iFactory/domain/exceptions/__init__.py
+"""
+Domain Exceptions.
+"""
+
 from .base import DomainError
 from .domain_exceptions import (
-    DeviceNotFoundError,
     InvalidEquipmentCodeError,
     InvalidStatusTransitionError,
-    InvalidTimeRangeError,
+    InvalidTransitionError,  # Alias
+    DeviceNotFoundError,
     StaleDataError,
+    InvalidTimeRangeError,
     StatusMergeError,
 )
 
 __all__ = [
     "DomainError",
-    "DeviceNotFoundError",
     "InvalidEquipmentCodeError",
     "InvalidStatusTransitionError",
-    "InvalidTimeRangeError",
+    "InvalidTransitionError",
+    "DeviceNotFoundError",
     "StaleDataError",
+    "InvalidTimeRangeError",
     "StatusMergeError",
 ]

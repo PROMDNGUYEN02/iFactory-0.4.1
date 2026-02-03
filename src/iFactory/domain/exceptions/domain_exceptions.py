@@ -1,3 +1,8 @@
+# src/iFactory/domain/exceptions/domain_exceptions.py
+"""
+Domain Exceptions.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -99,3 +104,22 @@ class StatusMergeError(DomainError):
     @classmethod
     def non_adjacent(cls) -> StatusMergeError:
         return cls("Cannot merge time ranges that are not adjacent or overlapping.")
+
+
+# ============================================================================
+# ALIAS for backward compatibility
+# ============================================================================
+
+# Alias for InvalidStatusTransitionError
+InvalidTransitionError = InvalidStatusTransitionError
+
+
+__all__ = [
+    "InvalidEquipmentCodeError",
+    "InvalidStatusTransitionError",
+    "InvalidTransitionError",
+    "DeviceNotFoundError",
+    "StaleDataError",
+    "InvalidTimeRangeError",
+    "StatusMergeError",
+]
