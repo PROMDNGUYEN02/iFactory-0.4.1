@@ -1,3 +1,4 @@
+# src/iFactory/infrastructure/adapters/mssql_adapter.py
 """
 MSSQL Adapter - Production-ready with resilience patterns.
 
@@ -7,6 +8,7 @@ Features:
 - Retry with exponential backoff
 - Circuit breaker pattern
 - Proper async operation tracking
+- PyInstaller compatible
 """
 
 from __future__ import annotations
@@ -16,15 +18,15 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional, TypeVar, Callable
-from functools import wraps
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
-from sqlalchemy import text, bindparam
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
+from sqlalchemy import bindparam, text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
-from sqlalchemy.exc import SQLAlchemyError, OperationalError
 
 from iFactory.application.ports.remote import IRemoteDataSource
+from iFactory.infrastructure.configuration.db_settings import DatabaseConfig
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +81,11 @@ class CircuitBreaker:
         if self._state == CircuitState.CLOSED:
             return True
         if self._state == CircuitState.OPEN:
-            # Check if recovery timeout passed
             if self._last_failure_time:
                 elapsed = (datetime.now() - self._last_failure_time).total_seconds()
                 if elapsed >= self.config.recovery_timeout:
-                    return True  # Will transition to half-open
+                    return True
             return False
-        # HALF_OPEN
         return self._half_open_calls < self.config.half_open_max_calls
 
     async def record_success(self) -> None:
@@ -94,13 +94,11 @@ class CircuitBreaker:
             if self._state == CircuitState.HALF_OPEN:
                 self._half_open_calls += 1
                 if self._half_open_calls >= self.config.half_open_max_calls:
-                    # Recovered!
                     logger.info("[CircuitBreaker] Service recovered, closing circuit")
                     self._state = CircuitState.CLOSED
                     self._failure_count = 0
                     self._half_open_calls = 0
             elif self._state == CircuitState.CLOSED:
-                # Reset failure count on success
                 self._failure_count = 0
 
     async def record_failure(self) -> None:
@@ -110,13 +108,15 @@ class CircuitBreaker:
             self._last_failure_time = datetime.now()
 
             if self._state == CircuitState.HALF_OPEN:
-                # Failed during recovery test - reopen
                 logger.warning("[CircuitBreaker] Failed during recovery, reopening circuit")
                 self._state = CircuitState.OPEN
                 self._half_open_calls = 0
             elif self._state == CircuitState.CLOSED:
                 if self._failure_count >= self.config.failure_threshold:
-                    logger.warning("[CircuitBreaker] Failure threshold reached (%d), opening circuit", self._failure_count)
+                    logger.warning(
+                        "[CircuitBreaker] Failure threshold reached (%d), opening circuit",
+                        self._failure_count,
+                    )
                     self._state = CircuitState.OPEN
 
     async def try_acquire(self) -> bool:
@@ -135,7 +135,6 @@ class CircuitBreaker:
                         return True
                 return False
 
-            # HALF_OPEN
             if self._half_open_calls < self.config.half_open_max_calls:
                 return True
             return False
@@ -158,16 +157,18 @@ class RetryConfig:
     """Configuration for retry logic."""
 
     max_attempts: int = 3
-    base_delay: float = 1.0  # Initial delay in seconds
-    max_delay: float = 10.0  # Maximum delay
-    exponential_base: float = 2.0  # Multiplier for exponential backoff
+    base_delay: float = 1.0
+    max_delay: float = 10.0
+    exponential_base: float = 2.0
     retryable_exceptions: tuple = (OperationalError, ConnectionError, TimeoutError)
 
 
-async def retry_with_backoff(func: Callable, config: RetryConfig, operation_name: str = "operation") -> T:
-    """
-    Execute function with retry and exponential backoff.
-    """
+async def retry_with_backoff(
+    func: Callable,
+    config: RetryConfig,
+    operation_name: str = "operation",
+) -> T:
+    """Execute function with retry and exponential backoff."""
     last_exception = None
 
     for attempt in range(1, config.max_attempts + 1):
@@ -176,11 +177,25 @@ async def retry_with_backoff(func: Callable, config: RetryConfig, operation_name
         except config.retryable_exceptions as e:
             last_exception = e
             if attempt == config.max_attempts:
-                logger.error("[Retry] %s failed after %d attempts: %s", operation_name, attempt, e)
+                logger.error(
+                    "[Retry] %s failed after %d attempts: %s",
+                    operation_name,
+                    attempt,
+                    e,
+                )
                 raise
 
-            delay = min(config.base_delay * (config.exponential_base ** (attempt - 1)), config.max_delay)
-            logger.warning("[Retry] %s attempt %d failed: %s. Retrying in %.1fs...", operation_name, attempt, e, delay)
+            delay = min(
+                config.base_delay * (config.exponential_base ** (attempt - 1)),
+                config.max_delay,
+            )
+            logger.warning(
+                "[Retry] %s attempt %d failed: %s. Retrying in %.1fs...",
+                operation_name,
+                attempt,
+                e,
+                delay,
+            )
             await asyncio.sleep(delay)
 
     raise last_exception
@@ -195,8 +210,8 @@ async def retry_with_backoff(func: Callable, config: RetryConfig, operation_name
 class MssqlAdapterConfig:
     """Configuration for MSSQL adapter."""
 
-    query_timeout: float = 30.0  # Seconds
-    connect_timeout: int = 10  # Seconds
+    query_timeout: float = 30.0
+    connect_timeout: int = 10
     retry: RetryConfig = field(default_factory=RetryConfig)
     circuit_breaker: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
 
@@ -210,9 +225,14 @@ class MssqlAdapter(IRemoteDataSource):
     - Automatic retry with exponential backoff
     - Circuit breaker to prevent cascade failures
     - Graceful shutdown with operation tracking
+    - PyInstaller compatible (uses ODBC connection string)
     """
 
-    def __init__(self, connection_string: Optional[str] = None, config: Optional[MssqlAdapterConfig] = None) -> None:
+    def __init__(
+        self,
+        connection_string: Optional[str] = None,
+        config: Optional[MssqlAdapterConfig] = None,
+    ) -> None:
         self._config = config or MssqlAdapterConfig()
         self._engine: Optional[AsyncEngine] = None
         self._connection_string = connection_string
@@ -224,21 +244,32 @@ class MssqlAdapter(IRemoteDataSource):
         # Circuit breaker for resilience
         self._circuit_breaker = CircuitBreaker(self._config.circuit_breaker)
 
+        # Create engine if connection string provided
         if connection_string:
-            self._engine = create_async_engine(
-                connection_string,
-                poolclass=NullPool,
-                echo=False,
-                connect_args={
-                    "timeout": self._config.connect_timeout,
-                    # For pyodbc/aioodbc:
-                    # "attrs_before": {
-                    #     1: self._config.connect_timeout,  # SQL_ATTR_LOGIN_TIMEOUT
-                    #     2: self._config.query_timeout,    # SQL_ATTR_CONNECTION_TIMEOUT
-                    # }
-                },
-            )
-            logger.info("[MssqlAdapter] Engine created with timeout=%ds", self._config.query_timeout)
+            self._create_engine(connection_string)
+        else:
+            # Try to get from config
+            db_config = DatabaseConfig()
+            if db_config.mssql_url:
+                self._create_engine(db_config.mssql_url)
+                logger.info(
+                    "[MssqlAdapter] Using config: host=%s, db=%s, driver=%s",
+                    db_config.mssql_host,
+                    db_config.mssql_db,
+                    db_config.mssql_driver,
+                )
+
+    def _create_engine(self, url: str) -> None:
+        """Create SQLAlchemy async engine."""
+        self._engine = create_async_engine(
+            url,
+            poolclass=NullPool,
+            echo=False,
+        )
+        logger.info(
+            "[MssqlAdapter] Engine created with timeout=%ds",
+            self._config.query_timeout,
+        )
 
     @property
     def is_available(self) -> bool:
@@ -271,13 +302,22 @@ class MssqlAdapter(IRemoteDataSource):
         async with self._lock:
             self._active_count = max(0, self._active_count - 1)
 
-    async def _execute_with_timeout(self, coro, timeout: Optional[float] = None, operation_name: str = "query"):
+    async def _execute_with_timeout(
+        self,
+        coro,
+        timeout: Optional[float] = None,
+        operation_name: str = "query",
+    ):
         """Execute coroutine with timeout protection."""
         timeout = timeout or self._config.query_timeout
         try:
             return await asyncio.wait_for(coro, timeout=timeout)
         except asyncio.TimeoutError:
-            logger.error("[MssqlAdapter] %s timed out after %.1fs", operation_name, timeout)
+            logger.error(
+                "[MssqlAdapter] %s timed out after %.1fs",
+                operation_name,
+                timeout,
+            )
             raise TimeoutError(f"{operation_name} timed out after {timeout}s")
 
     def _parse_datetime(self, val: Any) -> datetime:
@@ -320,14 +360,7 @@ class MssqlAdapter(IRemoteDataSource):
         self,
         equipment_codes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Fetch latest status for devices.
-
-        Features:
-        - Automatic retry on transient failures
-        - Timeout protection
-        - Circuit breaker integration
-        """
+        """Fetch latest status for devices."""
         if not await self._enter_operation():
             return []
 
@@ -379,9 +412,13 @@ class MssqlAdapter(IRemoteDataSource):
                     rows = result.fetchall()
                     return [self._map_row(row) for row in rows]
 
-            # Execute with timeout and retry
             result = await retry_with_backoff(
-                lambda: self._execute_with_timeout(_do_fetch(), operation_name="fetch_latest_status"), self._config.retry, "fetch_latest_status"
+                lambda: self._execute_with_timeout(
+                    _do_fetch(),
+                    operation_name="fetch_latest_status",
+                ),
+                self._config.retry,
+                "fetch_latest_status",
             )
             success = True
             return result
@@ -397,7 +434,11 @@ class MssqlAdapter(IRemoteDataSource):
         finally:
             await self._exit_operation(success)
 
-    async def fetch_device_status(self, equip_code: str, days: int = 1) -> List[Dict[str, Any]]:
+    async def fetch_device_status(
+        self,
+        equip_code: str,
+        days: int = 1,
+    ) -> List[Dict[str, Any]]:
         """Fetch device status history for N days."""
         if not self.is_available:
             return []
@@ -405,7 +446,12 @@ class MssqlAdapter(IRemoteDataSource):
         start_of_range = now - timedelta(days=days)
         return await self.fetch_device_history_range(equip_code, start_of_range, now)
 
-    async def fetch_device_history_range(self, equip_code: str, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
+    async def fetch_device_history_range(
+        self,
+        equip_code: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> List[Dict[str, Any]]:
         """Fetch device history for a specific time range."""
         if not await self._enter_operation():
             return []
@@ -434,13 +480,20 @@ class MssqlAdapter(IRemoteDataSource):
                         return []
                     result = await conn.execute(
                         text(query),
-                        {"code": equip_code, "start_time": start_time, "end_time": end_time},
+                        {
+                            "code": equip_code,
+                            "start_time": start_time,
+                            "end_time": end_time,
+                        },
                     )
                     rows = result.fetchall()
                     return [self._map_row(row) for row in rows]
 
             result = await retry_with_backoff(
-                lambda: self._execute_with_timeout(_do_fetch(), operation_name=f"fetch_history({equip_code})"),
+                lambda: self._execute_with_timeout(
+                    _do_fetch(),
+                    operation_name=f"fetch_history({equip_code})",
+                ),
                 self._config.retry,
                 f"fetch_history({equip_code})",
             )
@@ -458,7 +511,11 @@ class MssqlAdapter(IRemoteDataSource):
         finally:
             await self._exit_operation(success)
 
-    async def fetch_latest_history_records(self, equip_code: str, limit: int = 1) -> List[Dict[str, Any]]:
+    async def fetch_latest_history_records(
+        self,
+        equip_code: str,
+        limit: int = 1,
+    ) -> List[Dict[str, Any]]:
         """Fetch N most recent history records for a device."""
         if not await self._enter_operation():
             return []
@@ -483,12 +540,18 @@ class MssqlAdapter(IRemoteDataSource):
                 async with self._engine.connect() as conn:
                     if self._disposing:
                         return []
-                    result = await conn.execute(text(query), {"code": equip_code, "limit": limit})
+                    result = await conn.execute(
+                        text(query),
+                        {"code": equip_code, "limit": limit},
+                    )
                     rows = result.fetchall()
                     return [self._map_row(row) for row in rows]
 
             result = await retry_with_backoff(
-                lambda: self._execute_with_timeout(_do_fetch(), operation_name=f"fetch_latest({equip_code})"),
+                lambda: self._execute_with_timeout(
+                    _do_fetch(),
+                    operation_name=f"fetch_latest({equip_code})",
+                ),
                 self._config.retry,
                 f"fetch_latest({equip_code})",
             )
@@ -507,24 +570,23 @@ class MssqlAdapter(IRemoteDataSource):
             await self._exit_operation(success)
 
     async def health_check(self) -> bool:
-        """
-        Check if database connection is healthy.
-
-        Useful for monitoring and debugging circuit breaker state.
-        """
+        """Check if database connection is healthy."""
         if not self._engine or self._is_disposed:
             return False
 
         try:
             async with self._engine.connect() as conn:
-                await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=5.0)
+                await asyncio.wait_for(
+                    conn.execute(text("SELECT 1")),
+                    timeout=5.0,
+                )
                 return True
         except Exception as e:
             logger.debug("[MssqlAdapter] Health check failed: %s", e)
             return False
 
     def reset_circuit_breaker(self) -> None:
-        """Manually reset circuit breaker (for admin/debugging)."""
+        """Manually reset circuit breaker."""
         self._circuit_breaker.reset()
         logger.info("[MssqlAdapter] Circuit breaker reset manually")
 
@@ -535,12 +597,10 @@ class MssqlAdapter(IRemoteDataSource):
 
         logger.info("[MssqlAdapter] Starting disposal...")
 
-        # Signal shutdown
         async with self._lock:
             self._disposing = True
             active = self._active_count
 
-        # Wait for active operations (max 5 seconds)
         if active > 0:
             logger.info(f"[MssqlAdapter] Waiting for {active} operations...")
             wait_time = 0
@@ -553,9 +613,12 @@ class MssqlAdapter(IRemoteDataSource):
                         break
 
             if self._active_count > 0:
-                logger.warning("[MssqlAdapter] Disposing with %d active operations after %.1fs timeout", self._active_count, max_wait)
+                logger.warning(
+                    "[MssqlAdapter] Disposing with %d active operations after %.1fs timeout",
+                    self._active_count,
+                    max_wait,
+                )
 
-        # Dispose engine
         self._is_disposed = True
         if self._engine:
             try:

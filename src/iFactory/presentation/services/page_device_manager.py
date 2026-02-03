@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from PySide6.QtCore import QObject, Signal
+from iFactory.infrastructure.configuration.paths import PATHS
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class PageDeviceManager(QObject):
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
-        self._config_path = config_path
+        self._config_path = config_path or PATHS.device_positions_path
         self._current_page = "electrode_page"
         self._page_devices: Dict[str, List[str]] = {}
         self._all_devices: Set[str] = set()

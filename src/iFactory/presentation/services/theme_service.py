@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional, Union, TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal, QSize
 from PySide6.QtGui import QColor, QIcon, QPixmap
+from iFactory.infrastructure.configuration.paths import PATHS
 
 if TYPE_CHECKING:
     from ..resources.icons import Icons, DeviceIcons
@@ -680,7 +681,7 @@ class ThemeService(QObject):
     def __init__(self, base_path: Optional[Path] = None, parent: Optional[QObject] = None):
         super().__init__(parent)
 
-        self._base_path = base_path or Path(__file__).parent.parent / "resources" / "themes"
+        self._base_path = base_path or PATHS.themes_dir
         self._styles_path = self._base_path / "styles"
         self._current_theme: str = "light"
         self._variables: Dict[str, Any] = {}

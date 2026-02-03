@@ -1,7 +1,8 @@
-# File: infrastructure/persistence/sqlalchemy/database.py
+# src/iFactory/infrastructure/persistence/sqlalchemy/database.py
 """
 Infrastructure: Database Connectivity.
 Simplified: Single storage engine with DatabaseManager class.
+Supports PyInstaller frozen environments.
 """
 
 from __future__ import annotations
@@ -11,15 +12,22 @@ from functools import lru_cache
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import (
-    create_async_engine,
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
+    create_async_engine,
 )
 
-from iFactory.infrastructure.configuration.db_settings import DatabaseConfig
+from iFactory.infrastructure.configuration.paths import PATHS
 
 logger = logging.getLogger(__name__)
+
+
+def _get_db_config():
+    """Lazy import to avoid circular dependency."""
+    from iFactory.infrastructure.configuration.db_settings import DatabaseConfig
+
+    return DatabaseConfig()
 
 
 # =============================================================================
@@ -30,9 +38,7 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """
     Database Manager for SQLAlchemy async sessions.
-
-    Provides a class-based interface for dependency injection,
-    wrapping the functional engine/session factories.
+    Supports PyInstaller frozen environments.
     """
 
     __slots__ = (
@@ -47,7 +53,7 @@ class DatabaseManager:
         Initialize DatabaseManager.
 
         Args:
-            db_url: SQLite database URL. If None, uses default from config.
+            db_url: SQLite database URL. If None, uses PATHS.storage_db_path.
         """
         self._db_url = db_url
         self._engine: Optional[AsyncEngine] = None
@@ -59,17 +65,22 @@ class DatabaseManager:
         if self._initialized:
             return
 
-        config = DatabaseConfig()
+        # Ensure directories exist (important for PyInstaller)
+        PATHS.ensure_directories()
+        PATHS.initialize_config_files()
 
-        # Determine URL
+        # Build URL from PATHS directly (not from config)
         if self._db_url:
             url = self._db_url
         else:
-            url = config.storage_db_url
+            # Use PATHS directly to avoid config path issues
+            db_path = PATHS.storage_db_path
+            url = f"sqlite+aiosqlite:///{db_path}"
 
-        # Convert to async driver if needed
-        if "sqlite:///" in url and "aiosqlite" not in url:
-            url = url.replace("sqlite:///", "sqlite+aiosqlite:///")
+        logger.info(f"[DatabaseManager] PATHS.storage_db_path = {PATHS.storage_db_path}")
+        logger.info(f"[DatabaseManager] Initializing SQLite: {url}")
+
+        config = _get_db_config()
 
         # Create engine
         self._engine = create_async_engine(
@@ -92,12 +103,13 @@ class DatabaseManager:
             async with self._engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
 
-            logger.info(f"[DatabaseManager] Initialized: {url}")
+            logger.info("[DatabaseManager] Tables created successfully")
         except Exception as e:
             logger.error(f"[DatabaseManager] Table creation failed: {e}")
             raise
 
         self._initialized = True
+        logger.info(f"[DatabaseManager] Initialized: {url}")
 
     @property
     def engine(self) -> AsyncEngine:
@@ -132,13 +144,18 @@ class DatabaseManager:
 def get_storage_engine() -> AsyncEngine:
     """
     Single Storage Engine for all local data.
-    Used for history data only (latest status comes from remote).
+    Uses PATHS directly for path resolution.
     """
-    config = DatabaseConfig()
-    url = config.storage_db_url
+    # Ensure directories exist
+    PATHS.ensure_directories()
 
-    if "sqlite:///" in url and "aiosqlite" not in url:
-        url = url.replace("sqlite:///", "sqlite+aiosqlite:///")
+    # Build URL from PATHS directly
+    db_path = PATHS.storage_db_path
+    url = f"sqlite+aiosqlite:///{db_path}"
+
+    config = _get_db_config()
+
+    logger.info(f"[Database] Creating storage engine: {db_path}")
 
     return create_async_engine(
         url,
@@ -161,17 +178,18 @@ def get_cold_engine() -> AsyncEngine:
 @lru_cache(maxsize=1)
 def get_mssql_engine() -> Optional[AsyncEngine]:
     """Async Engine for MSSQL remote source."""
-    config = DatabaseConfig()
+    config = _get_db_config()
     url = config.mssql_url
 
     if not url:
+        logger.warning("[Database] MSSQL not configured")
         return None
 
-    if "aioodbc" not in url and "pyodbc" in url:
-        url = url.replace("pyodbc", "aioodbc")
-    elif "driver=" in url and "aioodbc" not in url:
-        if url.startswith("mssql://"):
-            url = url.replace("mssql://", "mssql+aioodbc://")
+    logger.info(
+        "[Database] Creating MSSQL engine: host=%s, db=%s",
+        config.mssql_host,
+        config.mssql_db,
+    )
 
     return create_async_engine(
         url,
