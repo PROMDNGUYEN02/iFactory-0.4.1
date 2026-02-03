@@ -42,7 +42,7 @@ class ShellStateModel:
     """Complete shell state."""
 
     theme: str = "light"
-    current_page: str = "dashboard_page"
+    current_page: str = "electrode_page"
     sidebar_expanded: bool = False
     right_panel_expanded: bool = False
     selected_device_id: Optional[str] = None

@@ -51,7 +51,7 @@ class IconService(QObject):
         icon_service = get_icon_service()
 
         # Using enums (preferred)
-        icon = icon_service.get_icon(Icons.DASHBOARD)
+        icon = icon_service.get_icon(Icons.electrode)
         pixmap = icon_service.get_pixmap(Icons.SETTINGS, IconSize.LG)
 
         # Device icons

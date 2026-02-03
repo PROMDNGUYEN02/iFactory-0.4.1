@@ -130,14 +130,14 @@ QToolTip {
 }
 
 QFrame#daboard_top_frame,
-QFrame#orders_top_frame {
+QFrame#assembly_top_frame {
     background-color: ${frame.bg};
     border: none;
     border-bottom: 1px solid ${border};
 }
 
 QFrame#daboard_bottom_frame,
-QFrame#orders_bottom_frame {
+QFrame#assembly_bottom_frame {
     background-color: ${frame.bg};
     border: none;
     border-top: 1px solid ${border};

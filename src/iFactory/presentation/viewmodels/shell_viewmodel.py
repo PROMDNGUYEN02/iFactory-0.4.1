@@ -65,7 +65,7 @@ class ShellViewModel(BaseViewModel):
         self._page_manager = page_manager
 
         # State
-        self._current_page: str = "dashboard_page"
+        self._current_page: str = "electrode_page"
         self._sidebar_expanded: bool = False
         self._right_panel_expanded: bool = False
         self._system_status = SystemStatusModel()
@@ -151,7 +151,7 @@ class ShellViewModel(BaseViewModel):
 
     def navigate_to(self, page: str) -> None:
         """Navigate to a page."""
-        normalized = page.replace("daboard", "dashboard")
+        normalized = page.replace("daboard", "electrode")
         if not normalized.endswith("_page"):
             normalized = f"{normalized}_page"
 

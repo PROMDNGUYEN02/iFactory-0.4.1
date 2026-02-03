@@ -57,6 +57,17 @@ async def init_database() -> None:
         raise
 
 
+def init_event_system() -> None:
+    """Initialize domain event system."""
+    try:
+        from iFactory.application.event_handlers import register_event_handlers
+
+        register_event_handlers()
+        logger.info("Event system initialized")
+    except ImportError as e:
+        logger.warning(f"Event handlers not available: {e}")
+
+
 def create_qt_application():
     """Create and configure QApplication."""
     from PySide6.QtWidgets import QApplication
@@ -96,6 +107,9 @@ def run_application() -> int:
 
         asyncio.run(init_database())
         logger.info("Database initialized successfully")
+
+        # Initialize event system
+        init_event_system()
 
         # Create Qt Application
         qt_app = create_qt_application()

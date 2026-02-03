@@ -72,9 +72,9 @@ class IconResolver:
         Resolve legacy string path (backward compatibility).
 
         Handles various input formats:
-        - ":/icon/dashboard.svg"
-        - ":/icon/dashboard-white.svg"
-        - "dashboard"
+        - ":/icon/electrode.svg"
+        - ":/icon/electrode-white.svg"
+        - "electrode"
         - "/icon/devices/ACL.svg"
         """
         # Already has white suffix - strip it first for normalization

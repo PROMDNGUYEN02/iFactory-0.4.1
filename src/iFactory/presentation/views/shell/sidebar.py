@@ -364,8 +364,8 @@ class SidebarView:
     """Sidebar navigation view using ThemeService and Icons enum."""
 
     NAV_ITEMS = [
-        (Icons.DASHBOARD, "Dashboard", "dashboard_page"),
-        (Icons.ORDERS, "Analytics", "orders_page"),
+        (Icons.electrode, "Electrode", "electrode_page"),
+        (Icons.assembly, "Assembly", "assembly_page"),
     ]
 
     def __init__(
@@ -484,9 +484,9 @@ class SidebarView:
 
     def _update_active(self, current_page: str) -> None:
         """Update active button based on current page."""
-        normalized = current_page.replace("daboard", "dashboard")
+        normalized = current_page.replace("daboard", "electrode")
         for btn in self._nav_buttons:
-            btn_page = btn.page_id.replace("daboard", "dashboard")
+            btn_page = btn.page_id.replace("daboard", "electrode")
             btn.set_active(btn_page == normalized)
 
     def _update_expansion(self) -> None:

@@ -10,7 +10,7 @@ from .actions import Action, ActionType
 
 INITIAL_STATE: Dict[str, Any] = {
     "theme": "light",
-    "current_page": "dashboard_page",  # Default to dashboard
+    "current_page": "electrode_page",  # Default to electrode
     "sidebar_expanded": False,
     "right_panel_expanded": False,
     "selected_device_id": None,
@@ -72,7 +72,7 @@ def _handle_set_theme(state: Dict[str, Any], payload: str) -> Dict[str, Any]:
 
 
 def _handle_set_page(state: Dict[str, Any], payload: str) -> Dict[str, Any]:
-    normalized = payload.replace("daboard", "dashboard")
+    normalized = payload.replace("daboard", "electrode")
     return {**state, "current_page": normalized}
 
 

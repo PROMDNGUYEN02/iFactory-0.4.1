@@ -11,7 +11,7 @@ Usage:
     provider = get_icon_provider()
 
     # Get cached icon (theme-aware)
-    icon = provider.get_icon(Icons.DASHBOARD)
+    icon = provider.get_icon(Icons.electrode)
     pixmap = provider.get_pixmap(Icons.SETTINGS, QSize(32, 32))
 
     # Device icons by code

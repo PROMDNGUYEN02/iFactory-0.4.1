@@ -12,6 +12,7 @@ Features:
 - Centralized ThemeService management
 - Centralized IconService management
 - Icon preloading for faster startup
+- ID mapping support for display vs remote device IDs
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from ..views.main_window import MainWindow
 if TYPE_CHECKING:
     from iFactory.shared.di.app_container import AppContainer
     from iFactory.application.services.sync_orchestrator import SyncOrchestrator
+    from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
     from ..services.page_device_manager import PageDeviceManager
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,7 @@ class UIContainer(QObject):
     - Redux Store for cross-cutting state
     - Centralized ThemeService for theming
     - Centralized IconService for icon management
+    - ID mapping via DeviceFileAdapter for display vs remote IDs
     """
 
     def __init__(self, app_container: "AppContainer"):
@@ -78,6 +81,7 @@ class UIContainer(QObject):
 
         # Application Layer services
         self._sync_orchestrator: Optional["SyncOrchestrator"] = None
+        self._id_mapper: Optional["DeviceFileAdapter"] = None  # NEW
 
         # Timers
         self._refresh_timer: Optional[QTimer] = None
@@ -99,6 +103,7 @@ class UIContainer(QObject):
         # Initialize remaining components
         self._init_store()
         self._init_page_manager()
+        self._init_id_mapper()  # NEW: Get ID mapper from AppContainer
         self._preload_device_icons()
         self._init_sync_orchestrator()
         self._init_viewmodels()
@@ -150,6 +155,25 @@ class UIContainer(QObject):
         all_devices = self._page_manager.get_all_devices()
         logger.info(f"[UIContainer] PageDeviceManager: {len(all_devices)} devices")
 
+    def _init_id_mapper(self) -> None:
+        """Get ID mapper from AppContainer."""
+        try:
+            if hasattr(self._app, "device_file_adapter") and self._app.device_file_adapter:
+                self._id_mapper = self._app.device_file_adapter
+                logger.info("[UIContainer] Using ID mapper from AppContainer")
+            elif hasattr(self._app, "id_mapper") and self._app.id_mapper:
+                self._id_mapper = self._app.id_mapper
+                logger.info("[UIContainer] Using ID mapper from AppContainer")
+            else:
+                # Create local instance as fallback
+                from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
+
+                self._id_mapper = DeviceFileAdapter()
+                logger.info("[UIContainer] Created local DeviceFileAdapter as ID mapper")
+        except Exception as e:
+            logger.warning(f"[UIContainer] Failed to init ID mapper: {e}")
+            self._id_mapper = None
+
     def _preload_device_icons(self) -> None:
         """Preload device icons based on page manager devices."""
         if not self._icon_service or not self._page_manager:
@@ -180,22 +204,26 @@ class UIContainer(QObject):
     def _init_sync_orchestrator(self) -> None:
         """Get or create SyncOrchestrator from Application Layer."""
         try:
+            # Prefer using SyncOrchestrator from AppContainer (already has id_mapper)
             if hasattr(self._app, "sync_orchestrator") and self._app.sync_orchestrator:
                 self._sync_orchestrator = self._app.sync_orchestrator
                 logger.info("[UIContainer] Using SyncOrchestrator from AppContainer")
                 return
 
+            # Create local SyncOrchestrator if needed
             remote_source = getattr(self._app, "remote_source", None)
             uow_factory = getattr(self._app, "uow_factory", None)
 
             if remote_source:
                 from iFactory.application.services.sync_orchestrator import create_sync_orchestrator
 
+                # KEY: Pass id_mapper when creating local SyncOrchestrator
                 self._sync_orchestrator = create_sync_orchestrator(
                     remote_source=remote_source,
                     uow_factory=uow_factory or self._create_null_uow_factory(),
+                    id_mapper=self._id_mapper,  # NEW: Pass ID mapper
                 )
-                logger.info("[UIContainer] Created local SyncOrchestrator")
+                logger.info("[UIContainer] Created local SyncOrchestrator with ID mapping")
             else:
                 logger.warning("[UIContainer] No remote source - SyncOrchestrator disabled")
 
@@ -255,20 +283,24 @@ class UIContainer(QObject):
         )
         self._shell_vm.initialize()
 
-        # 2. Device List ViewModel
+        # 2. Device List ViewModel - pass id_mapper for display ID conversion
         self._device_vm = DeviceListViewModel(
             page_manager=self._page_manager,
             remote_source=remote_source,
             sync_orchestrator=self._sync_orchestrator,
             shell_vm=None,
+            id_mapper=self._id_mapper,  # NEW: Pass ID mapper to ViewModel
         )
         self._device_vm.initialize()
 
-        # 3. Gantt Chart ViewModel
-        self._gantt_vm = GanttChartViewModel(mssql_url=mssql_url)
+        # 3. Gantt Chart ViewModel - pass id_mapper for history queries
+        self._gantt_vm = GanttChartViewModel(
+            mssql_url=mssql_url,
+            id_mapper=self._id_mapper,  # NEW: Pass ID mapper to ViewModel
+        )
         self._gantt_vm.initialize()
 
-        logger.info("[UIContainer] ViewModels initialized")
+        logger.info("[UIContainer] ViewModels initialized with ID mapping support")
 
     def _wire_viewmodel_dependencies(self) -> None:
         """Wire up cross-ViewModel dependencies."""
@@ -421,6 +453,10 @@ class UIContainer(QObject):
     def get_icon_service(self) -> Optional[IconService]:
         """Get the centralized icon service."""
         return self._icon_service
+
+    def get_id_mapper(self) -> Optional["DeviceFileAdapter"]:
+        """Get the ID mapper for display <-> remote ID conversion."""
+        return self._id_mapper
 
     # =========================================================================
     # Lifecycle

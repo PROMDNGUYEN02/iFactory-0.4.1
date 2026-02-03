@@ -267,8 +267,8 @@
   },
   "iconAlias": {
     "dark": {
-      ":/icon/dashboard.svg": ":/icon/dashboard-white.svg",
-      ":/icon/orders.svg": ":/icon/orders-white.svg",
+      ":/icon/electrode.svg": ":/icon/electrode-white.svg",
+      ":/icon/assembly.svg": ":/icon/assembly-white.svg",
       ":/icon/products.svg": ":/icon/products-white.svg",
       ":/icon/customers.svg": ":/icon/customers-white.svg",
       ":/icon/reports.svg": ":/icon/reports-white.svg",
@@ -277,8 +277,8 @@
       ":/icon/expand.svg": ":/icon/expand-white.svg",
       ":/icon/arrow_menu_open.svg": ":/icon/arrow_menu_open-white.svg",
       ":/icon/arrow_menu_close.svg": ":/icon/arrow_menu_close-white.svg",
-      ":/icon/dashboard_layout.svg": ":/icon/dashboard_layout-white.svg",
-      ":/icon/orders_layout.svg": ":/icon/orders_layout-white.svg",
+      ":/icon/electrode_layout.svg": ":/icon/electrode_layout-white.svg",
+      ":/icon/assembly_layout.svg": ":/icon/assembly_layout-white.svg",
       ":/icon/left_panel_open.svg": ":/icon/left_panel_open-white.svg",
       ":/icon/left_panel_close.svg": ":/icon/left_panel_close-white.svg"
     },

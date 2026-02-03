@@ -1,15 +1,13 @@
+# File: presentation/viewmodels/models/gantt_model.py
 """
-Gantt Chart Data Models.
-
-Pure data classes for Gantt chart information.
-These are immutable data containers used by ViewModels.
+Gantt Chart Data Models - Updated for 00:00-24:00 display.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,15 +92,20 @@ class GanttStatsModel:
 
 @dataclass(frozen=True, slots=True)
 class GanttChartModel:
-    """Complete Gantt chart data for a device."""
+    """
+    Complete Gantt chart data for a device.
+
+    NEW: current_time field for rendering future zone.
+    """
 
     device_code: str
     device_name: str
     segments: List[GanttSegmentModel]
     hour_marks: List[GanttHourMarkModel]
-    start_time: datetime
-    end_time: datetime
-    total_duration_seconds: float
+    start_time: datetime  # 00:00 today
+    end_time: datetime  # 24:00 today (= 00:00 tomorrow)
+    total_duration_seconds: float  # Always 86400 (24 hours)
+    current_time: Optional[datetime] = None  # NEW: Current time for future zone
     stats: GanttStatsModel = field(default_factory=GanttStatsModel)
     current_status: str = "Unknown"
     current_status_color: str = "Transparent"
@@ -117,19 +120,35 @@ class GanttChartModel:
 
     @property
     def date_display(self) -> str:
-        return self.start_time.strftime("%B %d, %Y")
+        return self.start_time.strftime("%Y-%m-%d")
+
+    @property
+    def future_zone_start(self) -> Optional[datetime]:
+        """Start of future zone (from current_time to end_time)."""
+        return self.current_time
+
+    @property
+    def future_zone_percent(self) -> float:
+        """Percentage of the chart that is future time."""
+        if not self.current_time or self.total_duration_seconds <= 0:
+            return 0.0
+        future_seconds = (self.end_time - self.current_time).total_seconds()
+        return max(0, future_seconds / self.total_duration_seconds)
 
     @staticmethod
     def empty(device_code: str) -> "GanttChartModel":
         now = datetime.now()
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
         return GanttChartModel(
             device_code=device_code,
             device_name=device_code,
             segments=[],
             hour_marks=[],
-            start_time=now,
-            end_time=now,
-            total_duration_seconds=0,
+            start_time=start,
+            end_time=end,
+            current_time=now,
+            total_duration_seconds=86400,
         )
 
 
@@ -145,6 +164,9 @@ class GanttLoadingState:
     def has_error(self) -> bool:
         return bool(self.error_message)
 
+
+# Need import for empty() method
+from datetime import timedelta
 
 # Color palette with gradients for status visualization
 STATUS_GRADIENTS: dict[int, Tuple[str, str]] = {

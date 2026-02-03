@@ -48,7 +48,7 @@ class PageDeviceManager(QObject):
     ):
         super().__init__(parent)
         self._config_path = config_path
-        self._current_page = "dashboard_page"
+        self._current_page = "electrode_page"
         self._page_devices: Dict[str, List[str]] = {}
         self._all_devices: Set[str] = set()
 
@@ -105,12 +105,12 @@ class PageDeviceManager(QObject):
         """Map area key from config to page name."""
         area_lower = area_key.lower()
 
-        if "dashboard" in area_lower or "daboard" in area_lower:
-            return "dashboard_page"
+        if "electrode" in area_lower or "daboard" in area_lower:
+            return "electrode_page"
         elif "order" in area_lower:
-            return "orders_page"
+            return "assembly_page"
         else:
-            return "dashboard_page"
+            return "electrode_page"
 
     def set_current_page(self, page_name: str) -> List[str]:
         """
@@ -142,7 +142,7 @@ class PageDeviceManager(QObject):
 
     def _normalize_page_name(self, page_name: str) -> str:
         """Normalize page name to consistent format."""
-        normalized = page_name.replace("daboard", "dashboard")
+        normalized = page_name.replace("daboard", "electrode")
         if not normalized.endswith("_page"):
             normalized = f"{normalized}_page"
         return normalized

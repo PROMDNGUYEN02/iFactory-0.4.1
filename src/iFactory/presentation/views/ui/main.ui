@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1025</width>
-    <height>600</height>
+    <width>1021</width>
+    <height>592</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -254,9 +254,9 @@
        <number>0</number>
       </property>
       <property name="currentIndex">
-       <number>0</number>
+       <number>1</number>
       </property>
-      <widget class="QWidget" name="daboard_page">
+      <widget class="QWidget" name="electrode_page">
        <layout class="QVBoxLayout" name="verticalLayout_3">
         <property name="spacing">
          <number>0</number>
@@ -274,7 +274,7 @@
          <number>0</number>
         </property>
         <item>
-         <widget class="QFrame" name="daboard_top_frame">
+         <widget class="QFrame" name="electrode_top_frame">
           <property name="minimumSize">
            <size>
             <width>0</width>
@@ -653,7 +653,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QFrame" name="daboard_midle_frame_1">
+         <widget class="QFrame" name="electrode_midle_frame_1">
           <property name="styleSheet">
            <string notr="true"/>
           </property>
@@ -666,7 +666,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QFrame" name="daboard_midle_frame_2">
+         <widget class="QFrame" name="electrode_midle_frame_2">
           <property name="maximumSize">
            <size>
             <width>16777215</width>
@@ -696,7 +696,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QFrame" name="daboard_bottom_frame">
+         <widget class="QFrame" name="electrode_bottom_frame">
           <property name="maximumSize">
            <size>
             <width>16777215</width>
@@ -733,7 +733,7 @@
         </item>
        </layout>
       </widget>
-      <widget class="QWidget" name="orders_page">
+      <widget class="QWidget" name="assembly_page">
        <layout class="QVBoxLayout" name="verticalLayout_2">
         <property name="spacing">
          <number>0</number>
@@ -751,7 +751,7 @@
          <number>0</number>
         </property>
         <item>
-         <widget class="QFrame" name="orders_top_frame">
+         <widget class="QFrame" name="assembly_top_frame">
           <property name="minimumSize">
            <size>
             <width>0</width>
@@ -1130,7 +1130,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QFrame" name="orders_midle_frame_1">
+         <widget class="QFrame" name="assembly_midle_frame_1">
           <property name="mouseTracking">
            <bool>true</bool>
           </property>
@@ -1149,7 +1149,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QFrame" name="orders_midle_frame_2">
+         <widget class="QFrame" name="assembly_midle_frame_2">
           <property name="maximumSize">
            <size>
             <width>16777215</width>
@@ -1182,7 +1182,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QFrame" name="orders_bottom_frame">
+         <widget class="QFrame" name="assembly_bottom_frame">
           <property name="maximumSize">
            <size>
             <width>16777215</width>

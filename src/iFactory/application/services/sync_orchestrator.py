@@ -1,15 +1,6 @@
 # File: application/services/sync_orchestrator.py
 """
-Sync Orchestrator Service.
-
-Coordinates sync operations as an Application Layer facade.
-This service is UI-AGNOSTIC - it operates on explicit device IDs
-provided by callers, not on implicit UI state.
-
-The Presentation Layer (e.g., Controllers) is responsible for:
-- Determining which devices are currently visible/relevant
-- Calling the orchestrator with explicit device ID lists
-- Handling the sync results for UI updates
+Sync Orchestrator Service - With ID Mapping Support.
 """
 
 from __future__ import annotations
@@ -21,6 +12,8 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Set
 from iFactory.application.ports.remote import IRemoteDataSource
 from iFactory.application.ports.uow import AbstractUnitOfWork
 from iFactory.application.commands.sync import (
+    IDeviceIdMapper,
+    NoOpIdMapper,
     SyncLatestStatusHandler,
     SyncLatestStatusRequest,
     SyncLatestStatusResult,
@@ -34,51 +27,29 @@ from iFactory.application.commands.sync import (
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Callback Protocol for Sync Events
-# =============================================================================
-
-
 class SyncEventListener(Protocol):
     """Protocol for sync event callbacks."""
 
-    def __call__(self, result: SyncLatestStatusResult) -> None:
-        """Handle sync completion event."""
-        ...
-
-
-# =============================================================================
-# Sync Session State
-# =============================================================================
+    def __call__(self, result: SyncLatestStatusResult) -> None: ...
 
 
 class SyncSession:
-    """
-    Tracks sync state for a session.
-
-    This is Application Layer state, not UI state.
-    It tracks which devices have had their initial history loaded
-    to avoid redundant fetches.
-    """
+    """Tracks sync state for a session."""
 
     def __init__(self):
         self._initial_history_loaded: Set[str] = set()
         self._last_sync_time: Optional[datetime] = None
 
     def mark_history_loaded(self, device_ids: List[str]) -> None:
-        """Mark devices as having initial history loaded."""
         self._initial_history_loaded.update(device_ids)
 
     def filter_unloaded(self, device_ids: List[str]) -> List[str]:
-        """Return only devices that haven't had initial history loaded."""
         return [d for d in device_ids if d not in self._initial_history_loaded]
 
     def is_history_loaded(self, device_id: str) -> bool:
-        """Check if a device has had initial history loaded."""
         return device_id in self._initial_history_loaded
 
     def record_sync(self) -> None:
-        """Record that a sync occurred."""
         self._last_sync_time = datetime.now()
 
     @property
@@ -90,70 +61,49 @@ class SyncSession:
         return len(self._initial_history_loaded)
 
     def reset(self) -> None:
-        """Reset session state (e.g., on reconnect)."""
         self._initial_history_loaded.clear()
         self._last_sync_time = None
 
 
-# =============================================================================
-# Sync Orchestrator
-# =============================================================================
-
-
 class SyncOrchestrator:
     """
-    Orchestrates all sync operations.
+    Orchestrates all sync operations with ID mapping support.
 
-    This is a Facade/Coordinator that:
-    1. Delegates to appropriate command handlers
-    2. Manages session state (initial history tracking)
-    3. Provides a simple API for the Presentation Layer
-
-    UI Decoupling:
-    - All methods accept explicit device_ids parameters
-    - No internal tracking of "current page" or UI concepts
-    - Callers are responsible for determining which devices to sync
+    The id_mapper converts between:
+    - display_ids: Used in UI (e.g., "ALS01")
+    - remote_ids: Used in database queries (e.g., "ASL01")
     """
 
     def __init__(
         self,
         remote_source: IRemoteDataSource,
         uow_factory: Callable[[], AbstractUnitOfWork],
+        id_mapper: Optional[IDeviceIdMapper] = None,
         on_sync_complete: Optional[SyncEventListener] = None,
     ):
         self._remote_source = remote_source
         self._uow_factory = uow_factory
+        self._id_mapper = id_mapper or NoOpIdMapper()
         self._on_sync_complete = on_sync_complete
 
-        # Command handlers
-        self._latest_handler = SyncLatestStatusHandler(remote_source, uow_factory)
-        self._history_handler = SyncHistoryHandler(remote_source, uow_factory)
-        self._incremental_handler = SyncIncrementalHistoryHandler(remote_source, uow_factory)
+        # Command handlers with ID mapper
+        self._latest_handler = SyncLatestStatusHandler(remote_source, uow_factory, self._id_mapper)
+        self._history_handler = SyncHistoryHandler(remote_source, uow_factory, self._id_mapper)
+        self._incremental_handler = SyncIncrementalHistoryHandler(remote_source, uow_factory, self._id_mapper)
 
-        # Session state
         self._session = SyncSession()
-
-        # Statistics
         self._stats = {
             "total_latest_syncs": 0,
             "total_history_syncs": 0,
             "total_incremental_syncs": 0,
         }
 
-    # -------------------------------------------------------------------------
-    # Primary Sync Methods (Explicit Device IDs)
-    # -------------------------------------------------------------------------
-
     async def sync_latest_status(self, device_ids: List[str]) -> SyncLatestStatusResult:
         """
         Sync latest status for the specified devices.
 
         Args:
-            device_ids: Explicit list of equipment codes to sync.
-                       Empty list results in no-op.
-
-        Returns:
-            SyncLatestStatusResult with synced device data.
+            device_ids: Explicit list of DISPLAY equipment codes to sync.
         """
         if not device_ids:
             logger.debug("[SyncOrchestrator] No device IDs provided for latest sync")
@@ -165,7 +115,6 @@ class SyncOrchestrator:
         self._session.record_sync()
         self._stats["total_latest_syncs"] += 1
 
-        # Notify listeners
         if self._on_sync_complete and result.success:
             self._on_sync_complete(result)
 
@@ -181,18 +130,8 @@ class SyncOrchestrator:
         Sync initial history for devices that haven't been loaded yet.
 
         Args:
-            device_ids: Devices to potentially sync.
-            start_time: Start of range (default: 00:00 today).
-            end_time: End of range (default: now).
-
-        Returns:
-            SyncHistoryResult with count of synced records.
-
-        Note:
-            Automatically filters out devices that have already had
-            initial history loaded this session.
+            device_ids: DISPLAY IDs of devices to potentially sync.
         """
-        # Filter to only unloaded devices
         unloaded_ids = self._session.filter_unloaded(device_ids)
 
         if not unloaded_ids:
@@ -224,11 +163,7 @@ class SyncOrchestrator:
         Sync recent history records for incremental updates.
 
         Args:
-            device_ids: Devices to sync.
-            record_limit: Number of recent records per device.
-
-        Returns:
-            SyncHistoryResult with count of updated records.
+            device_ids: DISPLAY IDs of devices to sync.
         """
         if not device_ids:
             return SyncHistoryResult()
@@ -254,44 +189,25 @@ class SyncOrchestrator:
         Combined sync: Latest status + History (initial or incremental).
 
         Args:
-            device_ids: Devices to sync.
-            force_initial_history: If True, reload history even if already loaded.
-
-        Returns:
-            SyncLatestStatusResult from the latest status sync.
+            device_ids: DISPLAY IDs of devices to sync.
         """
         if not device_ids:
             return SyncLatestStatusResult(count=0, timestamp=datetime.now())
 
-        # Sync latest status
         latest_result = await self.sync_latest_status(device_ids)
 
-        # Determine history sync strategy
         unloaded_ids = self._session.filter_unloaded(device_ids)
 
         if unloaded_ids or force_initial_history:
-            # Initial load for new devices
             ids_to_load = device_ids if force_initial_history else unloaded_ids
             await self.sync_initial_history(ids_to_load)
         else:
-            # Incremental for already loaded devices
             await self.sync_incremental_history(device_ids)
 
         return latest_result
 
-    # -------------------------------------------------------------------------
-    # Convenience Methods
-    # -------------------------------------------------------------------------
-
     def reset_session(self) -> None:
-        """
-        Reset session state.
-
-        Call this when:
-        - User explicitly requests refresh
-        - Connection is re-established after failure
-        - Application needs to reload all data
-        """
+        """Reset session state."""
         self._session.reset()
         logger.info("[SyncOrchestrator] Session reset")
 
@@ -307,52 +223,28 @@ class SyncOrchestrator:
             "devices_with_history": self._session.loaded_device_count,
         }
 
-    # -------------------------------------------------------------------------
-    # Deprecated Methods (Backward Compatibility)
-    # -------------------------------------------------------------------------
-
     def set_page_devices(self, device_codes: List[str]) -> None:
-        """
-        DEPRECATED: This method exists for backward compatibility only.
-
-        The Application Layer should not track UI concepts like "pages".
-        Instead, callers should pass device_ids directly to sync methods.
-
-        This method now does nothing but log a deprecation warning.
-        """
+        """DEPRECATED: Pass device_ids directly to sync methods."""
         import warnings
 
         warnings.warn(
-            "set_page_devices() is deprecated. " "Pass device_ids directly to sync methods instead.",
+            "set_page_devices() is deprecated. Pass device_ids directly to sync methods.",
             DeprecationWarning,
             stacklevel=2,
         )
-        logger.warning(
-            "[SyncOrchestrator] DEPRECATED: set_page_devices() called. "
-            "This method no longer has any effect. "
-            "Pass device_ids directly to sync methods."
-        )
-
-
-# =============================================================================
-# Factory Function
-# =============================================================================
 
 
 def create_sync_orchestrator(
     remote_source: IRemoteDataSource,
     uow_factory: Callable[[], AbstractUnitOfWork],
+    id_mapper: Optional[IDeviceIdMapper] = None,
     on_sync_complete: Optional[SyncEventListener] = None,
 ) -> SyncOrchestrator:
-    """
-    Factory function to create a SyncOrchestrator.
-
-    This is the recommended way to instantiate the orchestrator,
-    ensuring all dependencies are properly injected.
-    """
+    """Factory function to create a SyncOrchestrator."""
     return SyncOrchestrator(
         remote_source=remote_source,
         uow_factory=uow_factory,
+        id_mapper=id_mapper,
         on_sync_complete=on_sync_complete,
     )
 

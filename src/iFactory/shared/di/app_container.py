@@ -1,3 +1,4 @@
+# File: shared/di/app_container.py
 """
 Main Application DI Container - Remote-First Architecture with MVVM.
 
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Callable
 
 from iFactory.infrastructure.adapters.mssql_adapter import MssqlAdapter as MssqlDataSource
+from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
 from iFactory.infrastructure.configuration.paths import PATHS
 from iFactory.infrastructure.configuration.db_settings import DatabaseConfig
 from iFactory.infrastructure.configuration.settings import SettingsManager
@@ -38,6 +40,7 @@ class AppContainer:
     - Remote-First: Device status fetched directly from MSSQL
     - MVVM Pattern: ViewModels orchestrate Use Cases
     - New Sync API: SyncOrchestrator receives explicit device IDs
+    - ID Mapping: DeviceFileAdapter maps display IDs <-> remote IDs
     """
 
     __slots__ = (
@@ -46,6 +49,7 @@ class AppContainer:
         "_db_config",
         "_db_manager",
         "_remote_data_source",
+        "_device_file_adapter",  # NEW: For ID mapping
         "_sync_orchestrator",
         "_uow_factory",
         "_ui_container",
@@ -59,6 +63,7 @@ class AppContainer:
         self._db_config: Optional[DatabaseConfig] = None
         self._db_manager: Optional["DatabaseManager"] = None
         self._remote_data_source = None
+        self._device_file_adapter: Optional[DeviceFileAdapter] = None  # NEW
         self._sync_orchestrator: Optional["SyncOrchestrator"] = None
         self._uow_factory: Optional[Callable[[], "AbstractUnitOfWork"]] = None
         self._ui_container = None
@@ -73,6 +78,7 @@ class AppContainer:
         logger.info("[AppContainer] Initializing with MVVM architecture...")
 
         self._load_settings()
+        self._init_device_file_adapter()  # NEW: Initialize before infrastructure
         await self._init_infrastructure()
         self._init_application_layer()
         self._init_presentation()
@@ -88,6 +94,28 @@ class AppContainer:
         except Exception as e:
             logger.warning(f"Settings load failed: {e}")
             self._db_config = DatabaseConfig()
+
+    def _init_device_file_adapter(self) -> None:
+        """Initialize device file adapter for ID mapping."""
+        try:
+            self._device_file_adapter = DeviceFileAdapter()
+
+            # Log mapping info for debugging
+            mapping = self._device_file_adapter.get_display_to_remote_mapping()
+            mapped_count = sum(1 for k, v in mapping.items() if k != v)
+
+            if mapped_count > 0:
+                logger.info(f"[AppContainer] DeviceFileAdapter: {mapped_count} devices with ID mapping")
+                # Log specific mappings for debugging
+                for display_id, remote_id in mapping.items():
+                    if display_id != remote_id:
+                        logger.debug(f"  {display_id} -> {remote_id}")
+            else:
+                logger.info("[AppContainer] DeviceFileAdapter: No ID mappings configured")
+
+        except Exception as e:
+            logger.warning(f"DeviceFileAdapter init failed: {e}")
+            self._device_file_adapter = None
 
     async def _init_infrastructure(self) -> None:
         """Initialize infrastructure components."""
@@ -150,13 +178,15 @@ class AppContainer:
                 create_sync_orchestrator,
             )
 
+            # KEY CHANGE: Pass device_file_adapter as id_mapper
             self._sync_orchestrator = create_sync_orchestrator(
                 remote_source=self._remote_data_source,
                 uow_factory=self._uow_factory or self._create_null_uow_factory(),
+                id_mapper=self._device_file_adapter,  # NEW: ID mapping support
                 on_sync_complete=self._on_sync_complete,
             )
 
-            logger.info("[AppContainer] SyncOrchestrator configured")
+            logger.info("[AppContainer] SyncOrchestrator configured with ID mapping")
 
         except Exception as e:
             logger.error(f"SyncOrchestrator init failed: {e}")
@@ -207,6 +237,16 @@ class AppContainer:
     def remote_source(self):
         """Get remote data source."""
         return self._remote_data_source
+
+    @property
+    def device_file_adapter(self) -> Optional[DeviceFileAdapter]:
+        """Get device file adapter (also serves as ID mapper)."""
+        return self._device_file_adapter
+
+    @property
+    def id_mapper(self) -> Optional[DeviceFileAdapter]:
+        """Get ID mapper (alias for device_file_adapter)."""
+        return self._device_file_adapter
 
     @property
     def sync_orchestrator(self) -> Optional["SyncOrchestrator"]:
@@ -270,6 +310,11 @@ class AppContainer:
                 logger.warning(f"Error disposing database manager: {e}")
             finally:
                 self._db_manager = None
+
+        # Clear device file adapter cache
+        if self._device_file_adapter:
+            self._device_file_adapter.invalidate_cache()
+            self._device_file_adapter = None
 
         self._sync_orchestrator = None
         self._uow_factory = None

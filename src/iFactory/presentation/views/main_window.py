@@ -91,12 +91,12 @@ class MainWindow(QMainWindow):
     def _get_current_page(self) -> str:
         return self._shell_vm.current_page
 
-    def _is_dashboard_page(self) -> bool:
+    def _is_electrode_page(self) -> bool:
         page = self._get_current_page()
-        return "dashboard" in page or "daboard" in page
+        return "electrode" in page or "electrode" in page
 
-    def _is_orders_page(self) -> bool:
-        return "orders" in self._get_current_page()
+    def _is_assembly_page(self) -> bool:
+        return "assembly" in self._get_current_page()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -155,8 +155,8 @@ class MainWindow(QMainWindow):
                 devices_dict[code] = device
 
         # FIXED: Render to BOTH canvases - each filters its own devices
-        self.canvas_dashboard.render_state(devices_dict, is_dark)
-        self.canvas_orders.render_state(devices_dict, is_dark)
+        self.canvas_electrode.render_state(devices_dict, is_dark)
+        self.canvas_assembly.render_state(devices_dict, is_dark)
 
     @Slot(object)
     def _on_selection_changed(self, selection: "DeviceSelectionModel") -> None:
@@ -170,12 +170,12 @@ class MainWindow(QMainWindow):
             )
         else:
             self._gantt_vm.clear_chart()
-            if self._is_dashboard_page():
-                self.device_gantt_dashboard.show_placeholder()
-                self.legend_dashboard.clear_stats()
-            elif self._is_orders_page():
-                self.device_gantt_orders.show_placeholder()
-                self.legend_orders.clear_stats()
+            if self._is_electrode_page():
+                self.device_gantt_electrode.show_placeholder()
+                self.legend_electrode.clear_stats()
+            elif self._is_assembly_page():
+                self.device_gantt_assembly.show_placeholder()
+                self.legend_assembly.clear_stats()
 
     @Slot(object)
     def _on_device_state_changed(self, state) -> None:
@@ -206,26 +206,30 @@ class MainWindow(QMainWindow):
             for seg in chart.segments
         ]
 
-        # Only render Gantt for current page
-        if self._is_dashboard_page():
-            self.device_gantt_dashboard.render_device_gantt(
-                device_code=chart.device_code,
-                device_name=chart.device_name,
-                segments=segments,
-                start_time=chart.start_time,
-                end_time=chart.end_time,
-            )
-            self.legend_dashboard.render_stats({chart.device_code: segments}, chart.start_time, chart.end_time)
+        # Pass current_time for future zone rendering
+        current_time = chart.current_time or datetime.now()
 
-        elif self._is_orders_page():
-            self.device_gantt_orders.render_device_gantt(
+        if self._is_electrode_page():
+            self.device_gantt_electrode.render_device_gantt(
                 device_code=chart.device_code,
                 device_name=chart.device_name,
                 segments=segments,
                 start_time=chart.start_time,
                 end_time=chart.end_time,
+                current_time=current_time,  # NEW
             )
-            self.legend_orders.render_stats({chart.device_code: segments}, chart.start_time, chart.end_time)
+            self.legend_electrode.render_stats({chart.device_code: segments}, chart.start_time, chart.end_time)
+
+        elif self._is_assembly_page():
+            self.device_gantt_assembly.render_device_gantt(
+                device_code=chart.device_code,
+                device_name=chart.device_name,
+                segments=segments,
+                start_time=chart.start_time,
+                end_time=chart.end_time,
+                current_time=current_time,  # NEW
+            )
+            self.legend_assembly.render_stats({chart.device_code: segments}, chart.start_time, chart.end_time)
 
     @Slot(object)
     def _on_gantt_loading_changed(self, state) -> None:
@@ -235,16 +239,16 @@ class MainWindow(QMainWindow):
         now = datetime.now()
         start = now - timedelta(hours=24)
 
-        if self._is_dashboard_page():
-            self.device_gantt_dashboard.render_device_gantt(
+        if self._is_electrode_page():
+            self.device_gantt_electrode.render_device_gantt(
                 device_code=state.device_code,
                 device_name=f"{state.device_code} (Loading...)",
                 segments=[],
                 start_time=start,
                 end_time=now,
             )
-        elif self._is_orders_page():
-            self.device_gantt_orders.render_device_gantt(
+        elif self._is_assembly_page():
+            self.device_gantt_assembly.render_device_gantt(
                 device_code=state.device_code,
                 device_name=f"{state.device_code} (Loading...)",
                 segments=[],
@@ -264,10 +268,10 @@ class MainWindow(QMainWindow):
     def _clear_gantt_on_page_switch(self) -> None:
         if not self._components_ready:
             return
-        self.device_gantt_dashboard.show_placeholder()
-        self.device_gantt_orders.show_placeholder()
-        self.legend_dashboard.clear_stats()
-        self.legend_orders.clear_stats()
+        self.device_gantt_electrode.show_placeholder()
+        self.device_gantt_assembly.show_placeholder()
+        self.legend_electrode.clear_stats()
+        self.legend_assembly.clear_stats()
 
     @Slot(bool)
     def _on_sidebar_changed(self, expanded: bool) -> None:
@@ -305,10 +309,10 @@ class MainWindow(QMainWindow):
         self.ui.left_slide_menu_frame.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
         self.ui.title_frame.setFixedWidth(Layout.SIDEBAR_COLLAPSED_WIDTH)
 
-        if hasattr(self.ui, "dashboard_page"):
-            self.ui.stackedWidget.setCurrentWidget(self.ui.dashboard_page)
-        elif hasattr(self.ui, "daboard_page"):
-            self.ui.stackedWidget.setCurrentWidget(self.ui.daboard_page)
+        if hasattr(self.ui, "electrode_page"):
+            self.ui.stackedWidget.setCurrentWidget(self.ui.electrode_page)
+        elif hasattr(self.ui, "electrode_page"):
+            self.ui.stackedWidget.setCurrentWidget(self.ui.electrode_page)
 
     def _init_shell(self) -> None:
         self.header = HeaderView(
@@ -351,52 +355,52 @@ class MainWindow(QMainWindow):
         logger.info("[MainWindow] Initializing workspace...")
 
         try:
-            dash_config = self._shell_vm.get_layout_config("daboard_midle_frame_1")
-            orders_config = self._shell_vm.get_layout_config("orders_midle_frame_1")
+            dash_config = self._shell_vm.get_layout_config("electrode_midle_frame_1")
+            assembly_config = self._shell_vm.get_layout_config("assembly_midle_frame_1")
 
-            self.canvas_dashboard = self._embed(
-                self.ui.daboard_midle_frame_1,
+            self.canvas_electrode = self._embed(
+                self.ui.electrode_midle_frame_1,
                 DeviceCanvasWidget(
-                    area_key="dashboard",
+                    area_key="electrode",
                     layout_config=dash_config,
                     theme_service=self._theme_service,
                     parent=self,
                 ),
             )
-            self.device_gantt_dashboard = self._embed(
-                self.ui.daboard_midle_frame_2,
+            self.device_gantt_electrode = self._embed(
+                self.ui.electrode_midle_frame_2,
                 DeviceGanttDisplayWidget(theme_service=self._theme_service, parent=self),
             )
-            self.legend_dashboard = self._embed(
-                self.ui.daboard_bottom_frame,
+            self.legend_electrode = self._embed(
+                self.ui.electrode_bottom_frame,
                 LegendWidget(theme_service=self._theme_service, parent=self),
             )
 
-            self.canvas_orders = self._embed(
-                self.ui.orders_midle_frame_1,
+            self.canvas_assembly = self._embed(
+                self.ui.assembly_midle_frame_1,
                 DeviceCanvasWidget(
-                    area_key="orders",
-                    layout_config=orders_config,
+                    area_key="assembly",
+                    layout_config=assembly_config,
                     theme_service=self._theme_service,
                     parent=self,
                 ),
             )
-            self.device_gantt_orders = self._embed(
-                self.ui.orders_midle_frame_2,
+            self.device_gantt_assembly = self._embed(
+                self.ui.assembly_midle_frame_2,
                 DeviceGanttDisplayWidget(theme_service=self._theme_service, parent=self),
             )
-            self.legend_orders = self._embed(
-                self.ui.orders_bottom_frame,
+            self.legend_assembly = self._embed(
+                self.ui.assembly_bottom_frame,
                 LegendWidget(theme_service=self._theme_service, parent=self),
             )
 
-            self.canvas_dashboard.device_clicked.connect(self._on_device_single_clicked)
-            self.canvas_orders.device_clicked.connect(self._on_device_single_clicked)
-            self.canvas_dashboard.device_double_clicked.connect(self._on_device_double_clicked)
-            self.canvas_orders.device_double_clicked.connect(self._on_device_double_clicked)
+            self.canvas_electrode.device_clicked.connect(self._on_device_single_clicked)
+            self.canvas_assembly.device_clicked.connect(self._on_device_single_clicked)
+            self.canvas_electrode.device_double_clicked.connect(self._on_device_double_clicked)
+            self.canvas_assembly.device_double_clicked.connect(self._on_device_double_clicked)
 
-            self.ui.daboard_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
-            self.ui.orders_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
+            self.ui.electrode_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
+            self.ui.assembly_bottom_frame.setMaximumHeight(Layout.LEGEND_HEIGHT)
 
             self._components_ready = True
 
@@ -404,10 +408,10 @@ class MainWindow(QMainWindow):
             if devices:
                 is_dark = self._theme_service.is_dark
                 devices_dict = {k: v.to_dict() if hasattr(v, "to_dict") else v for k, v in devices.items()}
-                self.canvas_dashboard.render_state(devices_dict, is_dark)
+                self.canvas_electrode.render_state(devices_dict, is_dark)
 
-            self.device_gantt_dashboard.show_placeholder()
-            self.device_gantt_orders.show_placeholder()
+            self.device_gantt_electrode.show_placeholder()
+            self.device_gantt_assembly.show_placeholder()
 
             logger.info("[MainWindow] Workspace initialized")
 
@@ -436,14 +440,14 @@ class MainWindow(QMainWindow):
 
         if self._components_ready:
             is_dark = self._theme_service.is_dark
-            self.device_gantt_dashboard.set_theme(is_dark)
-            self.device_gantt_orders.set_theme(is_dark)
+            self.device_gantt_electrode.set_theme(is_dark)
+            self.device_gantt_assembly.set_theme(is_dark)
 
     def _apply_page_theme(self) -> None:
         tokens = self._theme_service.tokens
 
         page_style = f"background-color: {tokens.surface_app};"
-        for page_name in ["daboard_page", "orders_page"]:
+        for page_name in ["electrode_page", "assembly_page"]:
             page = getattr(self.ui, page_name, None)
             if page:
                 page.setStyleSheet(page_style)
@@ -455,7 +459,7 @@ class MainWindow(QMainWindow):
                 border-bottom: 1px solid {tokens.border_default};
             }}
         """
-        for frame_name in ["daboard_top_frame", "orders_top_frame"]:
+        for frame_name in ["electrode_top_frame", "assembly_top_frame"]:
             frame = getattr(self.ui, frame_name, None)
             if frame:
                 frame.setStyleSheet(top_frame_style)
@@ -467,13 +471,13 @@ class MainWindow(QMainWindow):
                 border-top: 1px solid {tokens.border_default};
             }}
         """
-        for frame_name in ["daboard_bottom_frame", "orders_bottom_frame"]:
+        for frame_name in ["electrode_bottom_frame", "assembly_bottom_frame"]:
             frame = getattr(self.ui, frame_name, None)
             if frame:
                 frame.setStyleSheet(bottom_frame_style)
 
     def _switch_page(self, page: str) -> None:
-        page_name = page.replace("dashboard", "daboard") if "dashboard" in page else page
+        page_name = page.replace("electrode", "electrode") if "electrode" in page else page
         target = getattr(self.ui, page_name, None)
         if target and self.ui.stackedWidget.currentWidget() != target:
             self.ui.stackedWidget.setCurrentWidget(target)

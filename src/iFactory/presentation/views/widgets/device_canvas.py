@@ -439,10 +439,10 @@ class DeviceCanvasWidget(QWidget):
     def _get_background_path(self, is_dark: bool) -> str:
         key = self.area_key.lower()
 
-        if "dashboard" in key or "daboard" in key:
-            icon = Icons.DASHBOARD_LAYOUT
+        if "electrode" in key or "daboard" in key:
+            icon = Icons.electrode_LAYOUT
         else:
-            icon = Icons.ORDERS_LAYOUT
+            icon = Icons.assembly_LAYOUT
 
         if self._theme_service:
             return self._theme_service.get_icon_path(icon)

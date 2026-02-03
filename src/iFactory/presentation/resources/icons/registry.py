@@ -19,7 +19,7 @@ from typing import Optional, Set, List
 class IconCategory(Enum):
     """Icon categories for organization and batch operations."""
 
-    NAVIGATION = auto()  # Dashboard, Orders, Settings
+    NAVIGATION = auto()  # electrode, assembly, Settings
     ACTION = auto()  # Close, Expand, Toggle
     STATUS = auto()  # Info, Warning, Error
     DEVICE = auto()  # Machine/equipment icons
@@ -81,25 +81,25 @@ class Icons(Enum):
     Usage:
         from presentation.resources.icons import Icons
 
-        icon = Icons.DASHBOARD
-        path = icon.value.light_path  # ":/icon/dashboard.svg"
-        dark_path = icon.value.dark_path  # ":/icon/dashboard-white.svg"
+        icon = Icons.electrode
+        path = icon.value.light_path  # ":/icon/electrode.svg"
+        dark_path = icon.value.dark_path  # ":/icon/electrode-white.svg"
 
         # Get all navigation icons
         nav_icons = Icons.navigation_icons()
     """
 
     # === NAVIGATION ===
-    DASHBOARD = IconDefinition("dashboard", IconCategory.NAVIGATION, description="Main dashboard view")
-    ORDERS = IconDefinition("orders", IconCategory.NAVIGATION, description="Orders/Analytics view")
+    electrode = IconDefinition("electrode", IconCategory.NAVIGATION, description="Main electrode view")
+    assembly = IconDefinition("assembly", IconCategory.NAVIGATION, description="assembly/Analytics view")
     CUSTOMERS = IconDefinition("customers", IconCategory.NAVIGATION, description="Customer management")
     PRODUCTS = IconDefinition("products", IconCategory.NAVIGATION, description="Product catalog")
     REPORTS = IconDefinition("reports", IconCategory.NAVIGATION, description="Reports and exports")
     SETTINGS = IconDefinition("settings", IconCategory.NAVIGATION, description="Application settings")
 
     # === LAYOUT ===
-    DASHBOARD_LAYOUT = IconDefinition("dashboard_layout", IconCategory.NAVIGATION, description="Dashboard background layout")
-    ORDERS_LAYOUT = IconDefinition("orders_layout", IconCategory.NAVIGATION, description="Orders background layout")
+    electrode_LAYOUT = IconDefinition("electrode_layout", IconCategory.NAVIGATION, description="electrode background layout")
+    assembly_LAYOUT = IconDefinition("assembly_layout", IconCategory.NAVIGATION, description="assembly background layout")
 
     # === PANEL CONTROLS ===
     LEFT_PANEL_OPEN = IconDefinition("left_panel_open", IconCategory.ACTION, description="Expand sidebar")

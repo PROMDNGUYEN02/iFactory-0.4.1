@@ -9,7 +9,7 @@ def select_theme(state: Dict[str, Any]) -> str:
 
 def select_current_page(state: Dict[str, Any]) -> str:
     """Select current active page."""
-    return state.get("current_page", "dashboard_page")
+    return state.get("current_page", "electrode_page")
 
 
 def select_devices(state: Dict[str, Any]) -> Dict[str, Any]:

@@ -49,20 +49,20 @@ QStatusBar::item {
     border: none;
 }
 
-/* --- Top/Bottom Frames (Dashboard, Orders) --- */
+/* --- Top/Bottom Frames (electrode, assembly) --- */
 QFrame#daboard_top_frame,
-QFrame#orders_top_frame,
-QFrame#DashboardTopFrame,
-QFrame#OrdersTopFrame {
+QFrame#assembly_top_frame,
+QFrame#electrodeTopFrame,
+QFrame#assemblyTopFrame {
     background-color: ${surface.panel};
     border: none;
     border-bottom: 1px solid ${border.default};
 }
 
 QFrame#daboard_bottom_frame,
-QFrame#orders_bottom_frame,
-QFrame#DashboardBottomFrame,
-QFrame#OrdersBottomFrame {
+QFrame#assembly_bottom_frame,
+QFrame#electrodeBottomFrame,
+QFrame#assemblyBottomFrame {
     background-color: ${surface.panel};
     border: none;
     border-top: 1px solid ${border.default};

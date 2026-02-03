@@ -1,22 +1,23 @@
-# File: application/ports/uow.py
+# File: application/ports/uow.py (Updated)
 """
 Application Port: Unit of Work Interface.
 
-Defines the contract for transaction management following the Unit of Work pattern.
-This port ensures the Application Layer remains independent of persistence details.
+Enhanced with domain event collection and dispatch support.
 """
 
 from __future__ import annotations
 
 import abc
-from typing import TYPE_CHECKING, Optional, TypeVar, Generic
+from typing import TYPE_CHECKING, Optional, List, Callable, Awaitable
 
 if TYPE_CHECKING:
-    from iFactory.domain.repositories.device_repository import AbstractDeviceRepository
-    from iFactory.domain.repositories.production_repository import AbstractProductionRepository
+    from iFactory.domain.repositories.device_repository import DeviceRepository
+    from iFactory.domain.repositories.production_repository import ProductionRepository
+    from iFactory.domain.common.event import DomainEvent
 
 
-T = TypeVar("T")
+# Type alias for event dispatcher callback
+EventDispatchCallback = Callable[[List["DomainEvent"]], Awaitable[None]]
 
 
 class AbstractUnitOfWork(abc.ABC):
@@ -27,16 +28,22 @@ class AbstractUnitOfWork(abc.ABC):
     All repository access should go through the UoW to ensure
     transactional consistency.
 
+    Event Dispatching:
+        UoW can optionally dispatch domain events after successful commit.
+        Register aggregates via track_aggregate() and events will be
+        collected and dispatched automatically.
+
     Usage:
         async with uow_factory() as uow:
             device = await uow.devices.get(code)
             device.update_status(new_status)
+            uow.track_aggregate(device)  # Track for event collection
             await uow.devices.save(device)
-            await uow.commit()
+            await uow.commit()  # Events dispatched after successful commit
     """
 
-    devices: Optional["AbstractDeviceRepository"]
-    history: Optional["AbstractProductionRepository"]
+    devices: Optional["DeviceRepository"]
+    history: Optional["ProductionRepository"]
 
     @abc.abstractmethod
     async def __aenter__(self) -> "AbstractUnitOfWork":
@@ -63,14 +70,28 @@ class AbstractUnitOfWork(abc.ABC):
         """Rollback all pending changes."""
         raise NotImplementedError
 
+    def track_aggregate(self, aggregate) -> None:
+        """
+        Track an aggregate for domain event collection.
+
+        Events will be collected from tracked aggregates after
+        successful commit and dispatched via the event callback.
+
+        Default implementation does nothing - override in concrete class.
+        """
+        pass
+
+    def set_event_dispatcher(self, callback: EventDispatchCallback) -> None:
+        """
+        Set callback for event dispatching after commit.
+
+        Default implementation does nothing - override in concrete class.
+        """
+        pass
+
 
 class AbstractUnitOfWorkFactory(abc.ABC):
-    """
-    Factory for creating Unit of Work instances.
-
-    This abstraction allows the Application Layer to request new
-    UoW instances without knowing the concrete implementation.
-    """
+    """Factory for creating Unit of Work instances."""
 
     @abc.abstractmethod
     def __call__(self) -> AbstractUnitOfWork:
@@ -78,4 +99,4 @@ class AbstractUnitOfWorkFactory(abc.ABC):
         raise NotImplementedError
 
 
-__all__ = ["AbstractUnitOfWork", "AbstractUnitOfWorkFactory"]
+__all__ = ["AbstractUnitOfWork", "AbstractUnitOfWorkFactory", "EventDispatchCallback"]

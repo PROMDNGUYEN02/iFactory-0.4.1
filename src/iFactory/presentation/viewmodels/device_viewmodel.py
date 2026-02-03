@@ -1,18 +1,19 @@
 # File: presentation/viewmodels/device_viewmodel.py
 """
-Device List ViewModel - Fixed generation handling.
+Device List ViewModel - With ID Mapping Support.
 
 FIXED:
 1. Only discard VERY old results (generation gap > 10)
 2. Proper handling of rapid page switching
 3. Compatible with current AsyncExecutor
+4. NEW: ID mapping support for display vs remote device IDs
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
 
 from PySide6.QtCore import Signal, Slot
 
@@ -37,11 +38,41 @@ logger = logging.getLogger(__name__)
 GENERATION_DISCARD_THRESHOLD = 10
 
 
+class IDeviceIdMapper(Protocol):
+    """Protocol for device ID mapping (display <-> remote)."""
+
+    def to_remote_ids(self, display_ids: List[str]) -> List[str]:
+        """Convert display IDs to remote IDs."""
+        ...
+
+    def to_display_id(self, remote_id: str) -> str:
+        """Convert remote ID to display ID."""
+        ...
+
+    def to_remote_id(self, display_id: str) -> str:
+        """Convert display ID to remote ID."""
+        ...
+
+
+class NoOpIdMapper:
+    """Default mapper that returns IDs unchanged."""
+
+    def to_remote_ids(self, display_ids: List[str]) -> List[str]:
+        return display_ids
+
+    def to_display_id(self, remote_id: str) -> str:
+        return remote_id
+
+    def to_remote_id(self, display_id: str) -> str:
+        return display_id
+
+
 class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     """
     ViewModel for Device List.
 
     FIXED: Relaxed generation check to handle rapid page switching.
+    NEW: ID mapping support for display vs remote device IDs.
     """
 
     devicesChanged = Signal(dict)
@@ -54,6 +85,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         remote_source: Optional["IRemoteDataSource"] = None,
         sync_orchestrator: Optional["SyncOrchestrator"] = None,
         shell_vm: Optional["ShellViewModel"] = None,
+        id_mapper: Optional[IDeviceIdMapper] = None,  # NEW
         parent=None,
     ):
         BaseViewModel.__init__(self, parent)
@@ -63,6 +95,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         self._remote_source = remote_source
         self._sync_orchestrator = sync_orchestrator
         self._shell_vm = shell_vm
+        self._id_mapper = id_mapper or NoOpIdMapper()  # NEW
 
         self._devices: Dict[str, DeviceDisplayModel] = {}
         self._selected_device_id: Optional[str] = None
@@ -88,6 +121,10 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
 
     def set_sync_orchestrator(self, orchestrator: "SyncOrchestrator") -> None:
         self._sync_orchestrator = orchestrator
+
+    def set_id_mapper(self, mapper: IDeviceIdMapper) -> None:
+        """Set ID mapper for display <-> remote ID conversion."""
+        self._id_mapper = mapper or NoOpIdMapper()
 
     def set_page_manager(self, manager: "PageDeviceManager") -> None:
         if self._page_manager:
@@ -195,6 +232,12 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         return self._sync_status
 
     def _sync_via_orchestrator(self, device_ids: List[str], generation: int) -> None:
+        """
+        Sync via orchestrator.
+
+        Note: The orchestrator already has id_mapper injected,
+        so it handles the display->remote->display conversion internally.
+        """
         self._executor.execute(
             self._do_orchestrator_sync(device_ids, generation),
             on_success=self._on_sync_success,
@@ -206,6 +249,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             return {"devices": {}, "count": 0, "error": "No orchestrator", "generation": generation}
 
         try:
+            # Orchestrator handles ID mapping internally
             result = await self._sync_orchestrator.sync_latest_status(device_ids)
 
             if not result.success:
@@ -228,6 +272,11 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             return {"devices": {}, "count": 0, "error": str(e), "generation": generation}
 
     def _sync_via_remote(self, device_ids: List[str], generation: int) -> None:
+        """
+        Direct sync via remote source (fallback when no orchestrator).
+
+        NEW: Apply ID mapping here since we're bypassing the orchestrator.
+        """
         self._executor.execute(
             self._do_remote_sync(device_ids, generation),
             on_success=self._on_sync_success,
@@ -239,17 +288,24 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             return {"devices": {}, "count": 0, "error": "No remote source", "generation": generation}
 
         try:
-            records = await self._remote_source.fetch_latest_status(device_ids)
+            # NEW: Convert display IDs to remote IDs for fetching
+            remote_ids = self._id_mapper.to_remote_ids(device_ids)
+
+            logger.debug(f"[DeviceListViewModel] Fetching remote IDs: {remote_ids}")
+
+            records = await self._remote_source.fetch_latest_status(remote_ids)
 
             if not records:
                 return {"devices": {}, "count": 0, "generation": generation}
 
             display_models = {}
             for record in records:
-                code = record.get("equip_code", "")
-                if code:
-                    model = self._transform_record_to_display_model(record)
-                    display_models[code] = model
+                # NEW: Convert remote code back to display code
+                remote_code = record.get("equip_code", "")
+                if remote_code:
+                    display_code = self._id_mapper.to_display_id(remote_code)
+                    model = self._transform_record_to_display_model(record, display_code)
+                    display_models[display_code] = model
 
             return {"devices": display_models, "count": len(display_models), "generation": generation}
 
@@ -332,8 +388,17 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             last_update=last_update.isoformat() if hasattr(last_update, "isoformat") else None,
         )
 
-    def _transform_record_to_display_model(self, record: Dict) -> DeviceDisplayModel:
-        code = record.get("equip_code", "UNKNOWN")
+    def _transform_record_to_display_model(self, record: Dict, display_code: Optional[str] = None) -> DeviceDisplayModel:
+        """
+        Transform a database record to a display model.
+
+        Args:
+            record: Raw database record
+            display_code: Override code to use (for ID mapping).
+                         If None, uses record's equip_code.
+        """
+        # Use display_code if provided, otherwise use record's code
+        code = display_code or record.get("equip_code", "UNKNOWN")
         name = record.get("equip_name") or code
         status_code = self._parse_status(record.get("equip_status", 0))
         last_update = record.get("last_update")
