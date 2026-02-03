@@ -15,7 +15,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 
 from .registry import Icons, DeviceIcons, IconDefinition
@@ -56,8 +56,8 @@ class IconProvider:
         # Cache: resolved_path -> QIcon
         self._icon_cache: Dict[str, QIcon] = {}
 
-        # Pixmap cache: (resolved_path, width, height) -> QPixmap
-        self._pixmap_cache: Dict[Tuple[str, int, int], QPixmap] = {}
+        # Pixmap cache: (resolved_path, width, height, keep_aspect) -> QPixmap
+        self._pixmap_cache: Dict[Tuple[str, int, int, bool], QPixmap] = {}
 
         # Track theme for cache invalidation
         self._cached_theme: str = theme_service.current_theme
@@ -128,7 +128,6 @@ class IconProvider:
         match = self._RESOURCE_PATH_PATTERN.match(path)
         if match:
             base_name = match.group(1)
-            ext = match.group(2)
 
             # Try Icons enum
             for icon in Icons:
@@ -193,26 +192,52 @@ class IconProvider:
         self._icon_cache[path] = qicon
         return qicon
 
-    def get_pixmap(self, icon: Union[Icons, DeviceIcons, str], size: Optional[QSize] = None) -> QPixmap:
+    def get_pixmap(
+        self,
+        icon: Union[Icons, DeviceIcons, str],
+        size: Optional[QSize] = None,
+        keep_aspect_ratio: bool = True,
+    ) -> QPixmap:
         """
         Get cached QPixmap for the given icon and size.
 
         Args:
             icon: Icon enum or legacy path string
             size: Desired size (default: DEFAULT_SIZE)
+            keep_aspect_ratio: If True (default), maintain aspect ratio.
+                              If False, stretch to exact size.
 
         Returns:
-            Cached QPixmap instance
+            Cached QPixmap instance with actual dimensions
         """
         size = size or self.DEFAULT_SIZE
         path = self.resolve_path(icon)
-        cache_key = (path, size.width(), size.height())
+        cache_key = (path, size.width(), size.height(), keep_aspect_ratio)
 
         if cache_key in self._pixmap_cache:
             return self._pixmap_cache[cache_key]
 
-        qicon = self.get_icon(icon)
-        pixmap = qicon.pixmap(size)
+        # Load from file directly for better size control
+        pixmap = QPixmap(path)
+
+        if pixmap.isNull():
+            if path not in self._failed_paths:
+                logger.warning(f"[IconProvider] Failed to load pixmap: {path}")
+                self._failed_paths.add(path)
+
+            # Try fallback via QIcon
+            qicon = self._get_fallback_icon(icon)
+            if qicon and not qicon.isNull():
+                pixmap = qicon.pixmap(size)
+        else:
+            # Scale to requested size
+            aspect_mode = Qt.AspectRatioMode.KeepAspectRatio if keep_aspect_ratio else Qt.AspectRatioMode.IgnoreAspectRatio
+            pixmap = pixmap.scaled(
+                size,
+                aspect_mode,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+
         self._pixmap_cache[cache_key] = pixmap
         return pixmap
 
@@ -238,12 +263,28 @@ class IconProvider:
         logger.warning(f"[IconProvider] Unknown device code: {equipment_code}")
         return self.get_icon(Icons.LOGO)
 
-    def get_device_pixmap(self, equipment_code: str, size: Optional[QSize] = None) -> QPixmap:
-        """Get pixmap for a device by equipment code."""
+    def get_device_pixmap(
+        self,
+        equipment_code: str,
+        size: Optional[QSize] = None,
+        keep_aspect_ratio: bool = True,
+    ) -> QPixmap:
+        """
+        Get pixmap for a device by equipment code.
+
+        Args:
+            equipment_code: Device equipment code (e.g., "AMX", "CCT")
+            size: Desired size
+            keep_aspect_ratio: If True (default), maintain aspect ratio.
+                              Actual pixmap size may differ from requested size.
+
+        Returns:
+            QPixmap scaled (actual size may differ if keeping aspect ratio)
+        """
         device_icon = DeviceIcons.from_code(equipment_code)
         if device_icon:
-            return self.get_pixmap(device_icon, size)
-        return self.get_pixmap(Icons.LOGO, size)
+            return self.get_pixmap(device_icon, size, keep_aspect_ratio)
+        return self.get_pixmap(Icons.LOGO, size, keep_aspect_ratio)
 
     # =========================================================================
     # Batch Operations
