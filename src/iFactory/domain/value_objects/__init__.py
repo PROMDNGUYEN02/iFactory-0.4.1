@@ -2,9 +2,12 @@
 """
 Domain Value Objects.
 
-Value Objects are immutable objects that are distinguished by their
-attributes rather than identity. Two value objects with the same
-attributes are considered equal.
+Value objects are immutable domain concepts defined by their attributes
+rather than identity. They are:
+- Immutable (cannot be changed after creation)
+- Self-validating (validate on construction)
+- Comparable by value (not identity)
+- Interchangeable when equal
 """
 
 from .equipment_code import EquipmentCode

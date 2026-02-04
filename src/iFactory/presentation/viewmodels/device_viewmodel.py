@@ -384,6 +384,14 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         device_id: str,
         generation: int,
     ) -> Dict[str, Any]:
+
+        # EARLY EXIT
+        if self._is_disposed:
+            return {"device_id": device_id, "skipped": True, "type": "availability"}
+
+        if generation < self._detail_generation - 5:
+            return {"device_id": device_id, "skipped": True, "type": "availability"}
+
         """Async fetch availability."""
         if generation < self._detail_generation - 5 or self._is_disposed:
             return {"device_id": device_id, "generation": generation, "skipped": True, "type": "availability"}

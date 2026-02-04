@@ -2,11 +2,7 @@
 """
 Async Executor - Thread pool for async operations with Qt integration.
 
-Features:
-- Executes async coroutines in background threads
-- Callbacks on Qt main thread via signals
-- Configurable timeout per operation
-- Graceful shutdown with operation tracking
+Version: Fixed - No coroutine warnings on shutdown
 """
 
 from __future__ import annotations
@@ -31,10 +27,8 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-
-# ============================================================================
-# Result Wrapper
-# ============================================================================
+SLOW_OPERATION_THRESHOLD_MS = 3000
+MAX_PENDING_FUTURES = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,44 +49,23 @@ class AsyncResult(Generic[T]):
         return cls(success=False, error=error, elapsed_ms=elapsed_ms)
 
 
-# ============================================================================
-# Async Executor
-# ============================================================================
-
-
 class AsyncExecutor(QObject):
     """
     Executes async coroutines in a thread pool.
 
-    Callbacks are invoked on the Qt main thread via signals.
-
     Features:
-    - Configurable worker pool size
-    - Optional timeout per operation
-    - Operation tracking for cleanup
-    - Graceful shutdown
-
-    Usage:
-        executor = AsyncExecutor(max_workers=4)
-
-        executor.execute(
-            fetch_data(),
-            on_success=lambda result: print(result),
-            on_error=lambda e: print(f"Error: {e}"),
-            timeout=30.0,
-        )
-
-        # Cleanup
-        executor.shutdown()
+    - Proper coroutine cleanup on shutdown (no warnings)
+    - Configurable slow operation threshold
+    - Thread-safe callbacks via Qt signals
     """
 
-    # Internal signals for thread-safe callbacks
-    _success_signal = Signal(object, object)  # (callback, result)
-    _error_signal = Signal(object, object)  # (callback, error)
+    _success_signal = Signal(object, object)
+    _error_signal = Signal(object, object)
 
     def __init__(
         self,
         max_workers: int = 4,
+        slow_threshold_ms: float = SLOW_OPERATION_THRESHOLD_MS,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
@@ -104,24 +77,22 @@ class AsyncExecutor(QObject):
         self._is_running = True
         self._pending_futures: List[Future] = []
         self._operation_count = 0
+        self._slow_threshold_ms = slow_threshold_ms
+        self._signals_connected = True
 
-        # Connect internal signals
         self._success_signal.connect(self._handle_success)
         self._error_signal.connect(self._handle_error)
 
-    def _handle_success(self, callback: Callable, result: AsyncResult) -> None:
-        """Handle success callback on main thread."""
+    def _handle_success(self, callback: Callable, result: object) -> None:
         if not self._is_running:
             return
         try:
             if callback:
-                # Pass just the value for backward compatibility
-                callback(result.value if isinstance(result, AsyncResult) else result)
+                callback(result)
         except Exception as e:
             logger.error(f"[AsyncExecutor] Success callback error: {e}")
 
     def _handle_error(self, callback: Callable, error: Exception) -> None:
-        """Handle error callback on main thread."""
         if not self._is_running:
             return
         try:
@@ -140,30 +111,28 @@ class AsyncExecutor(QObject):
         """
         Execute an async coroutine in the thread pool.
 
-        Args:
-            coro: Async coroutine to execute
-            on_success: Callback for successful result (called on main thread)
-            on_error: Callback for errors (called on main thread)
-            timeout: Optional timeout in seconds
-
-        Returns:
-            True if task was submitted, False if executor is shutting down
+        Returns False if executor is shutting down.
         """
         if not self._is_running:
-            logger.debug("[AsyncExecutor] Shutting down, task rejected")
+            # Close the coroutine properly to avoid "was never awaited" warning
+            self._close_coroutine(coro)
             return False
 
         self._operation_count += 1
         operation_id = self._operation_count
 
-        # Capture references
+        # Capture references for closure
         success_cb = on_success
         error_cb = on_error
         executor_ref = self
         timeout_secs = timeout
+        slow_threshold = self._slow_threshold_ms
+        the_coro = coro  # Capture the coroutine
 
         def worker():
+            # Early exit if shutting down
             if not executor_ref._is_running:
+                executor_ref._close_coroutine(the_coro)
                 return
 
             start_time = datetime.now()
@@ -171,36 +140,38 @@ class AsyncExecutor(QObject):
             asyncio.set_event_loop(loop)
 
             try:
-                # Apply timeout if specified
+                # Double-check before running
+                if not executor_ref._is_running:
+                    return
+
                 if timeout_secs:
-                    result = loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout_secs))
+                    result = loop.run_until_complete(asyncio.wait_for(the_coro, timeout=timeout_secs))
                 else:
-                    result = loop.run_until_complete(coro)
+                    result = loop.run_until_complete(the_coro)
+
+                # Check before callback
+                if not executor_ref._is_running:
+                    return
 
                 elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
 
-                if executor_ref._is_running and success_cb:
+                if success_cb and executor_ref._signals_connected:
                     executor_ref._success_signal.emit(success_cb, result)
 
-                if elapsed_ms > 5000:
+                if elapsed_ms > slow_threshold:
                     logger.warning(f"[AsyncExecutor] Op #{operation_id} took {elapsed_ms:.0f}ms")
 
             except asyncio.TimeoutError:
-                elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
-                if executor_ref._is_running:
+                if executor_ref._is_running and error_cb and executor_ref._signals_connected:
                     error = TimeoutError(f"Operation timed out after {timeout_secs}s")
-                    logger.warning(f"[AsyncExecutor] Op #{operation_id} timed out")
-                    if error_cb:
-                        executor_ref._error_signal.emit(error_cb, error)
+                    executor_ref._error_signal.emit(error_cb, error)
 
             except asyncio.CancelledError:
-                logger.debug(f"[AsyncExecutor] Op #{operation_id} cancelled")
+                pass  # Silent - expected during shutdown
 
             except Exception as e:
-                if executor_ref._is_running:
-                    logger.error(f"[AsyncExecutor] Op #{operation_id} failed: {e}")
-                    if error_cb:
-                        executor_ref._error_signal.emit(error_cb, e)
+                if executor_ref._is_running and error_cb and executor_ref._signals_connected:
+                    executor_ref._error_signal.emit(error_cb, e)
 
             finally:
                 try:
@@ -210,15 +181,21 @@ class AsyncExecutor(QObject):
 
         future = self._executor.submit(worker)
         self._pending_futures.append(future)
-
-        # Clean up completed futures periodically
         self._cleanup_futures()
 
         return True
 
+    def _close_coroutine(self, coro: Awaitable) -> None:
+        """Properly close a coroutine to avoid 'was never awaited' warning."""
+        try:
+            if hasattr(coro, "close"):
+                coro.close()
+        except Exception:
+            pass
+
     def _cleanup_futures(self) -> None:
         """Remove completed futures from tracking list."""
-        self._pending_futures = [f for f in self._pending_futures if not f.done()]
+        self._pending_futures = [f for f in self._pending_futures[-MAX_PENDING_FUTURES:] if not f.done()]
 
     def run(
         self,
@@ -243,23 +220,31 @@ class AsyncExecutor(QObject):
 
     def shutdown(self, wait: bool = False, timeout: float = 1.0) -> None:
         """
-        Shutdown executor.
+        Shutdown executor with proper cleanup.
 
         Args:
-            wait: If True, wait for pending operations
-            timeout: Max seconds to wait when wait=True
+            wait: If True, wait for pending operations (up to timeout)
+            timeout: Max seconds to wait
         """
         if not self._is_running:
             return
 
+        # Mark as not running FIRST to stop new tasks
         self._is_running = False
-        logger.debug(f"[AsyncExecutor] Shutting down ({self.pending_count} pending)")
+        self._signals_connected = False
+        pending = self.pending_count
 
-        # Disconnect signals to prevent callbacks
+        logger.debug(f"[AsyncExecutor] Shutting down ({pending} pending)")
+
+        # Disconnect signals to prevent callbacks during shutdown
         try:
             self._success_signal.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+
+        try:
             self._error_signal.disconnect()
-        except RuntimeError:
+        except (RuntimeError, TypeError):
             pass
 
         # Cancel pending futures
@@ -268,8 +253,9 @@ class AsyncExecutor(QObject):
                 future.cancel()
 
         # Shutdown executor
+        # Note: Don't use cancel_futures=True as it can cause warnings
         try:
-            self._executor.shutdown(wait=wait, cancel_futures=True)
+            self._executor.shutdown(wait=wait, cancel_futures=False)
         except Exception as e:
             logger.debug(f"[AsyncExecutor] Shutdown error: {e}")
 

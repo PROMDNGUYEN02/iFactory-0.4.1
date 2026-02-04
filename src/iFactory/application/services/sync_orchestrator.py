@@ -1,14 +1,16 @@
-# File: application/services/sync_orchestrator.py
+# src/iFactory/application/services/sync_orchestrator.py
 """
-Sync Orchestrator Service - Hybrid Availability Approach.
+Sync Orchestrator Service - With Availability Deduplication.
 
-Changes:
-- sync_latest_status: No longer fetches availability by default
-- New method: fetch_device_availability() for on-demand fetching
+FIXES:
+- Dedup concurrent availability requests
+- Longer cache TTL (10s instead of 5s)
+- Better disposed check
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -87,20 +89,26 @@ class DeviceAvailability:
     timestamp: datetime
 
     @property
-    def is_fresh(self) -> bool:
-        """Check if data is less than 5 seconds old."""
-        return (datetime.now() - self.timestamp).total_seconds() < 5
+    def age_seconds(self) -> float:
+        """Get age of this data in seconds."""
+        return (datetime.now() - self.timestamp).total_seconds()
+
+    def is_fresh(self, max_age: float = 10.0) -> bool:
+        """Check if data is fresh (default 10 seconds)."""
+        return self.age_seconds < max_age
 
 
 class SyncOrchestrator:
     """
-    Orchestrates all sync operations with Hybrid Availability approach.
+    Orchestrates all sync operations with Availability Deduplication.
 
-    Hybrid Strategy:
-    - sync_latest_status: Only fetches status (no availability)
-    - fetch_device_availability: On-demand when user clicks device
-    - Auto-refresh availability if panel is open
+    FIXES:
+    - Dedup: Only one concurrent availability fetch per device
+    - Cache TTL increased to 10s
+    - Check disposed before callbacks
     """
+
+    AVAILABILITY_CACHE_TTL = 10.0  # seconds
 
     def __init__(
         self,
@@ -113,6 +121,7 @@ class SyncOrchestrator:
         self._uow_factory = uow_factory
         self._id_mapper = id_mapper or NoOpIdMapper()
         self._on_sync_complete = on_sync_complete
+        self._is_disposed = False
 
         # Command handlers with ID mapper
         self._latest_handler = SyncLatestStatusHandler(remote_source, uow_factory, self._id_mapper)
@@ -124,26 +133,37 @@ class SyncOrchestrator:
         # Availability cache (device_id -> DeviceAvailability)
         self._availability_cache: Dict[str, DeviceAvailability] = {}
 
+        # NEW: Track pending availability fetches to dedup
+        self._pending_availability: Dict[str, asyncio.Task] = {}
+        self._availability_lock = asyncio.Lock()
+
         self._stats = {
             "total_latest_syncs": 0,
             "total_history_syncs": 0,
             "total_incremental_syncs": 0,
             "total_availability_fetches": 0,
+            "availability_cache_hits": 0,
+            "availability_dedup_hits": 0,
         }
+
+    def dispose(self) -> None:
+        """Mark orchestrator as disposed."""
+        self._is_disposed = True
+
+        # Cancel pending tasks
+        for task in self._pending_availability.values():
+            if not task.done():
+                task.cancel()
+        self._pending_availability.clear()
 
     async def sync_latest_status(
         self,
         device_ids: List[str],
     ) -> SyncLatestStatusResult:
-        """
-        Sync latest status for the specified devices.
+        """Sync latest status for the specified devices."""
+        if self._is_disposed:
+            return SyncLatestStatusResult(count=0, timestamp=datetime.now())
 
-        NOTE: This no longer fetches availability automatically.
-        Use fetch_device_availability() for on-demand availability.
-
-        Args:
-            device_ids: Explicit list of DISPLAY equipment codes to sync.
-        """
         if not device_ids:
             logger.debug("[SyncOrchestrator] No device IDs provided for latest sync")
             return SyncLatestStatusResult(count=0, timestamp=datetime.now())
@@ -154,7 +174,7 @@ class SyncOrchestrator:
         self._session.record_sync()
         self._stats["total_latest_syncs"] += 1
 
-        if self._on_sync_complete and result.success:
+        if self._on_sync_complete and result.success and not self._is_disposed:
             self._on_sync_complete(result)
 
         return result
@@ -165,23 +185,53 @@ class SyncOrchestrator:
         force_refresh: bool = False,
     ) -> Optional[DeviceAvailability]:
         """
-        Fetch availability for a single device (on-demand).
+        Fetch availability for a single device with deduplication.
 
-        Uses cache if available and fresh (< 5 seconds old).
-
-        Args:
-            device_id: Display ID of the device
-            force_refresh: Force fetch even if cached
-
-        Returns:
-            DeviceAvailability or None if failed
+        Features:
+        - Uses cache if available and fresh (< 10 seconds old)
+        - Deduplicates concurrent requests for same device
         """
-        # Check cache first
+        if self._is_disposed:
+            return None
+
+        # Check cache first (unless force refresh)
         if not force_refresh:
             cached = self._availability_cache.get(device_id)
-            if cached and cached.is_fresh:
+            if cached and cached.is_fresh(self.AVAILABILITY_CACHE_TTL):
+                self._stats["availability_cache_hits"] += 1
                 logger.debug(f"[SyncOrchestrator] Availability cache hit for {device_id}")
                 return cached
+
+        # Check for pending request (dedup)
+        async with self._availability_lock:
+            pending_task = self._pending_availability.get(device_id)
+            if pending_task and not pending_task.done():
+                self._stats["availability_dedup_hits"] += 1
+                logger.debug(f"[SyncOrchestrator] Dedup: waiting for pending {device_id}")
+                try:
+                    return await pending_task
+                except Exception:
+                    return None
+
+            # Create new task
+            task = asyncio.create_task(self._do_fetch_availability(device_id))
+            self._pending_availability[device_id] = task
+
+        try:
+            result = await task
+            return result
+        finally:
+            # Cleanup pending task
+            async with self._availability_lock:
+                self._pending_availability.pop(device_id, None)
+
+    async def _do_fetch_availability(
+        self,
+        device_id: str,
+    ) -> Optional[DeviceAvailability]:
+        """Actually fetch availability (internal)."""
+        if self._is_disposed:
+            return None
 
         logger.info(f"[SyncOrchestrator] Fetching availability for {device_id}")
 
@@ -201,11 +251,13 @@ class SyncOrchestrator:
             if hasattr(self._remote_source, "fetch_single_device_run_time"):
                 run_time = await self._remote_source.fetch_single_device_run_time(remote_id)
             elif hasattr(self._remote_source, "fetch_today_run_times"):
-                # Fallback to batch query for single device
                 run_times = await self._remote_source.fetch_today_run_times([remote_id])
                 run_time = run_times.get(remote_id.upper(), 0.0)
             else:
                 logger.warning("[SyncOrchestrator] No run time fetch method available")
+                return None
+
+            if self._is_disposed:
                 return None
 
             # Calculate availability
@@ -231,7 +283,8 @@ class SyncOrchestrator:
             return result
 
         except Exception as e:
-            logger.error(f"[SyncOrchestrator] Failed to fetch availability for {device_id}: {e}")
+            if not self._is_disposed:
+                logger.error(f"[SyncOrchestrator] Failed to fetch availability for {device_id}: {e}")
             return None
 
     def get_cached_availability(self, device_id: str) -> Optional[DeviceAvailability]:
@@ -251,9 +304,10 @@ class SyncOrchestrator:
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
     ) -> SyncHistoryResult:
-        """
-        Sync initial history for devices that haven't been loaded yet.
-        """
+        """Sync initial history for devices that haven't been loaded yet."""
+        if self._is_disposed:
+            return SyncHistoryResult()
+
         unloaded_ids = self._session.filter_unloaded(device_ids)
 
         if not unloaded_ids:
@@ -285,9 +339,10 @@ class SyncOrchestrator:
         device_ids: List[str],
         record_limit: int = 2,
     ) -> SyncHistoryResult:
-        """
-        Sync recent history records for incremental updates.
-        """
+        """Sync recent history records for incremental updates."""
+        if self._is_disposed:
+            return SyncHistoryResult()
+
         if not device_ids:
             return SyncHistoryResult()
 
@@ -308,11 +363,10 @@ class SyncOrchestrator:
         device_ids: List[str],
         force_initial_history: bool = False,
     ) -> SyncLatestStatusResult:
-        """
-        Combined sync: Latest status + History (initial or incremental).
+        """Combined sync: Latest status + History (initial or incremental)."""
+        if self._is_disposed:
+            return SyncLatestStatusResult(count=0, timestamp=datetime.now())
 
-        NOTE: Does NOT include availability. Use fetch_device_availability() separately.
-        """
         if not device_ids:
             return SyncLatestStatusResult(count=0, timestamp=datetime.now())
 
@@ -345,6 +399,7 @@ class SyncOrchestrator:
             "last_sync": self._session.last_sync_time,
             "devices_with_history": self._session.loaded_device_count,
             "availability_cache_size": len(self._availability_cache),
+            "pending_availability_fetches": len(self._pending_availability),
         }
 
     def set_page_devices(self, device_codes: List[str]) -> None:

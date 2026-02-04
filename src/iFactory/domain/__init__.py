@@ -1,88 +1,89 @@
 # src/iFactory/domain/__init__.py
 """
-Domain Layer - Core Business Logic.
+iFactory Domain Layer.
+
+This layer contains the core business logic, completely independent of
+infrastructure concerns. It defines:
+
+- Entities: Objects with identity (Device)
+- Value Objects: Immutable value types (EquipmentCode, TimeRange, etc.)
+- Domain Events: Facts about what happened (StatusChangedEvent)
+- Policies: Business rules (StatusTransitionPolicy)
+- Repository Interfaces: Ports for persistence
+- Domain Exceptions: Business rule violations
+
+Design Principles:
+- No dependencies on infrastructure (pure Python)
+- Rich domain model (logic lives in entities/value objects)
+- Explicit exceptions for rule violations
+- Event-driven for state changes
 """
 
-# Common Building Blocks
-from .common.entity import Entity, TId
-from .common.value_object import ValueObject, SingleValueObject
-from .common.aggregate import AggregateRoot, AggregateSnapshot, ConcurrencyError
-from .common.event import DomainEvent, EventMetadata, EventEnvelope
-from .common.event_dispatcher import IEventDispatcher, EnhancedEventDispatcher
-
-# Entities
-from .entities.device import Device
-
-# Value Objects
-from .value_objects.equipment_code import EquipmentCode
-from .value_objects.material_batch import MaterialBatch
-from .value_objects.material_input import MaterialInput
-from .value_objects.status_period import StatusPeriod
-from .value_objects.time_range import TimeRange
-
-# Enums
-from .enums.machine_status import MachineStatus
-
-# Events
-from .events.device_events import StatusChangedEvent
-
-# Exceptions
-from .exceptions.base import DomainError
-from .exceptions.domain_exceptions import (
-    InvalidEquipmentCodeError,
-    InvalidStatusTransitionError,
-    InvalidTransitionError,
-    DeviceNotFoundError,
-    StaleDataError,
-    InvalidTimeRangeError,
-    StatusMergeError,
+# Common building blocks
+from .common import (
+    Entity,
+    AggregateRoot,
+    ValueObject,
+    DomainEvent,
+    EventMetadata,
 )
 
-# Policies
-from .policies.transition_policy import StatusTransitionPolicy
+# Entities
+from .entities import Device
 
-# Repository Interfaces
-from .repositories.device_repository import DeviceRepository
-from .repositories.production_repository import ProductionRepository
+# Value Objects
+from .value_objects import (
+    EquipmentCode,
+    TimeRange,
+    StatusPeriod,
+)
+
+# Enums
+from .enums import MachineStatus
+
+# Events
+from .events import StatusChangedEvent
+
+# Policies
+from .policies import StatusTransitionPolicy
+
+# Exceptions
+from .exceptions import (
+    DomainError,
+    InvalidEquipmentCodeError,
+    InvalidStatusTransitionError,
+    DeviceNotFoundError,
+    InvalidTimeRangeError,
+)
+
+# Repository interfaces (ports)
+from .repositories import DeviceRepository
 
 __all__ = [
     # Common
     "Entity",
-    "TId",
-    "ValueObject",
-    "SingleValueObject",
     "AggregateRoot",
-    "AggregateSnapshot",
-    "ConcurrencyError",
+    "ValueObject",
     "DomainEvent",
     "EventMetadata",
-    "EventEnvelope",
-    "IEventDispatcher",
-    "EnhancedEventDispatcher",
     # Entities
     "Device",
     # Value Objects
     "EquipmentCode",
-    "MaterialBatch",
-    "MaterialInput",
-    "StatusPeriod",
     "TimeRange",
+    "StatusPeriod",
     # Enums
     "MachineStatus",
     # Events
     "StatusChangedEvent",
+    # Policies
+    "StatusTransitionPolicy",
     # Exceptions
     "DomainError",
     "InvalidEquipmentCodeError",
     "InvalidStatusTransitionError",
-    "InvalidTransitionError",
     "DeviceNotFoundError",
-    "StaleDataError",
     "InvalidTimeRangeError",
-    "StatusMergeError",
-    # Policies
-    "StatusTransitionPolicy",
     # Repositories
     "DeviceRepository",
-    "ProductionRepository",
 ]

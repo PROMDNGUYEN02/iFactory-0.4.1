@@ -2,14 +2,10 @@
 """
 MSSQL Adapter - Production-ready with resilience patterns.
 
-Features:
-- Query timeout
-- Connection timeout
-- Retry with exponential backoff
-- Circuit breaker pattern
-- Proper async operation tracking
-- PyInstaller compatible
-- Material Input fetching - OPTIMIZED for large tables (362GB+)
+FIXES:
+- Material timeout increased to 8s
+- Track failed devices to avoid repeated timeouts
+- Better cancellation handling
 """
 
 from __future__ import annotations
@@ -19,7 +15,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
@@ -210,6 +206,8 @@ class MaterialInputRecord:
 class MssqlAdapterConfig:
     query_timeout: float = 30.0
     connect_timeout: int = 10
+    material_timeout: float = 8.0  # INCREASED from 5s
+    material_cooldown: float = 60.0  # Skip failed devices for 60s
     retry: RetryConfig = field(default_factory=RetryConfig)
     circuit_breaker: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
 
@@ -218,7 +216,10 @@ class MssqlAdapter(IRemoteDataSource):
     """
     Adapter for External MSSQL PLC/SCADA Database.
 
-    Optimized for large tables (362GB+) with proper index usage.
+    FIXES:
+    - Material timeout increased to 8s
+    - Track failed devices with cooldown period
+    - Better dispose handling
     """
 
     def __init__(
@@ -234,6 +235,9 @@ class MssqlAdapter(IRemoteDataSource):
         self._active_count = 0
         self._lock = asyncio.Lock()
         self._circuit_breaker = CircuitBreaker(self._config.circuit_breaker)
+
+        # NEW: Track devices with material fetch failures
+        self._material_failed_devices: Dict[str, datetime] = {}
 
         if connection_string:
             self._create_engine(connection_string)
@@ -266,6 +270,24 @@ class MssqlAdapter(IRemoteDataSource):
     @property
     def circuit_state(self) -> CircuitState:
         return self._circuit_breaker.state
+
+    def _is_material_on_cooldown(self, equip_code: str) -> bool:
+        """Check if device is on cooldown after material fetch failure."""
+        failed_time = self._material_failed_devices.get(equip_code.upper())
+        if not failed_time:
+            return False
+
+        elapsed = (datetime.now() - failed_time).total_seconds()
+        if elapsed >= self._config.material_cooldown:
+            # Cooldown expired, remove from failed list
+            self._material_failed_devices.pop(equip_code.upper(), None)
+            return False
+
+        return True
+
+    def _mark_material_failed(self, equip_code: str) -> None:
+        """Mark device as failed for material fetch."""
+        self._material_failed_devices[equip_code.upper()] = datetime.now()
 
     async def _enter_operation(self) -> bool:
         async with self._lock:
@@ -546,7 +568,7 @@ class MssqlAdapter(IRemoteDataSource):
             await self._exit_operation(success)
 
     # =========================================================================
-    # Material Input Fetching - Progressive filter from small to large
+    # Material Input Fetching - FIXED with cooldown
     # =========================================================================
 
     async def fetch_material_inputs(
@@ -556,11 +578,22 @@ class MssqlAdapter(IRemoteDataSource):
         """
         Fetch material inputs from yntti.dbo.RPT_FEEDING_DETAIL.
 
-        Progressive date filter (small to large for fast machines):
-        1 min → 5 min → 30 min → 2 hours → 12 hours → 2 days
-
-        If no data after 2 days, return empty list.
+        FIXES:
+        - Increased timeout to 8s
+        - Skip devices on cooldown after failure
+        - Simplified query for faster execution
         """
+
+        async def _do_fetch():
+            # EARLY EXIT if disposing
+            if self._disposing or self._is_disposed:
+                return []
+
+        # Check cooldown first
+        if self._is_material_on_cooldown(equip_code):
+            logger.debug(f"[MssqlAdapter] Skipping {equip_code} - on cooldown")
+            return []
+
         if self._disposing or self._is_disposed:
             return []
 
@@ -576,72 +609,32 @@ class MssqlAdapter(IRemoteDataSource):
                 if self._disposing or self._is_disposed:
                     return []
 
-                # Progressive filter: 1min → 5min → 30min → 2h → 12h → 2days
-                # Fast machines find LOT in first few attempts
-                # Max 2 days - if still null, return empty
-
+                # SIMPLIFIED: Single query with UNION for progressive search
+                # Much faster than multiple IF statements
                 query = """
                 DECLARE @latest_lot NVARCHAR(100);
                 
-                -- 1. Try last 1 minute (for fast machines)
+                -- Find latest LOT with progressive date filter
                 SELECT TOP 1 @latest_lot = LOT_NO
-                FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
-                WHERE EQUIP_CODE = :equip_code
-                  AND FEED_TIME >= DATEADD(MINUTE, -1, GETDATE())
-                ORDER BY FEED_TIME DESC;
-                
-                -- 2. Try last 5 minutes
-                IF @latest_lot IS NULL
-                BEGIN
-                    SELECT TOP 1 @latest_lot = LOT_NO
-                    FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
-                    WHERE EQUIP_CODE = :equip_code
-                      AND FEED_TIME >= DATEADD(MINUTE, -5, GETDATE())
-                    ORDER BY FEED_TIME DESC;
-                END
-                
-                -- 3. Try last 30 minutes
-                IF @latest_lot IS NULL
-                BEGIN
-                    SELECT TOP 1 @latest_lot = LOT_NO
-                    FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
-                    WHERE EQUIP_CODE = :equip_code
-                      AND FEED_TIME >= DATEADD(MINUTE, -30, GETDATE())
-                    ORDER BY FEED_TIME DESC;
-                END
-                
-                -- 4. Try last 2 hours
-                IF @latest_lot IS NULL
-                BEGIN
-                    SELECT TOP 1 @latest_lot = LOT_NO
+                FROM (
+                    SELECT TOP 1 LOT_NO, FEED_TIME
                     FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
                     WHERE EQUIP_CODE = :equip_code
                       AND FEED_TIME >= DATEADD(HOUR, -2, GETDATE())
-                    ORDER BY FEED_TIME DESC;
-                END
-                
-                -- 5. Try last 12 hours
-                IF @latest_lot IS NULL
-                BEGIN
-                    SELECT TOP 1 @latest_lot = LOT_NO
-                    FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
-                    WHERE EQUIP_CODE = :equip_code
-                      AND FEED_TIME >= DATEADD(HOUR, -12, GETDATE())
-                    ORDER BY FEED_TIME DESC;
-                END
-                
-                -- 6. Try last 2 days (maximum)
-                IF @latest_lot IS NULL
-                BEGIN
-                    SELECT TOP 1 @latest_lot = LOT_NO
+                    ORDER BY FEED_TIME DESC
+                    
+                    UNION ALL
+                    
+                    SELECT TOP 1 LOT_NO, FEED_TIME
                     FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
                     WHERE EQUIP_CODE = :equip_code
                       AND FEED_TIME >= DATEADD(DAY, -2, GETDATE())
-                    ORDER BY FEED_TIME DESC;
-                END
+                      AND FEED_TIME < DATEADD(HOUR, -2, GETDATE())
+                    ORDER BY FEED_TIME DESC
+                ) AS combined
+                ORDER BY FEED_TIME DESC;
                 
-                -- If still NULL after 2 days, return nothing (no more fallback)
-                -- Get materials for the LOT (uses LOT_NO index - very fast)
+                -- Get materials for the LOT
                 IF @latest_lot IS NOT NULL
                 BEGIN
                     SELECT 
@@ -681,37 +674,34 @@ class MssqlAdapter(IRemoteDataSource):
                             )
                             records.append(record)
                         except Exception as e:
-                            logger.warning(f"[MssqlAdapter] Parse error: {e}")
+                            logger.debug(f"[MssqlAdapter] Parse error: {e}")
                             continue
 
                     return records
 
-            reduced_retry = RetryConfig(max_attempts=1)
-
-            result = await retry_with_backoff(
-                lambda: self._execute_with_timeout(
-                    _do_fetch(),
-                    timeout=5.0,
-                    operation_name=f"fetch_material_inputs({equip_code})",
-                ),
-                reduced_retry,
-                f"fetch_material_inputs({equip_code})",
+            # Single attempt with longer timeout
+            result = await self._execute_with_timeout(
+                _do_fetch(),
+                timeout=self._config.material_timeout,
+                operation_name=f"fetch_material_inputs({equip_code})",
             )
             success = True
 
             if result:
                 logger.info(f"[MssqlAdapter] Fetched {len(result)} materials for {equip_code}")
             else:
-                logger.debug(f"[MssqlAdapter] No materials found for {equip_code} in last 2 days")
+                logger.debug(f"[MssqlAdapter] No materials found for {equip_code}")
             return result
 
         except (TimeoutError, OperationalError, ConnectionError) as e:
+            self._mark_material_failed(equip_code)
             if not self._is_disposed and not self._disposing:
-                logger.warning(f"[MssqlAdapter] Material timeout for {equip_code}")
+                logger.warning(f"[MssqlAdapter] Material timeout for {equip_code}, cooldown {self._config.material_cooldown}s")
             return []
         except Exception as e:
+            self._mark_material_failed(equip_code)
             if not self._is_disposed and not self._disposing:
-                logger.error(f"[MssqlAdapter] Material error: {e}")
+                logger.error(f"[MssqlAdapter] Material error for {equip_code}: {e}")
             return []
         finally:
             await self._exit_operation(success)
@@ -733,7 +723,8 @@ class MssqlAdapter(IRemoteDataSource):
 
     def reset_circuit_breaker(self) -> None:
         self._circuit_breaker.reset()
-        logger.info("[MssqlAdapter] Circuit breaker reset manually")
+        self._material_failed_devices.clear()
+        logger.info("[MssqlAdapter] Circuit breaker and material cooldowns reset")
 
     def get_metrics(self) -> "RemoteMetrics":
         from iFactory.application.ports.remote import RemoteMetrics

@@ -2,10 +2,11 @@
 """
 Domain Policies.
 
-Policies encapsulate business rules that don't naturally fit within
-a single entity or value object.
+Policies encapsulate business rules that govern domain behavior.
 """
 
 from .transition_policy import StatusTransitionPolicy
 
-__all__ = ["StatusTransitionPolicy"]
+__all__ = [
+    "StatusTransitionPolicy",
+]

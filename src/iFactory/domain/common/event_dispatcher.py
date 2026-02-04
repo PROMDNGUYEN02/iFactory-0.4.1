@@ -18,7 +18,6 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from functools import partial
 from typing import (
     Any,
     Awaitable,
@@ -57,7 +56,10 @@ class EventHandler(Protocol[E]):
 
 SyncHandler = Callable[[DomainEvent], None]
 AsyncHandler = Callable[[DomainEvent], Awaitable[None]]
-AnyHandler = Union[SyncHandler, AsyncHandler, EventHandler]
+AnyHandler = Union[SyncHandler, AsyncHandler, EventHandler[Any]]
+
+# Type for the next handler in middleware chain
+NextHandler = Callable[[DomainEvent], Awaitable[None]]
 
 
 # ============================================================================
@@ -80,7 +82,7 @@ class EventMiddleware(ABC):
     async def process(
         self,
         event: DomainEvent,
-        next_handler: Callable[[DomainEvent], Awaitable[None]],
+        next_handler: NextHandler,
     ) -> None:
         """
         Process the event and optionally call next handler.
@@ -101,7 +103,7 @@ class LoggingMiddleware(EventMiddleware):
     async def process(
         self,
         event: DomainEvent,
-        next_handler: Callable[[DomainEvent], Awaitable[None]],
+        next_handler: NextHandler,
     ) -> None:
         start = datetime.now()
         logger.log(
@@ -140,7 +142,7 @@ class CorrelationMiddleware(EventMiddleware):
     async def process(
         self,
         event: DomainEvent,
-        next_handler: Callable[[DomainEvent], Awaitable[None]],
+        next_handler: NextHandler,
     ) -> None:
         if not event.correlation_id and self._default_id:
             metadata = event.metadata.with_correlation(self._default_id)
@@ -165,7 +167,7 @@ class RetryMiddleware(EventMiddleware):
     async def process(
         self,
         event: DomainEvent,
-        next_handler: Callable[[DomainEvent], Awaitable[None]],
+        next_handler: NextHandler,
     ) -> None:
         last_error: Optional[Exception] = None
 
@@ -454,44 +456,44 @@ class EnhancedEventDispatcher(IEventDispatcher):
         for event in events:
             await self.dispatch(event)
 
-    def _build_middleware_chain(
-        self,
-    ) -> Callable[[DomainEvent], Awaitable[None]]:
+    def _build_middleware_chain(self) -> NextHandler:
         """Build middleware chain ending with handler invocation."""
 
         async def final_handler(evt: DomainEvent) -> None:
             await self._invoke_handlers(evt)
 
         # Build chain from inside out (last middleware wraps final handler)
-        chain: Callable[[DomainEvent], Awaitable[None]] = final_handler
+        chain: NextHandler = final_handler
 
         for middleware in reversed(self._middleware):
-            # Capture current chain in closure
-            next_in_chain = chain
-
-            async def make_wrapper(
-                mw: EventMiddleware,
-                next_h: Callable[[DomainEvent], Awaitable[None]],
-                evt: DomainEvent,
-            ) -> None:
-                await mw.process(evt, next_h)
-
-            # Create new chain step
-            chain = partial(make_wrapper, middleware, next_in_chain)
+            # Capture middleware and next_chain in closure properly
+            chain = self._create_middleware_wrapper(middleware, chain)
 
         return chain
+
+    def _create_middleware_wrapper(
+        self,
+        middleware: EventMiddleware,
+        next_chain: NextHandler,
+    ) -> NextHandler:
+        """Create a wrapper for a middleware that captures the next handler."""
+
+        async def wrapper(event: DomainEvent) -> None:
+            await middleware.process(event, next_chain)
+
+        return wrapper
 
     async def _invoke_handlers(self, event: DomainEvent) -> None:
         """Invoke all handlers for an event."""
         event_type = type(event)
 
         # Get handlers for this specific event type
-        type_handlers = self._handlers.get(event_type, [])
+        type_handlers = list(self._handlers.get(event_type, []))
 
         # Also check parent classes (for handler inheritance)
         for parent_type in event_type.__mro__:
             if parent_type != event_type and parent_type in self._handlers:
-                type_handlers = type_handlers + self._handlers[parent_type]
+                type_handlers.extend(self._handlers[parent_type])
 
         # Combine with global handlers
         all_handlers = type_handlers + self._global_handlers
