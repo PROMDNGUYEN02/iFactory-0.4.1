@@ -22,3 +22,6 @@ cd dist\iFactory
 .\iFactory.exe
 
 # 4. Sau khi OK, đổi console=False trong spec và build lại
+
+pip install structlog orjson
+pip show structlog orjson

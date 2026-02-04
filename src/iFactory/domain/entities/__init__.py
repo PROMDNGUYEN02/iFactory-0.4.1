@@ -1,3 +1,6 @@
-from .device import Device
+# src/iFactory/domain/entities/__init__.py
+"""Domain Entities."""
 
-__all__ = ["Device"]
+from .device import Device, DeviceState
+
+__all__ = ["Device", "DeviceState"]

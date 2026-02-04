@@ -9,6 +9,7 @@ Features:
 - Circuit breaker pattern
 - Proper async operation tracking
 - PyInstaller compatible
+- Material Input fetching - OPTIMIZED for large tables (362GB+)
 """
 
 from __future__ import annotations
@@ -39,31 +40,20 @@ T = TypeVar("T")
 
 
 class CircuitState(Enum):
-    CLOSED = "closed"  # Normal operation
-    OPEN = "open"  # Failing - reject requests
-    HALF_OPEN = "half_open"  # Testing if recovered
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
 
 
 @dataclass
 class CircuitBreakerConfig:
-    """Configuration for circuit breaker."""
-
-    failure_threshold: int = 5  # Failures before opening
-    recovery_timeout: float = 30.0  # Seconds before trying again
-    half_open_max_calls: int = 3  # Test calls in half-open state
+    failure_threshold: int = 5
+    recovery_timeout: float = 30.0
+    half_open_max_calls: int = 3
 
 
 @dataclass
 class CircuitBreaker:
-    """
-    Simple circuit breaker for external service protection.
-
-    States:
-    - CLOSED: Normal operation, requests go through
-    - OPEN: Service is down, reject requests immediately
-    - HALF_OPEN: Testing if service recovered
-    """
-
     config: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
     _state: CircuitState = field(default=CircuitState.CLOSED, init=False)
     _failure_count: int = field(default=0, init=False)
@@ -77,7 +67,6 @@ class CircuitBreaker:
 
     @property
     def is_available(self) -> bool:
-        """Check if circuit allows requests."""
         if self._state == CircuitState.CLOSED:
             return True
         if self._state == CircuitState.OPEN:
@@ -89,12 +78,10 @@ class CircuitBreaker:
         return self._half_open_calls < self.config.half_open_max_calls
 
     async def record_success(self) -> None:
-        """Record a successful call."""
         async with self._lock:
             if self._state == CircuitState.HALF_OPEN:
                 self._half_open_calls += 1
                 if self._half_open_calls >= self.config.half_open_max_calls:
-                    logger.info("[CircuitBreaker] Service recovered, closing circuit")
                     self._state = CircuitState.CLOSED
                     self._failure_count = 0
                     self._half_open_calls = 0
@@ -102,25 +89,18 @@ class CircuitBreaker:
                 self._failure_count = 0
 
     async def record_failure(self) -> None:
-        """Record a failed call."""
         async with self._lock:
             self._failure_count += 1
             self._last_failure_time = datetime.now()
 
             if self._state == CircuitState.HALF_OPEN:
-                logger.warning("[CircuitBreaker] Failed during recovery, reopening circuit")
                 self._state = CircuitState.OPEN
                 self._half_open_calls = 0
             elif self._state == CircuitState.CLOSED:
                 if self._failure_count >= self.config.failure_threshold:
-                    logger.warning(
-                        "[CircuitBreaker] Failure threshold reached (%d), opening circuit",
-                        self._failure_count,
-                    )
                     self._state = CircuitState.OPEN
 
     async def try_acquire(self) -> bool:
-        """Try to acquire permission for a request."""
         async with self._lock:
             if self._state == CircuitState.CLOSED:
                 return True
@@ -129,7 +109,6 @@ class CircuitBreaker:
                 if self._last_failure_time:
                     elapsed = (datetime.now() - self._last_failure_time).total_seconds()
                     if elapsed >= self.config.recovery_timeout:
-                        logger.info("[CircuitBreaker] Recovery timeout passed, entering half-open")
                         self._state = CircuitState.HALF_OPEN
                         self._half_open_calls = 0
                         return True
@@ -140,7 +119,6 @@ class CircuitBreaker:
             return False
 
     def reset(self) -> None:
-        """Reset circuit breaker to initial state."""
         self._state = CircuitState.CLOSED
         self._failure_count = 0
         self._last_failure_time = None
@@ -154,8 +132,6 @@ class CircuitBreaker:
 
 @dataclass
 class RetryConfig:
-    """Configuration for retry logic."""
-
     max_attempts: int = 3
     base_delay: float = 1.0
     max_delay: float = 10.0
@@ -168,7 +144,6 @@ async def retry_with_backoff(
     config: RetryConfig,
     operation_name: str = "operation",
 ) -> T:
-    """Execute function with retry and exponential backoff."""
     last_exception = None
 
     for attempt in range(1, config.max_attempts + 1):
@@ -202,14 +177,37 @@ async def retry_with_backoff(
 
 
 # ============================================================================
+# Material Input Data Class
+# ============================================================================
+
+
+@dataclass
+class MaterialInputRecord:
+    lot_no: str
+    material_batch: str
+    material_name: str
+    feed_time: datetime
+    feed_qty: float = 0.0
+    feed_user: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "lot_no": self.lot_no,
+            "material_batch": self.material_batch,
+            "material_name": self.material_name,
+            "feed_time": self.feed_time.isoformat() if self.feed_time else None,
+            "feed_qty": self.feed_qty,
+            "feed_user": self.feed_user,
+        }
+
+
+# ============================================================================
 # MSSQL Adapter
 # ============================================================================
 
 
 @dataclass
 class MssqlAdapterConfig:
-    """Configuration for MSSQL adapter."""
-
     query_timeout: float = 30.0
     connect_timeout: int = 10
     retry: RetryConfig = field(default_factory=RetryConfig)
@@ -220,12 +218,7 @@ class MssqlAdapter(IRemoteDataSource):
     """
     Adapter for External MSSQL PLC/SCADA Database.
 
-    Features:
-    - Query timeout protection
-    - Automatic retry with exponential backoff
-    - Circuit breaker to prevent cascade failures
-    - Graceful shutdown with operation tracking
-    - PyInstaller compatible (uses ODBC connection string)
+    Optimized for large tables (362GB+) with proper index usage.
     """
 
     def __init__(
@@ -240,15 +233,11 @@ class MssqlAdapter(IRemoteDataSource):
         self._disposing = False
         self._active_count = 0
         self._lock = asyncio.Lock()
-
-        # Circuit breaker for resilience
         self._circuit_breaker = CircuitBreaker(self._config.circuit_breaker)
 
-        # Create engine if connection string provided
         if connection_string:
             self._create_engine(connection_string)
         else:
-            # Try to get from config
             db_config = DatabaseConfig()
             if db_config.mssql_url:
                 self._create_engine(db_config.mssql_url)
@@ -260,7 +249,6 @@ class MssqlAdapter(IRemoteDataSource):
                 )
 
     def _create_engine(self, url: str) -> None:
-        """Create SQLAlchemy async engine."""
         self._engine = create_async_engine(
             url,
             poolclass=NullPool,
@@ -273,27 +261,22 @@ class MssqlAdapter(IRemoteDataSource):
 
     @property
     def is_available(self) -> bool:
-        """Check if adapter is available for requests."""
         return not self._is_disposed and not self._disposing and self._engine is not None and self._circuit_breaker.is_available
 
     @property
     def circuit_state(self) -> CircuitState:
-        """Get current circuit breaker state."""
         return self._circuit_breaker.state
 
     async def _enter_operation(self) -> bool:
-        """Enter an operation. Returns False if should abort."""
         async with self._lock:
             if self._disposing or self._is_disposed:
                 return False
             if not await self._circuit_breaker.try_acquire():
-                logger.warning("[MssqlAdapter] Circuit breaker open, rejecting request")
                 return False
             self._active_count += 1
             return True
 
     async def _exit_operation(self, success: bool = True) -> None:
-        """Exit an operation and record result."""
         if success:
             await self._circuit_breaker.record_success()
         else:
@@ -308,7 +291,6 @@ class MssqlAdapter(IRemoteDataSource):
         timeout: Optional[float] = None,
         operation_name: str = "query",
     ):
-        """Execute coroutine with timeout protection."""
         timeout = timeout or self._config.query_timeout
         try:
             return await asyncio.wait_for(coro, timeout=timeout)
@@ -321,7 +303,6 @@ class MssqlAdapter(IRemoteDataSource):
             raise TimeoutError(f"{operation_name} timed out after {timeout}s")
 
     def _parse_datetime(self, val: Any) -> datetime:
-        """Parse datetime from various formats."""
         if isinstance(val, datetime):
             return val
         if isinstance(val, str):
@@ -336,7 +317,6 @@ class MssqlAdapter(IRemoteDataSource):
         return datetime.now()
 
     def _map_row(self, row: Any) -> Dict[str, Any]:
-        """Map database row to dictionary."""
         equip_code = str(row[0]).strip() if row[0] else "UNKNOWN"
         equip_status = str(row[1]) if row[1] else "0"
         start_time = self._parse_datetime(row[2])
@@ -360,7 +340,6 @@ class MssqlAdapter(IRemoteDataSource):
         self,
         equipment_codes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Fetch latest status for devices."""
         if not await self._enter_operation():
             return []
 
@@ -439,7 +418,6 @@ class MssqlAdapter(IRemoteDataSource):
         equip_code: str,
         days: int = 1,
     ) -> List[Dict[str, Any]]:
-        """Fetch device status history for N days."""
         if not self.is_available:
             return []
         now = datetime.now()
@@ -452,7 +430,6 @@ class MssqlAdapter(IRemoteDataSource):
         start_time: datetime,
         end_time: datetime,
     ) -> List[Dict[str, Any]]:
-        """Fetch device history for a specific time range."""
         if not await self._enter_operation():
             return []
 
@@ -516,7 +493,6 @@ class MssqlAdapter(IRemoteDataSource):
         equip_code: str,
         limit: int = 1,
     ) -> List[Dict[str, Any]]:
-        """Fetch N most recent history records for a device."""
         if not await self._enter_operation():
             return []
 
@@ -569,8 +545,178 @@ class MssqlAdapter(IRemoteDataSource):
         finally:
             await self._exit_operation(success)
 
+    # =========================================================================
+    # Material Input Fetching - Progressive filter from small to large
+    # =========================================================================
+
+    async def fetch_material_inputs(
+        self,
+        equip_code: str,
+    ) -> List[MaterialInputRecord]:
+        """
+        Fetch material inputs from yntti.dbo.RPT_FEEDING_DETAIL.
+
+        Progressive date filter (small to large for fast machines):
+        1 min → 5 min → 30 min → 2 hours → 12 hours → 2 days
+
+        If no data after 2 days, return empty list.
+        """
+        if self._disposing or self._is_disposed:
+            return []
+
+        if not await self._enter_operation():
+            return []
+
+        success = False
+        try:
+            if not self._engine or self._disposing:
+                return []
+
+            async def _do_fetch():
+                if self._disposing or self._is_disposed:
+                    return []
+
+                # Progressive filter: 1min → 5min → 30min → 2h → 12h → 2days
+                # Fast machines find LOT in first few attempts
+                # Max 2 days - if still null, return empty
+
+                query = """
+                DECLARE @latest_lot NVARCHAR(100);
+                
+                -- 1. Try last 1 minute (for fast machines)
+                SELECT TOP 1 @latest_lot = LOT_NO
+                FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
+                WHERE EQUIP_CODE = :equip_code
+                  AND FEED_TIME >= DATEADD(MINUTE, -1, GETDATE())
+                ORDER BY FEED_TIME DESC;
+                
+                -- 2. Try last 5 minutes
+                IF @latest_lot IS NULL
+                BEGIN
+                    SELECT TOP 1 @latest_lot = LOT_NO
+                    FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
+                    WHERE EQUIP_CODE = :equip_code
+                      AND FEED_TIME >= DATEADD(MINUTE, -5, GETDATE())
+                    ORDER BY FEED_TIME DESC;
+                END
+                
+                -- 3. Try last 30 minutes
+                IF @latest_lot IS NULL
+                BEGIN
+                    SELECT TOP 1 @latest_lot = LOT_NO
+                    FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
+                    WHERE EQUIP_CODE = :equip_code
+                      AND FEED_TIME >= DATEADD(MINUTE, -30, GETDATE())
+                    ORDER BY FEED_TIME DESC;
+                END
+                
+                -- 4. Try last 2 hours
+                IF @latest_lot IS NULL
+                BEGIN
+                    SELECT TOP 1 @latest_lot = LOT_NO
+                    FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
+                    WHERE EQUIP_CODE = :equip_code
+                      AND FEED_TIME >= DATEADD(HOUR, -2, GETDATE())
+                    ORDER BY FEED_TIME DESC;
+                END
+                
+                -- 5. Try last 12 hours
+                IF @latest_lot IS NULL
+                BEGIN
+                    SELECT TOP 1 @latest_lot = LOT_NO
+                    FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
+                    WHERE EQUIP_CODE = :equip_code
+                      AND FEED_TIME >= DATEADD(HOUR, -12, GETDATE())
+                    ORDER BY FEED_TIME DESC;
+                END
+                
+                -- 6. Try last 2 days (maximum)
+                IF @latest_lot IS NULL
+                BEGIN
+                    SELECT TOP 1 @latest_lot = LOT_NO
+                    FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
+                    WHERE EQUIP_CODE = :equip_code
+                      AND FEED_TIME >= DATEADD(DAY, -2, GETDATE())
+                    ORDER BY FEED_TIME DESC;
+                END
+                
+                -- If still NULL after 2 days, return nothing (no more fallback)
+                -- Get materials for the LOT (uses LOT_NO index - very fast)
+                IF @latest_lot IS NOT NULL
+                BEGIN
+                    SELECT 
+                        LOT_NO,
+                        MATERIAL_BATCH,
+                        MATERIAL_NAME,
+                        MIN(FEED_TIME) as FEED_TIME,
+                        MAX(FEED_QTY) as FEED_QTY,
+                        MAX(ISNULL(FEED_USER, '')) as FEED_USER
+                    FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
+                    WHERE LOT_NO = @latest_lot
+                    GROUP BY LOT_NO, MATERIAL_BATCH, MATERIAL_NAME
+                    ORDER BY MIN(FEED_TIME) ASC;
+                END
+                """
+
+                async with self._engine.connect() as conn:
+                    if self._disposing or self._is_disposed:
+                        return []
+
+                    result = await conn.execute(
+                        text(query),
+                        {"equip_code": equip_code},
+                    )
+                    rows = result.fetchall()
+
+                    records = []
+                    for row in rows:
+                        try:
+                            record = MaterialInputRecord(
+                                lot_no=str(row[0]).strip() if row[0] else "",
+                                material_batch=str(row[1]).strip() if row[1] else "",
+                                material_name=str(row[2]).strip() if row[2] else "",
+                                feed_time=self._parse_datetime(row[3]) if row[3] else datetime.now(),
+                                feed_qty=float(row[4]) if row[4] else 0.0,
+                                feed_user=str(row[5]).strip() if row[5] else "",
+                            )
+                            records.append(record)
+                        except Exception as e:
+                            logger.warning(f"[MssqlAdapter] Parse error: {e}")
+                            continue
+
+                    return records
+
+            reduced_retry = RetryConfig(max_attempts=1)
+
+            result = await retry_with_backoff(
+                lambda: self._execute_with_timeout(
+                    _do_fetch(),
+                    timeout=5.0,
+                    operation_name=f"fetch_material_inputs({equip_code})",
+                ),
+                reduced_retry,
+                f"fetch_material_inputs({equip_code})",
+            )
+            success = True
+
+            if result:
+                logger.info(f"[MssqlAdapter] Fetched {len(result)} materials for {equip_code}")
+            else:
+                logger.debug(f"[MssqlAdapter] No materials found for {equip_code} in last 2 days")
+            return result
+
+        except (TimeoutError, OperationalError, ConnectionError) as e:
+            if not self._is_disposed and not self._disposing:
+                logger.warning(f"[MssqlAdapter] Material timeout for {equip_code}")
+            return []
+        except Exception as e:
+            if not self._is_disposed and not self._disposing:
+                logger.error(f"[MssqlAdapter] Material error: {e}")
+            return []
+        finally:
+            await self._exit_operation(success)
+
     async def health_check(self) -> bool:
-        """Check if database connection is healthy."""
         if not self._engine or self._is_disposed:
             return False
 
@@ -586,18 +732,13 @@ class MssqlAdapter(IRemoteDataSource):
             return False
 
     def reset_circuit_breaker(self) -> None:
-        """Manually reset circuit breaker."""
         self._circuit_breaker.reset()
         logger.info("[MssqlAdapter] Circuit breaker reset manually")
 
     def get_metrics(self) -> "RemoteMetrics":
-        """Get operation metrics."""
         from iFactory.application.ports.remote import RemoteMetrics
 
-        # Return basic metrics from circuit breaker stats
         metrics = RemoteMetrics()
-
-        # You can enhance this with actual tracking
         metrics.total_requests = getattr(self, "_total_requests", 0)
         metrics.successful_requests = getattr(self, "_successful_requests", 0)
         metrics.failed_requests = getattr(self, "_failed_requests", 0)
@@ -608,13 +749,6 @@ class MssqlAdapter(IRemoteDataSource):
         self,
         equipment_codes: List[str],
     ) -> Dict[str, float]:
-        """
-        Fetch total RUN time today for multiple devices in a single query.
-
-        Only counts time within today (00:00 to now).
-
-        FIXED: Properly handles records with NULL END_TIME that started before today.
-        """
         if not await self._enter_operation():
             return {code: 0.0 for code in equipment_codes}
 
@@ -627,30 +761,16 @@ class MssqlAdapter(IRemoteDataSource):
             today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
             async def _do_fetch():
-                # FIXED query: Only count time that falls within today
-                #
-                # For each record:
-                # - effective_start = MAX(START_TIME, today_start)
-                # - effective_end = MIN(COALESCE(END_TIME, now), now)
-                # - duration = effective_end - effective_start (only if positive)
-                #
-                # Filter: Only records that OVERLAP with today's range [today_start, now]
-                # - Must have started before now: START_TIME < now
-                # - Must end after today started: END_TIME > today_start OR END_TIME IS NULL
-                # - For NULL END_TIME, we use 'now' as the end time
-
                 query_str = """
                 SELECT 
                     S.EQUIP_CODE,
                     SUM(
                         DATEDIFF(
                             SECOND,
-                            -- effective_start: MAX(START_TIME, today_start)
                             CASE 
                                 WHEN S.START_TIME > :today_start THEN S.START_TIME 
                                 ELSE :today_start 
                             END,
-                            -- effective_end: MIN(COALESCE(END_TIME, now), now)
                             CASE 
                                 WHEN S.END_TIME IS NULL THEN :now
                                 WHEN S.END_TIME < :now THEN S.END_TIME
@@ -662,15 +782,8 @@ class MssqlAdapter(IRemoteDataSource):
                 WHERE S.EQUIP_CODE IN :codes
                 AND S.EQUIP_STATUS = 1
                 AND (S.DEL_FLAG = '0' OR S.DEL_FLAG IS NULL)
-                -- Record must have started before now
                 AND S.START_TIME < :now
-                -- Record must overlap with today: ends after today_start OR still running
-                AND (
-                    S.END_TIME > :today_start 
-                    OR S.END_TIME IS NULL
-                )
-                -- Additional safety: effective_start < effective_end
-                -- This ensures we only count positive durations
+                AND (S.END_TIME > :today_start OR S.END_TIME IS NULL)
                 AND (
                     CASE 
                         WHEN S.END_TIME IS NULL THEN :now
@@ -706,12 +819,10 @@ class MssqlAdapter(IRemoteDataSource):
                     )
                     rows = result.fetchall()
 
-                    # Build result dict - initialize all codes with 0
                     run_times = {code.upper(): 0.0 for code in equipment_codes}
                     for row in rows:
                         code = str(row[0]).strip().upper()
                         seconds = float(row[1]) if row[1] else 0.0
-                        # Ensure non-negative and cap at total_seconds_today
                         total_seconds_today = (now - today_start).total_seconds()
                         run_times[code] = min(max(0.0, seconds), total_seconds_today)
 
@@ -741,17 +852,6 @@ class MssqlAdapter(IRemoteDataSource):
         self,
         equipment_code: str,
     ) -> float:
-        """
-        Fetch RUN time today for a single device.
-
-        Optimized for on-demand fetching when user clicks a device.
-
-        Args:
-            equipment_code: Single equipment code to query
-
-        Returns:
-            Run time in seconds (0.0 if error or no data)
-        """
         if not await self._enter_operation():
             return 0.0
 
@@ -820,14 +920,13 @@ class MssqlAdapter(IRemoteDataSource):
 
                     if row and row[0]:
                         seconds = float(row[0])
-                        # Cap at total seconds today
                         return min(max(0.0, seconds), total_seconds_today)
                     return 0.0
 
             result = await retry_with_backoff(
                 lambda: self._execute_with_timeout(
                     _do_fetch(),
-                    timeout=10.0,  # Shorter timeout for single device
+                    timeout=10.0,
                     operation_name=f"fetch_run_time({equipment_code})",
                 ),
                 self._config.retry,
@@ -846,7 +945,6 @@ class MssqlAdapter(IRemoteDataSource):
             await self._exit_operation(success)
 
     async def dispose(self) -> None:
-        """Dispose with proper waiting for active operations."""
         if self._is_disposed:
             return
 
@@ -859,7 +957,7 @@ class MssqlAdapter(IRemoteDataSource):
         if active > 0:
             logger.info(f"[MssqlAdapter] Waiting for {active} operations...")
             wait_time = 0
-            max_wait = 5.0
+            max_wait = 3.0
             while wait_time < max_wait:
                 await asyncio.sleep(0.1)
                 wait_time += 0.1
@@ -867,18 +965,21 @@ class MssqlAdapter(IRemoteDataSource):
                     if self._active_count == 0:
                         break
 
-            if self._active_count > 0:
-                logger.warning(
-                    "[MssqlAdapter] Disposing with %d active operations after %.1fs timeout",
-                    self._active_count,
-                    max_wait,
-                )
+            async with self._lock:
+                if self._active_count > 0:
+                    logger.warning(
+                        "[MssqlAdapter] Forcing disposal with %d active operations",
+                        self._active_count,
+                    )
 
         self._is_disposed = True
+
         if self._engine:
             try:
-                await self._engine.dispose()
+                await asyncio.wait_for(self._engine.dispose(), timeout=2.0)
                 logger.info("[MssqlAdapter] Engine disposed")
+            except asyncio.TimeoutError:
+                logger.warning("[MssqlAdapter] Engine dispose timed out")
             except Exception as e:
                 logger.debug(f"[MssqlAdapter] Engine dispose error: {e}")
             finally:
@@ -892,4 +993,5 @@ __all__ = [
     "CircuitBreakerConfig",
     "CircuitState",
     "RetryConfig",
+    "MaterialInputRecord",
 ]

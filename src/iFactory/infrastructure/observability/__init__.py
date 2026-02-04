@@ -1,21 +1,13 @@
-# src/infrastructure/observability/__init__.py
-"""
-Observability infrastructure for monitoring and debugging.
+# src/iFactory/infrastructure/observability/__init__.py
+"""Observability infrastructure."""
 
-Features:
-- Structured logging
-- Metrics collection
-- Distributed tracing (preparatory)
-- Health checks
-"""
-
-from .logging import (
+from iFactory.infrastructure.observability.logging import (
     configure_logging,
     StructuredLogger,
     get_logger,
     LogContext,
 )
-from .metrics import (
+from iFactory.infrastructure.observability.metrics import (
     MetricsCollector,
     Counter,
     Gauge,
@@ -23,7 +15,7 @@ from .metrics import (
     Timer,
     get_metrics,
 )
-from .health import (
+from iFactory.infrastructure.observability.health import (
     HealthCheck,
     HealthRegistry,
     HealthStatus,

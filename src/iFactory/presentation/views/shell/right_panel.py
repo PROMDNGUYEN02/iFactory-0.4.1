@@ -7,16 +7,25 @@ OPTIMIZED:
 - Skip redundant renders
 - Lazy style computation
 
-NEW:
+FEATURES:
 - Availability display with progress bar
+- Material Inputs list display (NEW)
 """
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ...constants.layout import Layout
 from ...state.selectors import (
@@ -29,8 +38,89 @@ if TYPE_CHECKING:
     from ...services.theme_service import ThemeService
     from ...state.store import Store
     from ...viewmodels import DeviceListViewModel, ShellViewModel
+    from ...viewmodels.models.device_model import MaterialInputModel
 
 logger = logging.getLogger(__name__)
+
+
+class MaterialInputWidget(QFrame):
+    """
+    Widget to display a single material input.
+
+    Shows:
+    - Material batch
+    - Material name (truncated)
+    - Feed time
+    """
+
+    def __init__(
+        self,
+        material: "MaterialInputModel",
+        theme_service: "ThemeService",
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__(parent)
+        self._material = material
+        self._theme_service = theme_service
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        tokens = self._theme_service.tokens
+
+        self.setObjectName("material_item")
+        self.setStyleSheet(
+            f"""
+            QFrame#material_item {{
+                background-color: {tokens.get_rgba("card.bg", 0.6)};
+                border: 1px solid {tokens.get_rgba("border", 0.3)};
+                border-radius: 6px;
+                padding: 6px;
+                margin: 2px 0;
+            }}
+            QFrame#material_item:hover {{
+                background-color: {tokens.get_rgba("card.bg", 0.9)};
+                border-color: {tokens.accent};
+            }}
+        """
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+
+        # Batch label (bold, primary)
+        self._batch_label = QLabel(f"📦 {self._material.material_batch}")
+        self._batch_label.setStyleSheet(
+            f"""
+            font-weight: 600;
+            font-size: 11px;
+            color: {tokens.app_fg};
+        """
+        )
+        layout.addWidget(self._batch_label)
+
+        # Material name (smaller, hint color)
+        name_display = self._material.display_name
+        self._name_label = QLabel(name_display)
+        self._name_label.setStyleSheet(
+            f"""
+            font-size: 10px;
+            color: {tokens.hint};
+        """
+        )
+        self._name_label.setWordWrap(True)
+        self._name_label.setToolTip(self._material.material_name)  # Full name on hover
+        layout.addWidget(self._name_label)
+
+        # Feed time (smallest)
+        self._time_label = QLabel(f"⏰ {self._material.formatted_time}")
+        self._time_label.setStyleSheet(
+            f"""
+            font-size: 9px;
+            color: {tokens.hint};
+        """
+        )
+        layout.addWidget(self._time_label)
 
 
 class RightPanelView:
@@ -41,8 +131,9 @@ class RightPanelView:
     - Cached styles per theme
     - Skip redundant renders
 
-    NEW:
+    FEATURES:
     - Availability display below OEE
+    - Material Inputs list (scrollable)
     """
 
     def __init__(
@@ -65,12 +156,15 @@ class RightPanelView:
         self._cached_styles: Dict[str, Dict[str, str]] = {}
 
         self._layout: Optional[QVBoxLayout] = None
+        self._material_widgets: List[MaterialInputWidget] = []
+
         self._setup()
         self._apply_theme_styles()
         self._bind_viewmodels()
 
     def _bind_viewmodels(self) -> None:
         self._device_vm.selectionChanged.connect(self._on_selection_changed)
+        self._device_vm.materialInputsChanged.connect(self._on_material_inputs_changed)
         self._shell_vm.themeChanged.connect(self._on_theme_changed)
         self._shell_vm.rightPanelChanged.connect(self._on_panel_changed)
 
@@ -93,6 +187,18 @@ class RightPanelView:
             self._show_no_selection()
             self._last_device_id = None
 
+    @Slot(str, list)
+    def _on_material_inputs_changed(self, device_id: str, materials: List) -> None:
+        """Handle material inputs update."""
+        if device_id != self._last_device_id:
+            return
+
+        # Re-render the materials section
+        device = self._device_vm.selected_device
+        if device:
+            self._render_material_inputs(device.material_inputs, device.current_lot_no)
+            logger.debug(f"[RightPanelView] Material inputs updated: {len(materials)} items")
+
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
         """Handle theme change - OPTIMIZED."""
@@ -101,6 +207,11 @@ class RightPanelView:
 
         self._current_theme = theme
         self._apply_theme_styles()
+
+        # Re-render material widgets with new theme
+        device = self._device_vm.selected_device
+        if device and device.has_material_inputs:
+            self._render_material_inputs(device.material_inputs, device.current_lot_no)
 
     @Slot(bool)
     def _on_panel_changed(self, expanded: bool) -> None:
@@ -146,17 +257,42 @@ class RightPanelView:
         self._last_update.setObjectName("last_update")
         self._layout.addWidget(self._last_update)
 
-        # Material info frame
-        self._mat_frame = QFrame()
-        self._mat_frame.setObjectName("mat_frame")
-        mat_layout = QVBoxLayout(self._mat_frame)
-        mat_layout.setContentsMargins(10, 10, 10, 10)
-        mat_layout.setSpacing(4)
-        self._batch = QLabel("Batch: --")
-        self._fed_time = QLabel("Fed: --")
-        mat_layout.addWidget(self._batch)
-        mat_layout.addWidget(self._fed_time)
-        self._layout.addWidget(self._mat_frame)
+        # ================================================================
+        # Material Inputs Section - NEW
+        # ================================================================
+        self._mat_section_label = QLabel("📥 Material Inputs")
+        self._mat_section_label.setObjectName("section_label")
+        self._layout.addWidget(self._mat_section_label)
+
+        # LOT NO label
+        self._lot_label = QLabel("LOT: --")
+        self._lot_label.setObjectName("lot_label")
+        self._layout.addWidget(self._lot_label)
+
+        # Scrollable area for material inputs
+        self._mat_scroll = QScrollArea()
+        self._mat_scroll.setObjectName("mat_scroll")
+        self._mat_scroll.setWidgetResizable(True)
+        self._mat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._mat_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._mat_scroll.setMaximumHeight(150)  # Limit height
+        self._mat_scroll.setMinimumHeight(60)
+
+        self._mat_container = QWidget()
+        self._mat_container_layout = QVBoxLayout(self._mat_container)
+        self._mat_container_layout.setContentsMargins(0, 0, 0, 0)
+        self._mat_container_layout.setSpacing(4)
+        self._mat_container_layout.addStretch()
+
+        self._mat_scroll.setWidget(self._mat_container)
+        self._layout.addWidget(self._mat_scroll)
+
+        # No materials placeholder
+        self._no_mat_label = QLabel("No materials loaded")
+        self._no_mat_label.setObjectName("no_mat_label")
+        self._no_mat_label.setAlignment(Qt.AlignCenter)
+        self._mat_container_layout.insertWidget(0, self._no_mat_label)
+        # ================================================================
 
         # OEE
         self._lbl_oee = QLabel("OEE: 0%")
@@ -167,7 +303,7 @@ class RightPanelView:
         self._layout.addWidget(self._bar_oee)
 
         # ================================================================
-        # Availability - NEW SECTION
+        # Availability Section
         # ================================================================
         self._lbl_availability = QLabel("Availability: 0%")
         self._lbl_availability.setObjectName("lbl_availability")
@@ -219,6 +355,15 @@ class RightPanelView:
             if item.widget():
                 item.widget().deleteLater()
 
+    def _clear_material_widgets(self) -> None:
+        """Clear all material input widgets."""
+        for widget in self._material_widgets:
+            try:
+                widget.deleteLater()
+            except RuntimeError:
+                pass
+        self._material_widgets.clear()
+
     def _get_cached_styles(self) -> Dict[str, str]:
         """Get or compute cached styles for current theme."""
         if self._current_theme in self._cached_styles:
@@ -240,8 +385,19 @@ class RightPanelView:
             "desc": f"font-size: 11px; color: {tokens.hint};",
             "last_update": f"font-size: 11px; color: {tokens.hint};",
             "card_frame": f"QFrame {{ {card_style} }}",
-            "batch": f"font-weight: 600; color: {tokens.app_fg};",
-            "fed_time": f"font-size: 10px; color: {tokens.hint};",
+            "section_label": f"font-weight: 700; font-size: 12px; color: {tokens.app_fg}; margin-top: 8px;",
+            "lot_label": f"font-size: 11px; font-weight: 600; color: {tokens.accent};",
+            "no_mat_label": f"font-size: 10px; color: {tokens.hint}; font-style: italic;",
+            "mat_scroll": f"""
+                QScrollArea#mat_scroll {{
+                    background-color: transparent;
+                    border: 1px solid {tokens.get_rgba("border", 0.3)};
+                    border-radius: 6px;
+                }}
+                QScrollArea#mat_scroll > QWidget > QWidget {{
+                    background-color: transparent;
+                }}
+            """,
             "lbl_oee": f"font-weight: 600; margin-top: 6px; color: {tokens.app_fg};",
             "lbl_availability": f"font-weight: 600; margin-top: 6px; color: {tokens.app_fg};",
             "lbl_run_time": f"font-size: 10px; color: {tokens.hint}; margin-bottom: 4px;",
@@ -261,10 +417,14 @@ class RightPanelView:
         self._title.setStyleSheet(styles["title"])
         self._desc.setStyleSheet(styles["desc"])
         self._last_update.setStyleSheet(styles["last_update"])
-        self._mat_frame.setStyleSheet(styles["card_frame"].replace("QFrame", "QFrame#mat_frame"))
+
+        # Material section styles
+        self._mat_section_label.setStyleSheet(styles["section_label"])
+        self._lot_label.setStyleSheet(styles["lot_label"])
+        self._no_mat_label.setStyleSheet(styles["no_mat_label"])
+        self._mat_scroll.setStyleSheet(styles["mat_scroll"])
+
         self._details_frame.setStyleSheet(styles["card_frame"].replace("QFrame", "QFrame#details_frame"))
-        self._batch.setStyleSheet(styles["batch"])
-        self._fed_time.setStyleSheet(styles["fed_time"])
         self._lbl_oee.setStyleSheet(styles["lbl_oee"])
         self._lbl_availability.setStyleSheet(styles["lbl_availability"])
         self._lbl_run_time.setStyleSheet(styles["lbl_run_time"])
@@ -283,6 +443,45 @@ class RightPanelView:
         minutes = (total_seconds % 3600) // 60
         secs = total_seconds % 60
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    def _render_material_inputs(
+        self,
+        materials: tuple,
+        lot_no: str = "",
+    ) -> None:
+        """Render material inputs in the scrollable area."""
+        # Clear existing widgets
+        self._clear_material_widgets()
+
+        # Update LOT label
+        if lot_no:
+            self._lot_label.setText(f"🏷️ LOT: {lot_no}")
+            self._lot_label.setVisible(True)
+        else:
+            self._lot_label.setText("LOT: --")
+
+        # Show/hide no materials label
+        has_materials = len(materials) > 0
+        self._no_mat_label.setVisible(not has_materials)
+
+        if not has_materials:
+            return
+
+        # Create widgets for each material
+        for material in materials:
+            widget = MaterialInputWidget(
+                material=material,
+                theme_service=self._theme_service,
+                parent=self._mat_container,
+            )
+            # Insert before the stretch
+            self._mat_container_layout.insertWidget(
+                self._mat_container_layout.count() - 1,
+                widget,
+            )
+            self._material_widgets.append(widget)
+
+        logger.debug(f"[RightPanelView] Rendered {len(materials)} material inputs")
 
     def _render_device_from_model(self, device) -> None:
         """Render device information from DeviceDisplayModel."""
@@ -308,9 +507,14 @@ class RightPanelView:
                 f"padding: 4px 12px; border-radius: 10px; font-size: 10px;"
             )
 
-            # Material info
-            self._batch.setText(f"📦 {device.material_batch}")
-            self._fed_time.setText(f"⏰ Fed: {device.feeding_time}")
+            # ================================================================
+            # Material Inputs - NEW
+            # ================================================================
+            self._render_material_inputs(
+                device.material_inputs,
+                device.current_lot_no,
+            )
+            # ================================================================
 
             # OEE
             oee_val = float(device.oee) if device.oee else 0
@@ -327,7 +531,7 @@ class RightPanelView:
             self._bar_oee.setStyleSheet(self._theme_service.get_progress_bar_style(oee_bar_color))
 
             # ================================================================
-            # Availability - FIXED: Added total_time_seconds
+            # Availability
             # ================================================================
             availability_val = float(device.availability) if hasattr(device, "availability") else 0.0
             run_time_seconds = float(device.run_time_seconds) if hasattr(device, "run_time_seconds") else 0.0
@@ -386,8 +590,12 @@ class RightPanelView:
         self._desc.setText("")
         self._desc.setVisible(False)
         self._last_update.setText("🕒 --")
-        self._batch.setText("📦 --")
-        self._fed_time.setText("⏰ Fed: --")
+
+        # Material inputs
+        self._lot_label.setText("LOT: --")
+        self._clear_material_widgets()
+        self._no_mat_label.setVisible(True)
+
         self._lbl_oee.setText("OEE: 0%")
         self._bar_oee.setValue(0)
 
@@ -416,8 +624,13 @@ class RightPanelView:
         self._desc.setText("Loading device data...")
         self._desc.setVisible(True)
         self._last_update.setText("🕒 --")
-        self._batch.setText("📦 --")
-        self._fed_time.setText("⏰ Fed: --")
+
+        # Material inputs loading
+        self._lot_label.setText("LOT: Loading...")
+        self._clear_material_widgets()
+        self._no_mat_label.setText("Loading materials...")
+        self._no_mat_label.setVisible(True)
+
         self._lbl_oee.setText("OEE: --%")
         self._bar_oee.setValue(0)
 
@@ -448,8 +661,6 @@ class RightPanelView:
         status_color = get_val("status_color") or tokens.hint
         description = get_val("description") or ""
         last_update = get_val("last_update")
-        material_batch = get_val("material_batch") or "--"
-        feeding_time = get_val("feeding_time") or "--"
         oee = get_val("oee") or 0
         yield_rate = get_val("yield_rate") or 0
         input_count = get_val("input_count") or 0
@@ -461,6 +672,10 @@ class RightPanelView:
         availability = get_val("availability") or 0
         run_time_seconds = get_val("run_time_seconds") or 0
         total_time_seconds = get_val("total_time_seconds") or 0
+
+        # Material inputs
+        material_inputs = get_val("material_inputs") or []
+        current_lot_no = get_val("current_lot_no") or ""
 
         self._title.setText(str(display_name))
         self._desc.setText(str(description) if description else "")
@@ -477,8 +692,22 @@ class RightPanelView:
             f"background-color: {status_color}; color: white; font-weight: 600; " f"padding: 4px 12px; border-radius: 10px; font-size: 10px;"
         )
 
-        self._batch.setText(f"📦 {material_batch}")
-        self._fed_time.setText(f"⏰ Fed: {feeding_time}")
+        # Material inputs (from dict)
+        if material_inputs:
+            from ...viewmodels.models.device_model import MaterialInputModel
+
+            mats = []
+            for m in material_inputs:
+                if isinstance(m, dict):
+                    mats.append(MaterialInputModel.from_dict(m))
+                else:
+                    mats.append(m)
+            self._render_material_inputs(tuple(mats), current_lot_no)
+        else:
+            self._lot_label.setText("LOT: --")
+            self._clear_material_widgets()
+            self._no_mat_label.setText("No materials loaded")
+            self._no_mat_label.setVisible(True)
 
         # OEE
         oee_val = float(oee) if oee else 0
@@ -563,4 +792,4 @@ class RightPanelView:
             self._last_render_data = device
 
 
-__all__ = ["RightPanelView"]
+__all__ = ["RightPanelView", "MaterialInputWidget"]

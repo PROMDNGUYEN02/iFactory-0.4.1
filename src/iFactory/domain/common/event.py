@@ -1,4 +1,4 @@
-# src/domain/common/event.py - ENHANCED
+# src/iFactory/domain/common/event.py
 """
 Domain Events with versioning, correlation, and metadata support.
 
@@ -7,12 +7,13 @@ Features:
 - Correlation/Causation IDs for tracing
 - Rich metadata support
 - Serialization helpers
+- Compatible with both class-based and dataclass events
 """
 
 from __future__ import annotations
 
 import uuid
-from abc import ABC
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, ClassVar, Dict, Optional, Type, TypeVar
@@ -57,6 +58,20 @@ class EventMetadata:
             timestamp=self.timestamp,
         )
 
+    def derive(self, new_event_id: Optional[str] = None) -> "EventMetadata":
+        """
+        Derive new metadata from this one (for caused events).
+        Links causation to this event and inherits correlation.
+        """
+        return EventMetadata(
+            event_id=new_event_id or str(uuid.uuid4()),
+            correlation_id=self.correlation_id,
+            causation_id=self.event_id,  # This event caused the new one
+            user_id=self.user_id,
+            source=self.source,
+            timestamp=datetime.now(),
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -77,13 +92,17 @@ class EventMetadata:
             causation_id=data.get("causation_id"),
             user_id=data.get("user_id"),
             source=data.get("source"),
-            timestamp=datetime.fromisoformat(data["timestamp"]) if "timestamp" in data else datetime.now(),
+            timestamp=(datetime.fromisoformat(data["timestamp"]) if "timestamp" in data else datetime.now()),
         )
 
 
 class DomainEvent(ABC):
     """
-    Immutable base class for all domain events.
+    Base class for all domain events.
+
+    Domain events are immutable facts about something that happened
+    in the domain. They are named in past tense (e.g., OrderPlaced,
+    PaymentReceived).
 
     Features:
     - Versioning for schema evolution
@@ -91,17 +110,36 @@ class DomainEvent(ABC):
     - Rich metadata
     - Serialization support
 
-    Usage:
-        @dataclass(frozen=True)
+    Usage (class-based):
         class OrderPlaced(DomainEvent):
             VERSION: ClassVar[int] = 1
 
+            def __init__(
+                self,
+                order_id: str,
+                customer_id: str,
+                occurred_at: Optional[datetime] = None,
+            ):
+                super().__init__(occurred_at=occurred_at)
+                self._order_id = order_id
+                self._customer_id = customer_id
+
+            @property
+            def order_id(self) -> str:
+                return self._order_id
+
+            def to_dict(self) -> Dict[str, Any]:
+                data = super().to_dict()
+                data["order_id"] = self._order_id
+                data["customer_id"] = self._customer_id
+                return data
+
+    Usage (dataclass - recommended for simple events):
+        @dataclass(frozen=True)
+        class OrderPlaced(DomainEvent):
             order_id: str
             customer_id: str
-            total: Decimal
-
-            def __post_init__(self):
-                super().__init__(occurred_at=datetime.now())
+            # Note: Must call super().__init__() in __post_init__
     """
 
     # Class-level version for schema evolution
@@ -126,7 +164,7 @@ class DomainEvent(ABC):
 
     @property
     def event_type(self) -> str:
-        """Event type name."""
+        """Event type name (class name)."""
         return self._event_type
 
     @property
@@ -149,21 +187,44 @@ class DomainEvent(ABC):
         """Correlation ID for tracing."""
         return self._metadata.correlation_id
 
-    def with_metadata(self, metadata: EventMetadata) -> "DomainEvent":
-        """Create copy with new metadata (for decoration)."""
-        # Note: Subclasses should override for proper copying
+    @property
+    def causation_id(self) -> Optional[str]:
+        """ID of event that caused this one."""
+        return self._metadata.causation_id
+
+    def with_metadata(self: E, metadata: EventMetadata) -> E:
+        """
+        Create a copy with new metadata.
+
+        Note: Subclasses with additional fields should override this.
+        """
         new_event = object.__new__(self.__class__)
         object.__setattr__(new_event, "_occurred_at", self._occurred_at)
         object.__setattr__(new_event, "_event_type", self._event_type)
         object.__setattr__(new_event, "_version", self._version)
         object.__setattr__(new_event, "_metadata", metadata)
+
+        # Copy any additional slots from subclass
+        for slot in self._get_subclass_slots():
+            if hasattr(self, slot):
+                object.__setattr__(new_event, slot, getattr(self, slot))
+
         return new_event
+
+    def _get_subclass_slots(self) -> tuple:
+        """Get slots defined in subclasses (not in DomainEvent)."""
+        base_slots = set(DomainEvent.__slots__)
+        all_slots = set()
+        for cls in type(self).__mro__:
+            if hasattr(cls, "__slots__"):
+                all_slots.update(cls.__slots__)
+        return tuple(all_slots - base_slots)
 
     def to_dict(self) -> Dict[str, Any]:
         """
         Serialize event to dictionary.
 
-        Subclasses should override to include their fields.
+        Subclasses should override and call super().to_dict().
         """
         return {
             "event_type": self._event_type,
@@ -177,7 +238,7 @@ class DomainEvent(ABC):
         """
         Deserialize event from dictionary.
 
-        Subclasses should override for proper deserialization.
+        Subclasses must override for proper deserialization.
         """
         raise NotImplementedError(f"{cls.__name__} must implement from_dict for deserialization")
 

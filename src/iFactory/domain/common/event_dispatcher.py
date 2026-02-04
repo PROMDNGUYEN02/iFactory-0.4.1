@@ -1,4 +1,4 @@
-# src/domain/common/event_dispatcher.py - ENHANCED
+# src/iFactory/domain/common/event_dispatcher.py
 """
 Enhanced Domain Event Dispatcher with middleware pipeline.
 
@@ -18,7 +18,21 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, Generic, List, Optional, Protocol, Set, Type, TypeVar, Union
+from functools import partial
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Set,
+    Type,
+    TypeVar,
+    Union,
+    runtime_checkable,
+)
 
 from .event import DomainEvent, EventMetadata
 
@@ -32,6 +46,7 @@ E = TypeVar("E", bound=DomainEvent)
 # ============================================================================
 
 
+@runtime_checkable
 class EventHandler(Protocol[E]):
     """Protocol for event handlers."""
 
@@ -128,7 +143,6 @@ class CorrelationMiddleware(EventMiddleware):
         next_handler: Callable[[DomainEvent], Awaitable[None]],
     ) -> None:
         if not event.correlation_id and self._default_id:
-            # Create new event with correlation ID
             metadata = event.metadata.with_correlation(self._default_id)
             event = event.with_metadata(metadata)
 
@@ -136,7 +150,7 @@ class CorrelationMiddleware(EventMiddleware):
 
 
 class RetryMiddleware(EventMiddleware):
-    """Retry failed handlers with backoff."""
+    """Retry failed handlers with exponential backoff."""
 
     def __init__(
         self,
@@ -153,7 +167,7 @@ class RetryMiddleware(EventMiddleware):
         event: DomainEvent,
         next_handler: Callable[[DomainEvent], Awaitable[None]],
     ) -> None:
-        last_error = None
+        last_error: Optional[Exception] = None
 
         for attempt in range(self._max_retries + 1):
             try:
@@ -175,7 +189,8 @@ class RetryMiddleware(EventMiddleware):
                     )
                     await asyncio.sleep(delay)
 
-        raise last_error  # type: ignore
+        if last_error:
+            raise last_error
 
 
 # ============================================================================
@@ -192,6 +207,9 @@ class FailedEvent:
     handler_name: str
     failed_at: datetime = field(default_factory=datetime.now)
     retry_count: int = 0
+
+    def __repr__(self) -> str:
+        return f"FailedEvent(event={self.event.event_type}, " f"error={self.error}, retries={self.retry_count})"
 
 
 class DeadLetterQueue(ABC):
@@ -214,7 +232,7 @@ class DeadLetterQueue(ABC):
 
 
 class InMemoryDeadLetterQueue(DeadLetterQueue):
-    """In-memory dead letter queue for development."""
+    """In-memory dead letter queue for development/testing."""
 
     def __init__(self, max_size: int = 1000):
         self._queue: List[FailedEvent] = []
@@ -240,6 +258,7 @@ class InMemoryDeadLetterQueue(DeadLetterQueue):
         return len(self._queue)
 
     def clear(self) -> None:
+        """Clear the queue (for testing)."""
         self._queue.clear()
 
 
@@ -276,9 +295,17 @@ class DispatcherMetrics:
             "events_succeeded": self.events_succeeded,
             "events_failed": self.events_failed,
             "handlers_invoked": self.handlers_invoked,
-            "success_rate": self.success_rate,
-            "avg_processing_ms": self.avg_processing_ms,
+            "success_rate": round(self.success_rate, 4),
+            "avg_processing_ms": round(self.avg_processing_ms, 2),
         }
+
+    def reset(self) -> None:
+        """Reset all metrics."""
+        self.events_dispatched = 0
+        self.events_succeeded = 0
+        self.events_failed = 0
+        self.handlers_invoked = 0
+        self.total_processing_ms = 0.0
 
 
 # ============================================================================
@@ -362,7 +389,7 @@ class EnhancedEventDispatcher(IEventDispatcher):
         return self._metrics
 
     def use(self, middleware: EventMiddleware) -> "EnhancedEventDispatcher":
-        """Add middleware to the pipeline."""
+        """Add middleware to the pipeline. Returns self for chaining."""
         self._middleware.append(middleware)
         return self
 
@@ -383,14 +410,15 @@ class EnhancedEventDispatcher(IEventDispatcher):
     def register_global(self, handler: AnyHandler) -> None:
         """Register a handler for ALL events."""
         self._global_handlers.append(handler)
-        logger.debug("[EventDispatcher] Registered global handler")
+        handler_name = getattr(handler, "__name__", str(handler))
+        logger.debug("[EventDispatcher] Registered global handler: %s", handler_name)
 
     def unregister(
         self,
         event_type: Type[DomainEvent],
         handler: AnyHandler,
     ) -> bool:
-        """Remove a handler. Returns True if found."""
+        """Remove a handler. Returns True if found and removed."""
         try:
             self._handlers[event_type].remove(handler)
             return True
@@ -403,13 +431,9 @@ class EnhancedEventDispatcher(IEventDispatcher):
         start = datetime.now()
 
         try:
-            # Build middleware chain
-            async def final_handler(evt: DomainEvent) -> None:
-                await self._invoke_handlers(evt)
-
-            chain = self._build_middleware_chain(final_handler)
+            # Build and execute middleware chain
+            chain = self._build_middleware_chain()
             await chain(event)
-
             self._metrics.events_succeeded += 1
 
         except Exception as e:
@@ -432,53 +456,71 @@ class EnhancedEventDispatcher(IEventDispatcher):
 
     def _build_middleware_chain(
         self,
-        final: Callable[[DomainEvent], Awaitable[None]],
     ) -> Callable[[DomainEvent], Awaitable[None]]:
-        """Build middleware chain ending with final handler."""
-        handler = final
+        """Build middleware chain ending with handler invocation."""
+
+        async def final_handler(evt: DomainEvent) -> None:
+            await self._invoke_handlers(evt)
+
+        # Build chain from inside out (last middleware wraps final handler)
+        chain: Callable[[DomainEvent], Awaitable[None]] = final_handler
 
         for middleware in reversed(self._middleware):
-            current_handler = handler
+            # Capture current chain in closure
+            next_in_chain = chain
 
-            async def make_handler(
+            async def make_wrapper(
                 mw: EventMiddleware,
                 next_h: Callable[[DomainEvent], Awaitable[None]],
-            ) -> Callable[[DomainEvent], Awaitable[None]]:
-                async def wrapper(evt: DomainEvent) -> None:
-                    await mw.process(evt, next_h)
+                evt: DomainEvent,
+            ) -> None:
+                await mw.process(evt, next_h)
 
-                return wrapper
+            # Create new chain step
+            chain = partial(make_wrapper, middleware, next_in_chain)
 
-            # Create closure properly
-            handler = asyncio.coroutine(lambda evt, mw=middleware, h=current_handler: mw.process(evt, h))
-
-        return handler
+        return chain
 
     async def _invoke_handlers(self, event: DomainEvent) -> None:
         """Invoke all handlers for an event."""
         event_type = type(event)
-        handlers = self._handlers.get(event_type, []) + self._global_handlers
 
-        if not handlers:
+        # Get handlers for this specific event type
+        type_handlers = self._handlers.get(event_type, [])
+
+        # Also check parent classes (for handler inheritance)
+        for parent_type in event_type.__mro__:
+            if parent_type != event_type and parent_type in self._handlers:
+                type_handlers = type_handlers + self._handlers[parent_type]
+
+        # Combine with global handlers
+        all_handlers = type_handlers + self._global_handlers
+
+        if not all_handlers:
             logger.debug(
                 "[EventDispatcher] No handlers for %s",
                 event_type.__name__,
             )
             return
 
-        for handler in handlers:
+        for handler in all_handlers:
             self._metrics.handlers_invoked += 1
-            handler_name = getattr(handler, "__name__", str(handler))
+            handler_name = getattr(handler, "__name__", type(handler).__name__)
 
             try:
                 # Handle different handler types
-                if hasattr(handler, "handle"):
-                    # EventHandler protocol
+                if isinstance(handler, EventHandler):
                     result = handler.handle(event)
-                else:
-                    # Callable
+                elif callable(handler):
                     result = handler(event)
+                else:
+                    logger.warning(
+                        "[EventDispatcher] Invalid handler type: %s",
+                        type(handler),
+                    )
+                    continue
 
+                # Await if coroutine
                 if asyncio.iscoroutine(result):
                     await result
 
@@ -506,14 +548,19 @@ class EnhancedEventDispatcher(IEventDispatcher):
         """Remove all handlers and reset metrics."""
         self._handlers.clear()
         self._global_handlers.clear()
-        self._metrics = DispatcherMetrics()
+        self._metrics.reset()
+
+    def clear_handlers(self) -> None:
+        """Remove all handlers but keep metrics."""
+        self._handlers.clear()
+        self._global_handlers.clear()
 
     async def get_dead_letter_count(self) -> int:
         """Get number of failed events in DLQ."""
         return await self._dlq.size()
 
     async def retry_dead_letters(self, count: int = 10) -> int:
-        """Retry failed events from DLQ. Returns number retried."""
+        """Retry failed events from DLQ. Returns number successfully retried."""
         failed_events = await self._dlq.dequeue(count)
         retried = 0
 
@@ -535,9 +582,7 @@ class EnhancedEventDispatcher(IEventDispatcher):
 
 
 class InMemoryEventDispatcher(EnhancedEventDispatcher):
-    """
-    Backward-compatible alias for EnhancedEventDispatcher.
-    """
+    """Backward-compatible alias for EnhancedEventDispatcher."""
 
     pass
 
@@ -572,6 +617,11 @@ __all__ = [
     # Implementation
     "EnhancedEventDispatcher",
     "InMemoryEventDispatcher",
+    # Handlers
+    "EventHandler",
+    "SyncHandler",
+    "AsyncHandler",
+    "AnyHandler",
     # Middleware
     "EventMiddleware",
     "LoggingMiddleware",

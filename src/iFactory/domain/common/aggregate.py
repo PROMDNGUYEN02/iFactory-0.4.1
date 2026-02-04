@@ -1,4 +1,4 @@
-# src/domain/common/aggregate.py - ENHANCED
+# src/iFactory/domain/common/aggregate.py
 """
 Enhanced Aggregate Root with versioning and optimistic concurrency.
 
@@ -14,9 +14,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Type, TypeVar, get_type_hints
+from typing import Any, Dict, List, Optional, Type, TypeVar
 
+from .entity import Entity
 from .event import DomainEvent, EventEnvelope, EventMetadata
+
 
 T = TypeVar("T", bound="AggregateRoot")
 
@@ -61,15 +63,28 @@ class AggregateSnapshot:
             "created_at": self.created_at.isoformat(),
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AggregateSnapshot":
+        return cls(
+            aggregate_type=data["aggregate_type"],
+            aggregate_id=data["aggregate_id"],
+            version=data["version"],
+            state=data["state"],
+            created_at=(datetime.fromisoformat(data["created_at"]) if isinstance(data["created_at"], str) else data["created_at"]),
+        )
+
 
 class AggregateRoot(ABC):
     """
     Enhanced Aggregate Root with versioning and event sourcing support.
 
+    An Aggregate Root is the entry point to an aggregate - a cluster
+    of domain objects that are treated as a single unit for data changes.
+
     Features:
     - Version tracking for optimistic concurrency
     - Domain event recording with sequencing
-    - Snapshot support
+    - Snapshot support for event sourcing
     - Invariant validation hooks
 
     Usage:
@@ -161,6 +176,17 @@ class AggregateRoot(ABC):
     def set_version(self, version: int) -> None:
         """Set version (used when loading from persistence)."""
         self._version = version
+
+    def set_timestamps(
+        self,
+        created_at: Optional[datetime] = None,
+        modified_at: Optional[datetime] = None,
+    ) -> None:
+        """Set timestamps (used when loading from persistence)."""
+        if created_at:
+            self._created_at = created_at
+        if modified_at:
+            self._modified_at = modified_at
 
     # ========================================================================
     # Event Management
@@ -277,13 +303,11 @@ class AggregateRoot(ABC):
         """
         Get state for snapshot. Override in subclasses.
         """
-        # Default: try to serialize public properties
-        state = {}
+        state: Dict[str, Any] = {}
         for name in dir(self):
             if not name.startswith("_") and not callable(getattr(self, name)):
                 try:
                     value = getattr(self, name)
-                    # Only include serializable values
                     if isinstance(value, (str, int, float, bool, list, dict, type(None))):
                         state[name] = value
                 except Exception:
@@ -300,7 +324,7 @@ class AggregateRoot(ABC):
         raise NotImplementedError(f"{cls.__name__} must implement from_snapshot for restoration")
 
     # ========================================================================
-    # Equality
+    # Equality (based on identity)
     # ========================================================================
 
     def __eq__(self, other: object) -> bool:

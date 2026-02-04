@@ -1,15 +1,17 @@
 # File: presentation/viewmodels/device_viewmodel.py
 """
-Device List ViewModel - Per-Page Fetching + Hybrid Availability.
+Device List ViewModel - Per-Page Fetching + Parallel On-Demand Data + Auto-Refresh Panel.
 
 Features:
-- Only fetch devices for current page (not all 76)
-- Auto-refresh only current page devices every 3s
-- Availability fetched on-demand when user clicks
-- Debounced loading to prevent duplicate requests
+- Only fetch devices for current page
+- Auto-refresh every 3s for current page
+- PARALLEL fetching: Availability + Material Inputs fetched simultaneously
+- Progressive UI update: Show data as it arrives
+- AUTO-REFRESH RIGHT PANEL: Refresh selected device details every 3s when panel is open
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
@@ -21,6 +23,7 @@ from .models.device_model import (
     DeviceDisplayModel,
     DeviceSelectionModel,
     DeviceSyncStatusModel,
+    MaterialInputModel,
 )
 from ..constants.status import Status, StatusCode
 from ..adapters.async_executor import AsyncExecutor
@@ -29,12 +32,14 @@ if TYPE_CHECKING:
     from ..services.page_device_manager import PageDeviceManager
     from iFactory.application.ports.remote import IRemoteDataSource
     from iFactory.application.services.sync_orchestrator import SyncOrchestrator, DeviceAvailability
+    from iFactory.infrastructure.adapters.mssql_adapter import MssqlAdapter
     from .shell_viewmodel import ShellViewModel
 
 logger = logging.getLogger(__name__)
 
 GENERATION_DISCARD_THRESHOLD = 10
-LOAD_DEBOUNCE_MS = 150  # Debounce interval
+LOAD_DEBOUNCE_MS = 150
+PANEL_REFRESH_INTERVAL_MS = 3000  # 3 seconds
 
 
 class IDeviceIdMapper(Protocol):
@@ -60,19 +65,21 @@ class NoOpIdMapper:
 
 class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     """
-    ViewModel for Device List.
+    ViewModel for Device List with Parallel On-Demand Fetching + Auto-Refresh Panel.
 
     Features:
     - Per-page fetching: Only fetch devices visible on current page
     - Auto-refresh: Every 3s for current page only
-    - Hybrid availability: On-demand when user clicks device
-    - Debounced loading: Prevents duplicate rapid requests
+    - PARALLEL: Availability + Materials fetched simultaneously on device click
+    - Progressive UI: Updates panel as each piece of data arrives
+    - AUTO-REFRESH PANEL: When panel is open, refresh selected device every 3s
     """
 
     devicesChanged = Signal(dict)
     selectionChanged = Signal(object)
     syncStatusChanged = Signal(object)
     availabilityChanged = Signal(str, object)
+    materialInputsChanged = Signal(str, list)
 
     def __init__(
         self,
@@ -96,14 +103,14 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         self._selected_device_id: Optional[str] = None
         self._sync_status = DeviceSyncStatusModel()
 
-        # Current page tracking
         self._current_page_name: str = ""
         self._current_page_devices: List[str] = []
 
         self._sync_generation: int = 0
-        self._availability_generation: int = 0
+        self._detail_generation: int = 0
+        self._pending_detail_device: Optional[str] = None
 
-        self._executor = AsyncExecutor(max_workers=2, parent=self)
+        self._executor = AsyncExecutor(max_workers=4, parent=self)
 
         if self._page_manager:
             self._page_manager.page_changed.connect(self._on_page_changed)
@@ -113,13 +120,73 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         self._pending_load_ids: Optional[List[str]] = None
         self._is_loading: bool = False
 
+        # =====================================================================
+        # NEW: Panel auto-refresh timer
+        # =====================================================================
+        self._panel_refresh_timer: Optional[QTimer] = None
+        self._is_panel_open: bool = False
+
     def initialize(self) -> None:
         logger.info("[DeviceListViewModel] Initializing...")
         self._set_state(UiState.idle())
 
+        # Setup panel refresh timer
+        self._setup_panel_refresh_timer()
+
+    def _setup_panel_refresh_timer(self) -> None:
+        """Setup timer for auto-refreshing right panel."""
+        self._panel_refresh_timer = QTimer(self)
+        self._panel_refresh_timer.setInterval(PANEL_REFRESH_INTERVAL_MS)
+        self._panel_refresh_timer.timeout.connect(self._on_panel_refresh_tick)
+        logger.debug(f"[DeviceListViewModel] Panel refresh timer setup: {PANEL_REFRESH_INTERVAL_MS}ms")
+
     def set_shell_viewmodel(self, shell_vm: "ShellViewModel") -> None:
         self._shell_vm = shell_vm
-        logger.info("[DeviceListViewModel] ShellViewModel configured")
+
+        # Connect to panel state changes
+        if self._shell_vm:
+            self._shell_vm.rightPanelChanged.connect(self._on_right_panel_state_changed)
+
+        logger.info("[DeviceListViewModel] ShellViewModel configured with panel listener")
+
+    @Slot(bool)
+    def _on_right_panel_state_changed(self, is_open: bool) -> None:
+        """Handle right panel open/close state change."""
+        self._is_panel_open = is_open
+
+        if is_open and self._selected_device_id:
+            # Panel opened with a device selected - start refresh timer
+            self._start_panel_refresh()
+        else:
+            # Panel closed - stop refresh timer
+            self._stop_panel_refresh()
+
+    def _start_panel_refresh(self) -> None:
+        """Start auto-refresh timer for right panel."""
+        if self._panel_refresh_timer and not self._panel_refresh_timer.isActive():
+            self._panel_refresh_timer.start()
+            logger.debug(f"[DeviceListViewModel] Panel refresh started for {self._selected_device_id}")
+
+    def _stop_panel_refresh(self) -> None:
+        """Stop auto-refresh timer for right panel."""
+        if self._panel_refresh_timer and self._panel_refresh_timer.isActive():
+            self._panel_refresh_timer.stop()
+            logger.debug("[DeviceListViewModel] Panel refresh stopped")
+
+    @Slot()
+    def _on_panel_refresh_tick(self) -> None:
+        """Called every 3s when panel is open - refresh selected device details."""
+        if self._is_disposed:
+            self._stop_panel_refresh()
+            return
+
+        if not self._is_panel_open or not self._selected_device_id:
+            self._stop_panel_refresh()
+            return
+
+        # Refresh the selected device details
+        logger.debug(f"[DeviceListViewModel] Panel refresh tick: {self._selected_device_id}")
+        self._fetch_device_details_parallel(self._selected_device_id)
 
     def set_remote_source(self, source: "IRemoteDataSource") -> None:
         self._remote_source = source
@@ -141,62 +208,45 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
 
     @property
     def current_page_devices(self) -> List[str]:
-        """Get device IDs for current page."""
         return self._current_page_devices.copy()
 
     @property
     def current_page_name(self) -> str:
-        """Get current page name."""
         return self._current_page_name
 
     def load_devices(self, device_ids: Optional[List[str]] = None) -> None:
-        """
-        Load device status with debouncing.
-
-        Args:
-            device_ids: Explicit list of device IDs. If None, uses current page devices.
-        """
         if self._is_disposed:
             return
 
-        # Use provided IDs or current page devices
         codes = device_ids if device_ids else self._current_page_devices
 
         if not codes:
-            logger.debug("[DeviceListViewModel] No devices to load")
             return
 
-        # Filter out invalid keys
         invalid_keys = {"ref_width", "ref_height", "devices", "min_scale", "max_scale"}
         codes = [c for c in codes if c not in invalid_keys]
 
         if not codes:
             return
 
-        # Store pending load request
         self._pending_load_ids = codes
 
-        # Setup debounce timer if needed
         if self._load_debounce_timer is None:
             self._load_debounce_timer = QTimer(self)
             self._load_debounce_timer.setSingleShot(True)
             self._load_debounce_timer.timeout.connect(self._execute_pending_load)
 
-        # If already loading, just update pending IDs (debounce)
         if self._is_loading:
             return
 
-        # Reset and start debounce timer
         self._load_debounce_timer.stop()
         self._load_debounce_timer.start(LOAD_DEBOUNCE_MS)
 
     def _execute_pending_load(self) -> None:
-        """Execute the pending load after debounce."""
         if self._is_disposed or not self._pending_load_ids:
             return
 
         if self._is_loading:
-            # Already loading, reschedule
             self._load_debounce_timer.start(LOAD_DEBOUNCE_MS)
             return
 
@@ -210,7 +260,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         self._set_loading(True, f"Loading {len(codes)} devices...")
         self._update_sync_status(is_syncing=True)
 
-        logger.info(f"[DeviceListViewModel] Loading {len(codes)} devices " f"for {self._current_page_name} (gen={generation})")
+        logger.info(f"[DeviceListViewModel] Loading {len(codes)} devices for {self._current_page_name} (gen={generation})")
 
         if self._sync_orchestrator:
             self._sync_via_orchestrator(codes, generation)
@@ -221,28 +271,28 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             self._set_error("No data source configured")
 
     def refresh(self) -> None:
-        """Refresh current page devices."""
         if self._is_disposed:
             return
         self.load_devices()
 
     def load_page(self, page_name: str, device_ids: List[str]) -> None:
-        """Load a specific page with its devices."""
         if self._is_disposed:
             return
 
         logger.info(f"[DeviceListViewModel] Loading page: {page_name} with {len(device_ids)} devices")
 
-        # Cancel any pending load
         if self._load_debounce_timer:
             self._load_debounce_timer.stop()
         self._pending_load_ids = None
 
-        # Update current page tracking
+        # Cancel pending detail fetches and stop panel refresh
+        self._detail_generation += 100
+        self._pending_detail_device = None
+        self._stop_panel_refresh()
+
         self._current_page_name = page_name
         self._current_page_devices = device_ids.copy()
 
-        # Deselect device when changing pages
         if self._selected_device_id:
             self._selected_device_id = None
             self.selectionChanged.emit(DeviceSelectionModel())
@@ -250,27 +300,31 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             if self._shell_vm and self._shell_vm.right_panel_expanded:
                 self._shell_vm.close_right_panel()
 
-        # Clear availability cache for old page
         if self._sync_orchestrator:
             self._sync_orchestrator.clear_availability_cache()
 
-        # Clear devices from previous page
         self._devices.clear()
 
-        # Load devices for new page (immediate, no debounce for page change)
         if device_ids:
             self._pending_load_ids = device_ids
             self._execute_pending_load()
 
     def select_device(self, device_id: str, open_panel: bool = False) -> None:
-        """Select a device and fetch its availability."""
+        """Select device and fetch details in PARALLEL."""
         if self._is_disposed:
             return
 
         logger.debug(f"[DeviceListViewModel] select_device: {device_id}, open_panel={open_panel}")
 
         is_same_device = self._selected_device_id == device_id
+
+        # Cancel pending fetches for previous device
+        if not is_same_device and self._pending_detail_device:
+            self._detail_generation += 10
+            self._pending_detail_device = None
+
         self._selected_device_id = device_id
+        self._pending_detail_device = device_id
 
         selection = DeviceSelectionModel(
             selected_device_id=device_id,
@@ -286,38 +340,59 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
                 if not self._shell_vm.right_panel_expanded:
                     self._shell_vm.open_right_panel()
 
-        # Fetch availability on-demand
-        self._fetch_availability_for_selected_device()
+        # PARALLEL FETCH: Availability + Materials simultaneously
+        if not is_same_device:
+            self._fetch_device_details_parallel(device_id)
 
-    def _fetch_availability_for_selected_device(self) -> None:
-        """Fetch availability for the currently selected device."""
-        if not self._selected_device_id:
-            return
+        # Start panel refresh if panel is open
+        if self._shell_vm and self._shell_vm.right_panel_expanded:
+            self._is_panel_open = True
+            self._start_panel_refresh()
 
-        if not self._sync_orchestrator:
-            logger.debug("[DeviceListViewModel] No sync orchestrator for availability")
-            return
+    # =========================================================================
+    # PARALLEL FETCHING
+    # =========================================================================
 
-        self._availability_generation += 1
-        generation = self._availability_generation
-        device_id = self._selected_device_id
+    def _fetch_device_details_parallel(self, device_id: str) -> None:
+        """
+        Fetch all device details in PARALLEL.
+        Each fetch updates UI immediately when complete.
+        """
+        self._detail_generation += 1
+        generation = self._detail_generation
+        remote_id = self._id_mapper.to_remote_id(device_id)
 
-        logger.debug(f"[DeviceListViewModel] Fetching availability for {device_id}")
+        logger.debug(f"[DeviceListViewModel] Parallel fetch for {device_id} (gen={generation})")
 
-        self._executor.execute(
-            self._do_fetch_availability(device_id, generation),
-            on_success=self._on_availability_success,
-            on_error=self._on_availability_error,
-        )
+        # Launch parallel fetches
+        if self._sync_orchestrator:
+            self._executor.execute(
+                self._do_fetch_availability(device_id, generation),
+                on_success=self._on_availability_success,
+                on_error=self._on_detail_error,
+            )
+
+        if self._remote_source and hasattr(self._remote_source, "fetch_material_inputs"):
+            self._executor.execute(
+                self._do_fetch_material_inputs(device_id, remote_id, generation),
+                on_success=self._on_material_inputs_success,
+                on_error=self._on_detail_error,
+            )
 
     async def _do_fetch_availability(
         self,
         device_id: str,
         generation: int,
     ) -> Dict[str, Any]:
-        """Async fetch availability for a single device."""
+        """Async fetch availability."""
+        if generation < self._detail_generation - 5 or self._is_disposed:
+            return {"device_id": device_id, "generation": generation, "skipped": True, "type": "availability"}
+
+        if self._pending_detail_device != device_id:
+            return {"device_id": device_id, "generation": generation, "skipped": True, "type": "availability"}
+
         if not self._sync_orchestrator:
-            return {"device_id": device_id, "generation": generation, "error": "No orchestrator"}
+            return {"device_id": device_id, "generation": generation, "error": "No orchestrator", "type": "availability"}
 
         try:
             availability = await self._sync_orchestrator.fetch_device_availability(device_id)
@@ -326,6 +401,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
                 return {
                     "device_id": device_id,
                     "generation": generation,
+                    "type": "availability",
                     "availability": availability.availability,
                     "run_time_seconds": availability.run_time_seconds,
                     "total_time_seconds": availability.total_time_seconds,
@@ -334,35 +410,81 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
                 return {
                     "device_id": device_id,
                     "generation": generation,
+                    "type": "availability",
                     "availability": 0.0,
                     "run_time_seconds": 0.0,
                     "total_time_seconds": 0.0,
                 }
 
         except Exception as e:
-            logger.error(f"[DeviceListViewModel] Availability fetch failed: {e}")
-            return {"device_id": device_id, "generation": generation, "error": str(e)}
+            return {"device_id": device_id, "generation": generation, "error": str(e), "type": "availability"}
+
+    async def _do_fetch_material_inputs(
+        self,
+        display_id: str,
+        remote_id: str,
+        generation: int,
+    ) -> Dict[str, Any]:
+        """Async fetch material inputs."""
+        if generation < self._detail_generation - 5 or self._is_disposed:
+            return {"device_id": display_id, "generation": generation, "skipped": True, "type": "materials"}
+
+        if self._pending_detail_device != display_id:
+            return {"device_id": display_id, "generation": generation, "skipped": True, "type": "materials"}
+
+        try:
+            records = await self._remote_source.fetch_material_inputs(remote_id)
+
+            if generation < self._detail_generation - 5 or self._is_disposed:
+                return {"device_id": display_id, "generation": generation, "skipped": True, "type": "materials"}
+
+            materials = []
+            lot_no = ""
+
+            for record in records:
+                if hasattr(record, "to_dict"):
+                    data = record.to_dict()
+                else:
+                    data = record
+
+                mat = MaterialInputModel.from_dict(data)
+                materials.append(mat)
+
+                if not lot_no and mat.lot_no:
+                    lot_no = mat.lot_no
+
+            return {
+                "device_id": display_id,
+                "generation": generation,
+                "type": "materials",
+                "materials": materials,
+                "lot_no": lot_no,
+                "count": len(materials),
+            }
+
+        except Exception as e:
+            if not self._is_disposed:
+                logger.debug(f"[DeviceListViewModel] Material fetch error: {e}")
+            return {"device_id": display_id, "generation": generation, "error": str(e), "type": "materials"}
 
     def _on_availability_success(self, result: Dict[str, Any]) -> None:
-        """Handle availability fetch success."""
-        if self._is_disposed:
+        """Handle availability fetch - UPDATE UI IMMEDIATELY."""
+        if self._is_disposed or result.get("skipped"):
             return
 
         device_id = result.get("device_id")
         generation = result.get("generation", 0)
 
-        # Check if still relevant
-        if generation < self._availability_generation - 5:
+        if generation < self._detail_generation - 5:
             return
 
         if device_id != self._selected_device_id:
             return
 
         if "error" in result:
-            logger.warning(f"[DeviceListViewModel] Availability error: {result['error']}")
+            logger.debug(f"[DeviceListViewModel] Availability error: {result['error']}")
             return
 
-        # Update device model with availability
         if device_id in self._devices:
             old_model = self._devices[device_id]
 
@@ -389,30 +511,72 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
                 availability=result.get("availability", 0.0),
                 run_time_seconds=result.get("run_time_seconds", 0.0),
                 total_time_seconds=result.get("total_time_seconds", 0.0),
+                material_inputs=old_model.material_inputs,
+                current_lot_no=old_model.current_lot_no,
             )
 
             self._devices[device_id] = updated_model
 
-            logger.info(f"[DeviceListViewModel] Availability updated for {device_id}: " f"{result.get('availability', 0):.1f}%")
+            logger.info(f"[DeviceListViewModel] ✓ Availability: {device_id} = {result.get('availability', 0):.1f}%")
 
             self.availabilityChanged.emit(device_id, result)
+            self._emit_selection_update()
 
-            # Re-emit selection to trigger panel refresh
+    def _on_material_inputs_success(self, result: Dict[str, Any]) -> None:
+        """Handle material inputs fetch - UPDATE UI IMMEDIATELY."""
+        if self._is_disposed or result.get("skipped"):
+            return
+
+        device_id = result.get("device_id")
+        generation = result.get("generation", 0)
+
+        if generation < self._detail_generation - 5:
+            return
+
+        if device_id != self._selected_device_id:
+            return
+
+        if "error" in result:
+            logger.debug(f"[DeviceListViewModel] Materials error: {result['error']}")
+            return
+
+        materials: List[MaterialInputModel] = result.get("materials", [])
+        lot_no = result.get("lot_no", "")
+        count = result.get("count", 0)
+
+        if device_id in self._devices:
+            old_model = self._devices[device_id]
+            updated_model = old_model.with_material_inputs(materials, lot_no)
+            self._devices[device_id] = updated_model
+
+            logger.info(f"[DeviceListViewModel] ✓ Materials: {device_id} = {count} items, LOT: {lot_no}")
+
+            self.materialInputsChanged.emit(device_id, materials)
+            self._emit_selection_update()
+
+    def _on_detail_error(self, error: Exception) -> None:
+        """Handle detail fetch error - silent for timeout during shutdown."""
+        if self._is_disposed:
+            return
+        if "timed out" not in str(error).lower():
+            logger.debug(f"[DeviceListViewModel] Detail fetch error: {error}")
+
+    def _emit_selection_update(self) -> None:
+        """Re-emit selection to trigger UI refresh."""
+        if self._selected_device_id:
             selection = DeviceSelectionModel(
-                selected_device_id=device_id,
+                selected_device_id=self._selected_device_id,
                 is_panel_open=self._shell_vm.right_panel_expanded if self._shell_vm else False,
             )
             self.selectionChanged.emit(selection)
 
-    def _on_availability_error(self, error: Exception) -> None:
-        """Handle availability fetch error."""
-        if self._is_disposed:
-            return
-        logger.error(f"[DeviceListViewModel] Availability error: {error}")
-
     def deselect_device(self) -> None:
         if self._is_disposed:
             return
+
+        self._detail_generation += 10
+        self._pending_detail_device = None
+        self._stop_panel_refresh()
 
         self._selected_device_id = None
         self.selectionChanged.emit(DeviceSelectionModel())
@@ -443,8 +607,11 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     def sync_status(self) -> DeviceSyncStatusModel:
         return self._sync_status
 
+    # =========================================================================
+    # Sync Methods
+    # =========================================================================
+
     def _sync_via_orchestrator(self, device_ids: List[str], generation: int) -> None:
-        """Sync via orchestrator (status only)."""
         self._executor.execute(
             self._do_orchestrator_sync(device_ids, generation),
             on_success=self._on_sync_success,
@@ -454,6 +621,9 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     async def _do_orchestrator_sync(self, device_ids: List[str], generation: int) -> Dict[str, Any]:
         if not self._sync_orchestrator:
             return {"devices": {}, "count": 0, "error": "No orchestrator", "generation": generation}
+
+        if generation < self._sync_generation - 5 or self._is_disposed:
+            return {"devices": {}, "count": 0, "skipped": True, "generation": generation}
 
         try:
             result = await self._sync_orchestrator.sync_latest_status(device_ids)
@@ -474,11 +644,11 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             }
 
         except Exception as e:
-            logger.error(f"[DeviceListViewModel] Orchestrator sync failed: {e}")
+            if not self._is_disposed:
+                logger.error(f"[DeviceListViewModel] Orchestrator sync failed: {e}")
             return {"devices": {}, "count": 0, "error": str(e), "generation": generation}
 
     def _sync_via_remote(self, device_ids: List[str], generation: int) -> None:
-        """Direct sync via remote source (fallback)."""
         self._executor.execute(
             self._do_remote_sync(device_ids, generation),
             on_success=self._on_sync_success,
@@ -488,6 +658,9 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     async def _do_remote_sync(self, device_ids: List[str], generation: int) -> Dict[str, Any]:
         if not self._remote_source:
             return {"devices": {}, "count": 0, "error": "No remote source", "generation": generation}
+
+        if generation < self._sync_generation - 5 or self._is_disposed:
+            return {"devices": {}, "count": 0, "skipped": True, "generation": generation}
 
         try:
             remote_ids = self._id_mapper.to_remote_ids(device_ids)
@@ -507,14 +680,15 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             return {"devices": display_models, "count": len(display_models), "generation": generation}
 
         except Exception as e:
-            logger.error(f"[DeviceListViewModel] Remote sync failed: {e}")
+            if not self._is_disposed:
+                logger.error(f"[DeviceListViewModel] Remote sync failed: {e}")
             return {"devices": {}, "count": 0, "error": str(e), "generation": generation}
 
     def _on_sync_success(self, result: Dict[str, Any]) -> None:
-        if self._is_disposed:
+        if self._is_disposed or result.get("skipped"):
+            self._is_loading = False
             return
 
-        # Mark loading complete
         self._is_loading = False
 
         result_generation = result.get("generation", 0)
@@ -537,11 +711,11 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
 
         logger.info(f"[DeviceListViewModel] Sync success: {count} devices for {self._current_page_name}")
 
-        # Merge: preserve availability from existing models
+        # Merge: preserve detail data from existing models
         for code, new_model in devices.items():
             if code in self._devices:
                 old_model = self._devices[code]
-                if old_model.availability > 0 or old_model.run_time_seconds > 0:
+                if old_model.availability > 0 or old_model.run_time_seconds > 0 or old_model.has_material_inputs:
                     devices[code] = DeviceDisplayModel(
                         device_id=new_model.device_id,
                         display_name=new_model.display_name,
@@ -559,12 +733,14 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
                         yield_rate=new_model.yield_rate,
                         cycle_time=new_model.cycle_time,
                         description=new_model.description,
-                        material_batch=new_model.material_batch,
-                        feeding_time=new_model.feeding_time,
+                        material_batch=old_model.material_batch,
+                        feeding_time=old_model.feeding_time,
                         last_error=new_model.last_error,
                         availability=old_model.availability,
                         run_time_seconds=old_model.run_time_seconds,
                         total_time_seconds=old_model.total_time_seconds,
+                        material_inputs=old_model.material_inputs,
+                        current_lot_no=old_model.current_lot_no,
                     )
 
         self._devices.update(devices)
@@ -582,7 +758,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         if self._is_disposed:
             return
 
-        # Mark loading complete
         self._is_loading = False
 
         error_msg = str(error)
@@ -592,8 +767,6 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         self._set_error(f"Sync failed: {error_msg}")
 
     def _transform_to_display_model(self, code: str, device_data: Any) -> DeviceDisplayModel:
-        """Transform device data to display model."""
-
         if hasattr(device_data, "equip_code"):
             status_code = self._parse_status(device_data.status_code)
             name = getattr(device_data, "equip_name", None) or code
@@ -675,13 +848,10 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
 
     @Slot(str, list)
     def _on_page_changed(self, page_name: str, device_codes: List[str]) -> None:
-        """Handle page change from PageDeviceManager."""
         if self._is_disposed:
             return
 
         logger.info(f"[DeviceListViewModel] Page changed: {page_name}, {len(device_codes)} devices")
-
-        # Use load_page to handle everything
         self.load_page(page_name, device_codes)
 
     def dispose(self) -> None:
@@ -689,10 +859,17 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             return
 
         self._is_disposed = True
-        self._sync_generation += 1000
-        self._availability_generation += 1000
 
-        # Stop debounce timer
+        self._sync_generation += 1000
+        self._detail_generation += 1000
+        self._pending_detail_device = None
+
+        # Stop timers
+        self._stop_panel_refresh()
+        if self._panel_refresh_timer:
+            self._panel_refresh_timer.deleteLater()
+            self._panel_refresh_timer = None
+
         if self._load_debounce_timer:
             self._load_debounce_timer.stop()
             self._load_debounce_timer.deleteLater()
@@ -707,6 +884,13 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         if self._page_manager:
             try:
                 self._page_manager.page_changed.disconnect(self._on_page_changed)
+            except RuntimeError:
+                pass
+
+        # Disconnect shell_vm signals
+        if self._shell_vm:
+            try:
+                self._shell_vm.rightPanelChanged.disconnect(self._on_right_panel_state_changed)
             except RuntimeError:
                 pass
 

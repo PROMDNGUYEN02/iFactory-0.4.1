@@ -1,47 +1,78 @@
-# src/application/mediator/__init__.py
-"""
-MediatR-like Mediator Pattern Implementation.
+# src/iFactory/application/mediator/__init__.py
+"""MediatR-like Mediator Pattern Implementation."""
 
-Features:
-- Request/Response handling
-- Pipeline behaviors for cross-cutting concerns
-- Notification (event) publishing
-- Async-first design
-"""
-
-from .mediator import Mediator, IMediator
-from .request import Request, IRequest, IRequestHandler
-from .notification import Notification, INotification, INotificationHandler
-from .behaviors import (
+from iFactory.application.mediator.mediator import (
+    Mediator,
+    IMediator,
+    get_mediator,
+    reset_mediator,
+)
+from iFactory.application.mediator.request import (
+    Request,
+    IRequest,
+    IRequestHandler,
+    Command,
+    Query,
+    RequestMetadata,
+    HandlerNotFoundError,
+)
+from iFactory.application.mediator.notification import (
+    Notification,
+    INotification,
+    INotificationHandler,
+    NotificationMetadata,
+    DomainEventNotification,
+)
+from iFactory.application.mediator.behaviors import (
     IPipelineBehavior,
+    IValidator,
     ValidationBehavior,
     LoggingBehavior,
+    ICacheProvider,
+    InMemoryCache,
     CachingBehavior,
     TransactionBehavior,
     RetryBehavior,
     MetricsBehavior,
+    RequestMetrics,
 )
-from .pipeline import Pipeline
+from iFactory.application.mediator.pipeline import (
+    Pipeline,
+    PipelineBuilder,
+)
 
 __all__ = [
     # Core
     "Mediator",
     "IMediator",
+    "get_mediator",
+    "reset_mediator",
     "Pipeline",
+    "PipelineBuilder",
     # Request
     "Request",
     "IRequest",
     "IRequestHandler",
+    "Command",
+    "Query",
+    "RequestMetadata",
+    "HandlerNotFoundError",
     # Notification
     "Notification",
     "INotification",
     "INotificationHandler",
+    "NotificationMetadata",
+    "DomainEventNotification",
     # Behaviors
     "IPipelineBehavior",
+    "IValidator",
     "ValidationBehavior",
     "LoggingBehavior",
+    "ICacheProvider",
+    "InMemoryCache",
     "CachingBehavior",
     "TransactionBehavior",
     "RetryBehavior",
     "MetricsBehavior",
+    "RequestMetrics",
 ]

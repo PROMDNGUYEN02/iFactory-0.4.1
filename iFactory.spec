@@ -1,16 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all
 
 block_cipher = None
 
-# Đường dẫn project
 PROJECT_ROOT = r'C:\python\iFactory 0.4.1'
 SRC_PATH = os.path.join(PROJECT_ROOT, 'src')
 
-# Hidden imports
+# Collect dependency-injector
+di_datas, di_binaries, di_hiddenimports = collect_all('dependency_injector')
+
+# Hidden imports - ĐÃ SỬA
 hidden_imports = [
+    # dependency-injector
+    'dependency_injector',
+    'dependency_injector.errors',
+    'dependency_injector.providers',
+    'dependency_injector.containers',
+    'dependency_injector.wiring',
+    
     # SQLAlchemy
     'sqlalchemy.dialects.mssql',
     'sqlalchemy.dialects.mssql.pyodbc',
@@ -28,7 +37,6 @@ hidden_imports = [
     
     # Async
     'asyncio',
-    'qasync',
     
     # Pydantic
     'pydantic',
@@ -43,38 +51,60 @@ hidden_imports = [
     'PySide6.QtSvgWidgets',
 ]
 
-# Collect all submodules
+# Chỉ thêm nếu package đã cài
+try:
+    import structlog
+    hidden_imports += [
+        'structlog',
+        'structlog.processors',
+        'structlog.stdlib',
+        'structlog.contextvars',
+    ]
+except ImportError:
+    print("WARNING: structlog not installed, skipping...")
+
+try:
+    import orjson
+    hidden_imports += ['orjson']
+except ImportError:
+    print("WARNING: orjson not installed, skipping...")
+
+# Collect submodules
 hidden_imports += collect_submodules('iFactory')
 hidden_imports += collect_submodules('sqlalchemy')
+hidden_imports += collect_submodules('dependency_injector')
+hidden_imports += collect_submodules('pydantic')
+hidden_imports += di_hiddenimports
 
 # Data files
 datas = [
-    # Resources
     (
         os.path.join(SRC_PATH, 'iFactory', 'presentation', 'resources'),
         os.path.join('iFactory', 'presentation', 'resources')
     ),
-    # Config
     (
         os.path.join(PROJECT_ROOT, 'data', 'config'),
         os.path.join('data', 'config')
     ),
-    # Storage (SQLite)
     (
         os.path.join(PROJECT_ROOT, 'data', 'storage'),
         os.path.join('data', 'storage')
     ),
-    # .env file
     (
         os.path.join(PROJECT_ROOT, '.env'),
         '.'
     ),
 ]
+datas += di_datas
+
+# Binaries
+binaries = []
+binaries += di_binaries
 
 a = Analysis(
     [os.path.join(SRC_PATH, 'iFactory', '__main__.py')],
     pathex=[SRC_PATH],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hidden_imports,
     hookspath=[],
@@ -97,7 +127,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
+    console=False,  # ĐỂ TRUE ĐỂ DEBUG
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
