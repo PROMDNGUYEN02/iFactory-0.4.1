@@ -1,6 +1,14 @@
-# File: infrastructure/cache/memory_cache.py
+# src/iFactory/infrastructure/cache/memory_cache.py
 """
 Infrastructure Adapter: In-Memory Cache with LRU eviction.
+
+Features:
+- LRU eviction when max size reached
+- TTL-based expiration
+- Tag-based invalidation
+- Statistics tracking
+- Async-safe operations
+- Get-or-set pattern
 """
 
 from __future__ import annotations
@@ -10,9 +18,19 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Dict, Generic, Optional, TypeVar
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Set,
+    TypeVar,
+)
 
-from iFactory.application.ports.cache import ICacheProvider
+from iFactory.application.ports.cache import ICacheProvider, CacheStatistics
 
 logger = logging.getLogger(__name__)
 
@@ -21,48 +39,29 @@ T = TypeVar("T")
 
 @dataclass
 class CacheEntry(Generic[T]):
-    """Cache entry with value and expiry."""
+    """Cache entry with value, expiry, and metadata."""
 
     value: T
     expiry: float
+    tags: Set[str] = field(default_factory=set)
     created_at: float = field(default_factory=time.time)
     access_count: int = 0
+    last_accessed: float = field(default_factory=time.time)
 
     @property
     def is_expired(self) -> bool:
+        """Check if entry has expired."""
         return time.time() > self.expiry
+
+    @property
+    def age_seconds(self) -> float:
+        """Get age of entry in seconds."""
+        return time.time() - self.created_at
 
     def touch(self) -> None:
         """Record an access."""
         self.access_count += 1
-
-
-@dataclass
-class CacheStats:
-    """Cache statistics for monitoring."""
-
-    hits: int = 0
-    misses: int = 0
-    evictions: int = 0
-    expirations: int = 0
-    current_size: int = 0
-    max_size: int = 0
-
-    @property
-    def hit_rate(self) -> float:
-        total = self.hits + self.misses
-        return self.hits / total if total > 0 else 0.0
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "hits": self.hits,
-            "misses": self.misses,
-            "hit_rate": f"{self.hit_rate:.2%}",
-            "evictions": self.evictions,
-            "expirations": self.expirations,
-            "current_size": self.current_size,
-            "max_size": self.max_size,
-        }
+        self.last_accessed = time.time()
 
 
 class MemoryCache(ICacheProvider):
@@ -72,34 +71,79 @@ class MemoryCache(ICacheProvider):
     Features:
     - Max size limit with LRU eviction
     - TTL-based expiration
+    - Tag-based invalidation
     - Async-safe with lock
     - Statistics tracking
     - Periodic cleanup of expired entries
+    - Get-or-set pattern with deduplication
 
     Usage:
         cache = MemoryCache(max_size=1000, default_ttl=300)
+
+        # Basic operations
         await cache.set("key", value, ttl=60)
         value = await cache.get("key")
+
+        # With tags
+        await cache.set("user:123", user, ttl=300, tags={"users"})
+        await cache.delete_by_tag("users")  # Invalidate all users
+
+        # Get-or-set pattern
+        value = await cache.get_or_set(
+            "expensive_key",
+            lambda: compute_expensive_value(),
+            ttl=300
+        )
     """
+
+    __slots__ = (
+        "_store",
+        "_tags",
+        "_lock",
+        "_pending_gets",
+        "_max_size",
+        "_default_ttl",
+        "_cleanup_interval",
+        "_last_cleanup",
+        "_stats",
+    )
 
     def __init__(
         self,
         max_size: int = 1000,
-        default_ttl: int = 300,  # 5 minutes
-        cleanup_interval: int = 60,  # Cleanup every 60 seconds
+        default_ttl: int = 300,
+        cleanup_interval: int = 60,
     ) -> None:
+        """
+        Initialize MemoryCache.
+
+        Args:
+            max_size: Maximum number of entries
+            default_ttl: Default TTL in seconds
+            cleanup_interval: How often to cleanup expired entries (seconds)
+        """
         # Use OrderedDict for LRU tracking
         self._store: OrderedDict[str, CacheEntry] = OrderedDict()
+        self._tags: Dict[str, Set[str]] = {}  # tag -> set of keys
         self._lock = asyncio.Lock()
+        self._pending_gets: Dict[str, asyncio.Future] = {}  # For deduplication
         self._max_size = max_size
         self._default_ttl = default_ttl
         self._cleanup_interval = cleanup_interval
         self._last_cleanup = time.time()
 
         # Statistics
-        self._stats = CacheStats(max_size=max_size)
+        self._stats = CacheStatistics(max_size=max_size)
 
-        logger.debug("MemoryCache initialized: max_size=%d, default_ttl=%ds", max_size, default_ttl)
+        logger.debug(
+            "MemoryCache initialized: max_size=%d, default_ttl=%ds",
+            max_size,
+            default_ttl,
+        )
+
+    # ========================================================================
+    # Core Operations
+    # ========================================================================
 
     async def get(self, key: str) -> Optional[Any]:
         """
@@ -118,10 +162,9 @@ class MemoryCache(ICacheProvider):
             entry = self._store[key]
 
             if entry.is_expired:
-                del self._store[key]
+                await self._remove_entry(key)
                 self._stats.expirations += 1
                 self._stats.misses += 1
-                self._update_size_stat()
                 return None
 
             # Move to end (most recently used)
@@ -131,36 +174,55 @@ class MemoryCache(ICacheProvider):
             self._stats.hits += 1
             return entry.value
 
-    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+    async def set(
+        self,
+        key: str,
+        value: Any,
+        ttl: int = 0,
+        tags: Optional[Set[str]] = None,
+    ) -> None:
         """
-        Set value in cache with TTL.
+        Set value in cache with TTL and optional tags.
 
-        Evicts LRU entries if cache is full.
+        Args:
+            key: Cache key
+            value: Value to cache
+            ttl: Time to live in seconds (0 = use default)
+            tags: Optional tags for group invalidation
         """
-        ttl = ttl if ttl is not None else self._default_ttl
+        ttl = ttl if ttl > 0 else self._default_ttl
         expiry = time.time() + ttl
+        entry_tags = tags or set()
 
         async with self._lock:
-            # If key exists, update it
+            # Remove old entry if exists
             if key in self._store:
-                self._store[key] = CacheEntry(value=value, expiry=expiry)
-                self._store.move_to_end(key)
-                return
+                await self._remove_entry(key)
 
             # Evict if necessary
             while len(self._store) >= self._max_size:
                 await self._evict_lru()
 
             # Add new entry
-            self._store[key] = CacheEntry(value=value, expiry=expiry)
+            self._store[key] = CacheEntry(
+                value=value,
+                expiry=expiry,
+                tags=entry_tags,
+            )
+
+            # Register tags
+            for tag in entry_tags:
+                if tag not in self._tags:
+                    self._tags[tag] = set()
+                self._tags[tag].add(key)
+
             self._update_size_stat()
 
     async def delete(self, key: str) -> bool:
         """Delete a key from cache. Returns True if key existed."""
         async with self._lock:
             if key in self._store:
-                del self._store[key]
-                self._update_size_stat()
+                await self._remove_entry(key)
                 return True
             return False
 
@@ -172,9 +234,8 @@ class MemoryCache(ICacheProvider):
 
             entry = self._store[key]
             if entry.is_expired:
-                del self._store[key]
+                await self._remove_entry(key)
                 self._stats.expirations += 1
-                self._update_size_stat()
                 return False
 
             return True
@@ -184,46 +245,203 @@ class MemoryCache(ICacheProvider):
         async with self._lock:
             count = len(self._store)
             self._store.clear()
+            self._tags.clear()
             self._stats.current_size = 0
             logger.debug("Cache cleared: %d entries removed", count)
+
+    # ========================================================================
+    # Bulk Operations
+    # ========================================================================
+
+    async def get_many(self, keys: List[str]) -> Dict[str, Any]:
+        """Get multiple values at once."""
+        result = {}
+        async with self._lock:
+            await self._maybe_cleanup()
+
+            for key in keys:
+                if key not in self._store:
+                    self._stats.misses += 1
+                    continue
+
+                entry = self._store[key]
+                if entry.is_expired:
+                    await self._remove_entry(key)
+                    self._stats.expirations += 1
+                    self._stats.misses += 1
+                    continue
+
+                self._store.move_to_end(key)
+                entry.touch()
+                self._stats.hits += 1
+                result[key] = entry.value
+
+        return result
+
+    async def set_many(
+        self,
+        items: Dict[str, Any],
+        ttl: int = 0,
+        tags: Optional[Set[str]] = None,
+    ) -> None:
+        """Set multiple values at once."""
+        for key, value in items.items():
+            await self.set(key, value, ttl, tags)
+
+    async def delete_many(self, keys: List[str]) -> int:
+        """Delete multiple keys. Returns count of deleted keys."""
+        deleted = 0
+        async with self._lock:
+            for key in keys:
+                if key in self._store:
+                    await self._remove_entry(key)
+                    deleted += 1
+        return deleted
+
+    # ========================================================================
+    # Tag Operations
+    # ========================================================================
+
+    async def delete_by_tag(self, tag: str) -> int:
+        """Delete all entries with given tag."""
+        async with self._lock:
+            keys = self._tags.pop(tag, set())
+            deleted = 0
+
+            for key in keys:
+                if key in self._store:
+                    await self._remove_entry(key, update_tags=False)
+                    deleted += 1
+
+            if deleted > 0:
+                logger.debug("Deleted %d entries with tag '%s'", deleted, tag)
+
+            return deleted
+
+    async def get_keys_by_tag(self, tag: str) -> List[str]:
+        """Get all keys with given tag."""
+        async with self._lock:
+            return list(self._tags.get(tag, set()))
+
+    # ========================================================================
+    # Advanced Operations
+    # ========================================================================
 
     async def get_or_set(
         self,
         key: str,
-        factory: callable,
-        ttl: Optional[int] = None,
-    ) -> Any:
+        factory: Callable[[], Awaitable[T]],
+        ttl: int = 0,
+        tags: Optional[Set[str]] = None,
+    ) -> T:
         """
         Get value or compute and cache it.
 
-        Useful pattern for cache-aside:
-            value = await cache.get_or_set(
-                "expensive_key",
-                lambda: compute_expensive_value(),
-                ttl=300
-            )
+        Thread-safe: Only one factory call if multiple concurrent requests.
         """
+        # Check cache first
         value = await self.get(key)
         if value is not None:
             return value
 
+        # Check for pending computation
+        async with self._lock:
+            if key in self._pending_gets:
+                # Wait for existing computation
+                future = self._pending_gets[key]
+            else:
+                # Start new computation
+                future = asyncio.get_event_loop().create_future()
+                self._pending_gets[key] = future
+
+        # If we didn't create the future, wait for it
+        if key in self._pending_gets and self._pending_gets[key] is not future:
+            return await future
+
         # Compute value
-        if asyncio.iscoroutinefunction(factory):
-            value = await factory()
-        else:
-            value = factory()
+        try:
+            computed_value = await factory()
+            await self.set(key, computed_value, ttl, tags)
+            future.set_result(computed_value)
+            return computed_value
+        except Exception as e:
+            future.set_exception(e)
+            raise
+        finally:
+            async with self._lock:
+                self._pending_gets.pop(key, None)
 
-        await self.set(key, value, ttl)
-        return value
+    async def refresh(self, key: str, ttl: int) -> bool:
+        """Refresh TTL for existing key."""
+        async with self._lock:
+            if key not in self._store:
+                return False
 
-    def get_stats(self) -> CacheStats:
+            entry = self._store[key]
+            if entry.is_expired:
+                await self._remove_entry(key)
+                return False
+
+            entry.expiry = time.time() + ttl
+            return True
+
+    async def increment(
+        self,
+        key: str,
+        delta: int = 1,
+        default: int = 0,
+    ) -> int:
+        """Increment numeric value."""
+        async with self._lock:
+            if key in self._store:
+                entry = self._store[key]
+                if not entry.is_expired:
+                    if isinstance(entry.value, (int, float)):
+                        entry.value += delta
+                        return int(entry.value)
+
+            # Key doesn't exist or expired - create with default
+            new_value = default + delta
+            await self.set(key, new_value)
+            return new_value
+
+    # ========================================================================
+    # Statistics
+    # ========================================================================
+
+    def get_stats(self) -> CacheStatistics:
         """Get cache statistics."""
+        self._stats.current_size = len(self._store)
         return self._stats
+
+    def reset_stats(self) -> None:
+        """Reset statistics."""
+        self._stats = CacheStatistics(max_size=self._max_size)
+        self._stats.current_size = len(self._store)
+
+    # ========================================================================
+    # Internal Helpers
+    # ========================================================================
+
+    async def _remove_entry(self, key: str, update_tags: bool = True) -> None:
+        """Remove entry and update tag mappings."""
+        if key not in self._store:
+            return
+
+        entry = self._store.pop(key)
+
+        if update_tags:
+            for tag in entry.tags:
+                if tag in self._tags:
+                    self._tags[tag].discard(key)
+                    if not self._tags[tag]:
+                        del self._tags[tag]
+
+        self._update_size_stat()
 
     async def _evict_lru(self) -> None:
         """Evict least recently used entry."""
         if self._store:
-            # popitem(last=False) removes the first (oldest) item
             key, _ = self._store.popitem(last=False)
             self._stats.evictions += 1
             self._update_size_stat()
@@ -244,11 +462,10 @@ class MemoryCache(ICacheProvider):
         expired_keys = [key for key, entry in self._store.items() if entry.expiry < now]
 
         for key in expired_keys:
-            del self._store[key]
+            await self._remove_entry(key)
             self._stats.expirations += 1
 
         if expired_keys:
-            self._update_size_stat()
             logger.debug("Cleaned up %d expired entries", len(expired_keys))
 
     def _update_size_stat(self) -> None:
@@ -256,7 +473,11 @@ class MemoryCache(ICacheProvider):
         self._stats.current_size = len(self._store)
 
 
-# Typed cache for specific use cases
+# ============================================================================
+# Typed Cache Wrapper
+# ============================================================================
+
+
 class TypedCache(Generic[T]):
     """
     Type-safe cache wrapper.
@@ -267,9 +488,17 @@ class TypedCache(Generic[T]):
         device = await device_cache.get("ABC123")  # Returns Optional[Device]
     """
 
-    def __init__(self, cache: ICacheProvider, prefix: str = "") -> None:
+    __slots__ = ("_cache", "_prefix", "_default_ttl")
+
+    def __init__(
+        self,
+        cache: ICacheProvider,
+        prefix: str = "",
+        default_ttl: int = 60,
+    ) -> None:
         self._cache = cache
         self._prefix = prefix
+        self._default_ttl = default_ttl
 
     def _key(self, key: str) -> str:
         return f"{self._prefix}{key}"
@@ -277,11 +506,38 @@ class TypedCache(Generic[T]):
     async def get(self, key: str) -> Optional[T]:
         return await self._cache.get(self._key(key))
 
-    async def set(self, key: str, value: T, ttl: int = 60) -> None:
-        await self._cache.set(self._key(key), value, ttl)
+    async def set(
+        self,
+        key: str,
+        value: T,
+        ttl: Optional[int] = None,
+        tags: Optional[Set[str]] = None,
+    ) -> None:
+        await self._cache.set(
+            self._key(key),
+            value,
+            ttl or self._default_ttl,
+            tags,
+        )
 
     async def delete(self, key: str) -> bool:
         return await self._cache.delete(self._key(key))
 
+    async def get_or_set(
+        self,
+        key: str,
+        factory: Callable[[], Awaitable[T]],
+        ttl: Optional[int] = None,
+    ) -> T:
+        return await self._cache.get_or_set(
+            self._key(key),
+            factory,
+            ttl or self._default_ttl,
+        )
 
-__all__ = ["MemoryCache", "CacheEntry", "CacheStats", "TypedCache"]
+
+__all__ = [
+    "MemoryCache",
+    "CacheEntry",
+    "TypedCache",
+]
