@@ -1,26 +1,34 @@
-# File: presentation/services/theme_service.py
+# src/iFactory/presentation/services/theme_service.py
 """
 Theme Service - Single Source of Truth for theming.
 
-OPTIMIZED VERSION:
+OPTIMIZED VERSION with additional features:
 1. Load variables.json ONCE on init
 2. Cache merged variables per theme
 3. Cache QSS template (raw files concatenated)
 4. Use regex for faster template compilation
 5. Lazy icon provider loading
+6. Animation/transition support
+7. Color manipulation utilities
 """
 
 from __future__ import annotations
 
+import colorsys
 import json
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Union, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal, QSize
 from PySide6.QtGui import QColor, QIcon, QPixmap
-from iFactory.infrastructure.configuration.paths import PATHS
+
+try:
+    from iFactory.infrastructure.configuration.paths import PATHS
+except ImportError:
+    PATHS = None
 
 if TYPE_CHECKING:
     from ..resources.icons import Icons, DeviceIcons
@@ -28,17 +36,151 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# Color Utilities
+# ============================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class ColorRGB:
+    """Immutable RGB color representation."""
+
+    r: int
+    g: int
+    b: int
+    a: int = 255
+
+    @classmethod
+    def from_hex(cls, hex_color: str) -> "ColorRGB":
+        """Parse hex color string."""
+        hex_color = hex_color.lstrip("#")
+        if len(hex_color) == 6:
+            r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+            return cls(r, g, b)
+        elif len(hex_color) == 8:
+            r, g, b, a = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16), int(hex_color[6:8], 16)
+            return cls(r, g, b, a)
+        return cls(0, 0, 0)
+
+    @classmethod
+    def from_qcolor(cls, color: QColor) -> "ColorRGB":
+        """Create from QColor."""
+        return cls(color.red(), color.green(), color.blue(), color.alpha())
+
+    def to_hex(self) -> str:
+        """Convert to hex string."""
+        if self.a == 255:
+            return f"#{self.r:02x}{self.g:02x}{self.b:02x}"
+        return f"#{self.r:02x}{self.g:02x}{self.b:02x}{self.a:02x}"
+
+    def to_rgba(self, alpha: Optional[float] = None) -> str:
+        """Convert to rgba() string."""
+        a = alpha if alpha is not None else self.a / 255
+        return f"rgba({self.r}, {self.g}, {self.b}, {a})"
+
+    def to_qcolor(self) -> QColor:
+        """Convert to QColor."""
+        return QColor(self.r, self.g, self.b, self.a)
+
+    def lighten(self, amount: float = 0.1) -> "ColorRGB":
+        """Lighten color by amount (0-1)."""
+        h, l, s = colorsys.rgb_to_hls(self.r / 255, self.g / 255, self.b / 255)
+        l = min(1.0, l + amount)
+        r, g, b = colorsys.hls_to_rgb(h, l, s)
+        return ColorRGB(int(r * 255), int(g * 255), int(b * 255), self.a)
+
+    def darken(self, amount: float = 0.1) -> "ColorRGB":
+        """Darken color by amount (0-1)."""
+        h, l, s = colorsys.rgb_to_hls(self.r / 255, self.g / 255, self.b / 255)
+        l = max(0.0, l - amount)
+        r, g, b = colorsys.hls_to_rgb(h, l, s)
+        return ColorRGB(int(r * 255), int(g * 255), int(b * 255), self.a)
+
+    def with_alpha(self, alpha: float) -> "ColorRGB":
+        """Return color with new alpha (0-1)."""
+        return ColorRGB(self.r, self.g, self.b, int(alpha * 255))
+
+
+class ColorUtils:
+    """Utility functions for color manipulation."""
+
+    @staticmethod
+    def parse(color: str) -> ColorRGB:
+        """Parse color string to ColorRGB."""
+        if color.startswith("#"):
+            return ColorRGB.from_hex(color)
+        elif color.startswith("rgb"):
+            # Parse rgba(r, g, b, a) or rgb(r, g, b)
+            match = re.match(r"rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)", color)
+            if match:
+                r, g, b = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                a = float(match.group(4)) if match.group(4) else 1.0
+                return ColorRGB(r, g, b, int(a * 255))
+        return ColorRGB(0, 0, 0)
+
+    @staticmethod
+    def blend(color1: str, color2: str, ratio: float = 0.5) -> str:
+        """Blend two colors."""
+        c1 = ColorUtils.parse(color1)
+        c2 = ColorUtils.parse(color2)
+
+        r = int(c1.r * (1 - ratio) + c2.r * ratio)
+        g = int(c1.g * (1 - ratio) + c2.g * ratio)
+        b = int(c1.b * (1 - ratio) + c2.b * ratio)
+        a = int(c1.a * (1 - ratio) + c2.a * ratio)
+
+        return ColorRGB(r, g, b, a).to_hex()
+
+    @staticmethod
+    def get_contrast_color(background: str) -> str:
+        """Get appropriate text color (black/white) for background."""
+        c = ColorUtils.parse(background)
+        # Calculate relative luminance
+        luminance = (0.299 * c.r + 0.587 * c.g + 0.114 * c.b) / 255
+        return "#000000" if luminance > 0.5 else "#FFFFFF"
+
+
+# ============================================================================
+# Theme Tokens (Enhanced with utilities)
+# ============================================================================
+
+
 class ThemeTokens:
     """
     Semantic design tokens for type-safe theme access.
 
     OPTIMIZED: Uses __slots__ for memory efficiency.
+    ENHANCED: Color manipulation utilities.
     """
 
-    __slots__ = ("_vars",)
+    __slots__ = ("_vars", "_color_cache")
 
     def __init__(self, variables: Dict[str, str]):
         self._vars = variables
+        self._color_cache: Dict[str, ColorRGB] = {}
+
+    # =========================================================================
+    # Color Utilities
+    # =========================================================================
+
+    def get_color_rgb(self, key: str) -> ColorRGB:
+        """Get color as ColorRGB object (cached)."""
+        if key not in self._color_cache:
+            hex_color = self.get(key, "#FF00FF")
+            self._color_cache[key] = ColorRGB.from_hex(hex_color)
+        return self._color_cache[key]
+
+    def lighten(self, key: str, amount: float = 0.1) -> str:
+        """Get lightened version of color."""
+        return self.get_color_rgb(key).lighten(amount).to_hex()
+
+    def darken(self, key: str, amount: float = 0.1) -> str:
+        """Get darkened version of color."""
+        return self.get_color_rgb(key).darken(amount).to_hex()
+
+    def with_alpha(self, key: str, alpha: float) -> str:
+        """Get color with alpha as rgba() string."""
+        return self.get_color_rgb(key).to_rgba(alpha)
 
     # =========================================================================
     # LEGACY ALIASES (Backward Compatibility)
@@ -121,6 +263,10 @@ class ThemeTokens:
     @property
     def surface_overlay(self) -> str:
         return self._vars.get("surface.overlay", "rgba(0, 0, 0, 0.5)")
+
+    @property
+    def surface_hover(self) -> str:
+        return self._vars.get("surface.hover", self.interactive_hover)
 
     # =========================================================================
     # TEXT
@@ -632,6 +778,10 @@ class ThemeTokens:
         """Get numeric value (strips 'px' suffix)."""
         value = self.get(key, str(default))
         return int(value.replace("px", "").replace("ms", "").strip())
+
+    def get_all(self) -> Dict[str, str]:
+        """Get all variables as dict."""
+        return self._vars.copy()
 
 
 class ThemeService(QObject):

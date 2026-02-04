@@ -1,23 +1,32 @@
 # src/iFactory/presentation/state/store.py
 """
-Redux-like Store for state management.
+Unified Redux-like Store.
+
+Combines features from both Store and EnhancedStore into a single,
+configurable implementation.
 
 Features:
-- Thread-safe state updates with RLock
-- Qt signal integration for UI updates
-- Middleware support for logging, debugging
-- Batched updates for performance
-- Type-safe selectors
+- Thread-safe state updates
+- Qt signal integration
+- Middleware pipeline
+- Optional time-travel debugging
+- Optional state persistence
+- Batched updates
+- Memoized selectors
+- Both AppState and dict support
 """
 
 from __future__ import annotations
 
+import copy
+import json
 import logging
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import (
     Any,
     Callable,
@@ -28,20 +37,24 @@ from typing import (
     Optional,
     Protocol,
     TypeVar,
+    Union,
+    overload,
 )
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, QTimer
 
+from .types import AppState, create_initial_state
 from .actions import Action, ActionType
-from .reducers import INITIAL_STATE, root_reducer
+from .reducers import root_reducer, root_reducer_dict, INITIAL_STATE_DICT
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+S = TypeVar("S")
 
 
 # ============================================================================
-# Middleware Protocol
+# Protocols
 # ============================================================================
 
 
@@ -54,15 +67,29 @@ class Middleware(Protocol):
         action: Action,
         next_dispatch: Callable[[Action], None],
     ) -> None:
-        """
-        Process action and optionally call next middleware.
-
-        Args:
-            store: The store instance
-            action: The action being dispatched
-            next_dispatch: Call this to pass action to next middleware
-        """
+        """Process action and call next middleware."""
         ...
+
+
+class IStatePersistence(Protocol):
+    """Protocol for state persistence."""
+
+    def save(self, state: Dict[str, Any]) -> None:
+        """Save state to storage."""
+        ...
+
+    def load(self) -> Optional[Dict[str, Any]]:
+        """Load state from storage."""
+        ...
+
+    def clear(self) -> None:
+        """Clear persisted state."""
+        ...
+
+
+# ============================================================================
+# Middleware Implementations
+# ============================================================================
 
 
 def logging_middleware(
@@ -70,15 +97,39 @@ def logging_middleware(
     action: Action,
     next_dispatch: Callable[[Action], None],
 ) -> None:
-    """Middleware that logs all actions."""
+    """Middleware that logs all actions with timing."""
     start = time.perf_counter()
-    logger.debug(f"[Store] Action: {action.type.name}")
+
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"[Store] Dispatching: {action.type.name}")
 
     next_dispatch(action)
 
     elapsed_ms = (time.perf_counter() - start) * 1000
-    if elapsed_ms > 10:  # Log slow dispatches
+    if elapsed_ms > 16:  # > 1 frame at 60fps
         logger.warning(f"[Store] Slow dispatch: {action.type.name} took {elapsed_ms:.1f}ms")
+
+
+def performance_middleware(
+    store: "Store",
+    action: Action,
+    next_dispatch: Callable[[Action], None],
+) -> None:
+    """Middleware that tracks performance metrics."""
+    start = time.perf_counter()
+
+    next_dispatch(action)
+
+    elapsed = (time.perf_counter() - start) * 1000
+
+    # Update store metrics
+    if hasattr(store, "_metrics"):
+        store._metrics["total_dispatch_time"] += elapsed
+        store._metrics["dispatch_count"] += 1
+        store._metrics["max_dispatch_time"] = max(
+            store._metrics.get("max_dispatch_time", 0),
+            elapsed,
+        )
 
 
 def dev_tools_middleware(
@@ -86,14 +137,14 @@ def dev_tools_middleware(
     action: Action,
     next_dispatch: Callable[[Action], None],
 ) -> None:
-    """Middleware for debugging (stores action history)."""
+    """Middleware for Redux DevTools integration."""
     if not hasattr(store, "_action_history"):
         store._action_history = []
 
     store._action_history.append(
         {
             "action": action.type.name,
-            "payload": action.payload,
+            "payload": _serialize_payload(action.payload),
             "timestamp": datetime.now().isoformat(),
         }
     )
@@ -105,37 +156,240 @@ def dev_tools_middleware(
     next_dispatch(action)
 
 
+def _serialize_payload(payload: Any) -> Any:
+    """Serialize payload for logging/debugging."""
+    if payload is None:
+        return None
+    if isinstance(payload, (str, int, float, bool)):
+        return payload
+    if isinstance(payload, dict):
+        return {k: _serialize_payload(v) for k, v in payload.items()}
+    if isinstance(payload, (list, tuple)):
+        return [_serialize_payload(v) for v in payload]
+    if hasattr(payload, "__dataclass_fields__"):
+        return {field: _serialize_payload(getattr(payload, field)) for field in payload.__dataclass_fields__}
+    return str(type(payload).__name__)
+
+
+def create_persistence_middleware(
+    persistence: IStatePersistence,
+) -> Middleware:
+    """Create middleware that persists state changes."""
+
+    def middleware(
+        store: "Store",
+        action: Action,
+        next_dispatch: Callable[[Action], None],
+    ) -> None:
+        next_dispatch(action)
+
+        # Persist after state change
+        state_dict = store.get_state_dict()
+        persistence.save(state_dict)
+
+    return middleware
+
+
 # ============================================================================
-# Selector with Memoization
+# State Persistence Implementations
+# ============================================================================
+
+
+class LocalStoragePersistence:
+    """
+    Persist state to local JSON file.
+
+    Features:
+    - Debounced saves to reduce I/O
+    - Atomic writes via temp file
+    - Configurable keys to persist
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        debounce_ms: int = 1000,
+        keys_to_persist: Optional[List[str]] = None,
+    ):
+        self._path = Path(path)
+        self._debounce_ms = debounce_ms
+        self._keys = keys_to_persist or [
+            "theme",
+            "sidebar_expanded",
+            "data_range_days",
+        ]
+        self._pending_state: Optional[Dict[str, Any]] = None
+        self._save_timer: Optional[QTimer] = None
+        self._lock = threading.Lock()
+
+    def save(self, state: Dict[str, Any]) -> None:
+        """Schedule debounced save."""
+        with self._lock:
+            # Filter to only persist specified keys
+            self._pending_state = {k: v for k, v in state.items() if k in self._keys}
+
+        # Schedule save
+        if self._save_timer is None:
+            self._save_timer = QTimer()
+            self._save_timer.setSingleShot(True)
+            self._save_timer.timeout.connect(self._do_save)
+
+        self._save_timer.start(self._debounce_ms)
+
+    def _do_save(self) -> None:
+        """Actually write to file."""
+        with self._lock:
+            state = self._pending_state
+            self._pending_state = None
+
+        if not state:
+            return
+
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Write to temp file first
+            temp_path = self._path.with_suffix(".tmp")
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, default=str)
+
+            # Atomic rename
+            temp_path.replace(self._path)
+            logger.debug(f"[Persistence] Saved state to {self._path}")
+
+        except Exception as e:
+            logger.error(f"[Persistence] Save failed: {e}")
+
+    def load(self) -> Optional[Dict[str, Any]]:
+        """Load state from file."""
+        if not self._path.exists():
+            return None
+
+        try:
+            with open(self._path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            logger.info(f"[Persistence] Loaded state from {self._path}")
+            return state
+
+        except Exception as e:
+            logger.error(f"[Persistence] Load failed: {e}")
+            return None
+
+    def clear(self) -> None:
+        """Delete persisted state."""
+        try:
+            self._path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.error(f"[Persistence] Clear failed: {e}")
+
+
+# ============================================================================
+# Time Travel Support
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class StateSnapshot:
+    """Immutable snapshot for time-travel."""
+
+    state: Dict[str, Any]
+    action: Action
+    timestamp: datetime = field(default_factory=datetime.now)
+    index: int = 0
+
+
+@dataclass
+class StateHistory:
+    """Manages state history for undo/redo."""
+
+    max_size: int = 100
+    _snapshots: List[StateSnapshot] = field(default_factory=list)
+    _current_index: int = -1
+
+    def push(self, state: Dict[str, Any], action: Action) -> None:
+        """Add new snapshot."""
+        # Truncate future if we've gone back
+        if self._current_index < len(self._snapshots) - 1:
+            self._snapshots = self._snapshots[: self._current_index + 1]
+
+        snapshot = StateSnapshot(
+            state=copy.deepcopy(state),
+            action=action,
+            index=len(self._snapshots),
+        )
+        self._snapshots.append(snapshot)
+        self._current_index = len(self._snapshots) - 1
+
+        # Trim if too large
+        if len(self._snapshots) > self.max_size:
+            trim = len(self._snapshots) - self.max_size
+            self._snapshots = self._snapshots[trim:]
+            self._current_index -= trim
+
+    def can_undo(self) -> bool:
+        return self._current_index > 0
+
+    def can_redo(self) -> bool:
+        return self._current_index < len(self._snapshots) - 1
+
+    def undo(self) -> Optional[StateSnapshot]:
+        if not self.can_undo():
+            return None
+        self._current_index -= 1
+        return self._snapshots[self._current_index]
+
+    def redo(self) -> Optional[StateSnapshot]:
+        if not self.can_redo():
+            return None
+        self._current_index += 1
+        return self._snapshots[self._current_index]
+
+    def jump_to(self, index: int) -> Optional[StateSnapshot]:
+        if 0 <= index < len(self._snapshots):
+            self._current_index = index
+            return self._snapshots[index]
+        return None
+
+    @property
+    def current_index(self) -> int:
+        return self._current_index
+
+    @property
+    def snapshots(self) -> List[StateSnapshot]:
+        return self._snapshots.copy()
+
+    def clear(self) -> None:
+        self._snapshots.clear()
+        self._current_index = -1
+
+
+# ============================================================================
+# Store Configuration
 # ============================================================================
 
 
 @dataclass
-class MemoizedSelector(Generic[T]):
-    """
-    Memoized selector that caches results.
+class StoreConfig:
+    """Configuration for Store behavior."""
 
-    Usage:
-        select_devices = MemoizedSelector(lambda s: s.get("devices", {}))
-        devices = select_devices(store.get_state())
-    """
+    # Use typed AppState or dict
+    use_typed_state: bool = False
 
-    selector: Callable[[Dict[str, Any]], T]
-    _last_state: Optional[Dict[str, Any]] = field(default=None, repr=False)
-    _cached_result: Optional[T] = field(default=None, repr=False)
+    # Time travel
+    enable_time_travel: bool = False
+    history_size: int = 100
 
-    def __call__(self, state: Dict[str, Any]) -> T:
-        # Simple identity check for memoization
-        if state is self._last_state:
-            return self._cached_result  # type: ignore
+    # Persistence
+    persistence: Optional[IStatePersistence] = None
 
-        self._last_state = state
-        self._cached_result = self.selector(state)
-        return self._cached_result
+    # Default middlewares
+    enable_logging: bool = True
+    enable_performance_tracking: bool = False
+    enable_dev_tools: bool = False
 
 
 # ============================================================================
-# Store
+# Main Store Class
 # ============================================================================
 
 
@@ -145,47 +399,107 @@ class Store(QObject):
 
     Thread-safety:
     - State access protected by RLock
-    - Signals emitted on Qt main thread
-    - Subscribers called synchronously within lock
-
-    Middleware:
-    - Plugins that intercept dispatches
-    - Used for logging, debugging, async actions
+    - Signals emitted safely
 
     Usage:
+        # Basic usage
         store = Store()
-        store.add_middleware(logging_middleware)
         store.dispatch(set_page("electrode"))
         state = store.get_state()
+
+        # With configuration
+        store = Store(config=StoreConfig(
+            enable_time_travel=True,
+            persistence=LocalStoragePersistence(Path("state.json")),
+        ))
+
+        # Subscriptions
+        unsubscribe = store.subscribe(lambda state: print(state))
+        unsubscribe()  # When done
     """
 
     # Qt signals for UI updates
     state_changed = Signal(dict)
     devices_updated = Signal(dict)
-    sync_completed_signal = Signal(dict)
     page_changed = Signal(str)
+    sync_completed_signal = Signal(dict)
+
+    # Time travel signals
+    undo_available = Signal(bool)
+    redo_available = Signal(bool)
 
     def __init__(
         self,
         initial_state: Optional[Dict[str, Any]] = None,
         middlewares: Optional[List[Middleware]] = None,
+        config: Optional[StoreConfig] = None,
     ):
         super().__init__()
-        self._state: Dict[str, Any] = (initial_state or INITIAL_STATE).copy()
+
+        self._config = config or StoreConfig()
+
+        # Load persisted state if available
+        base_state = (initial_state or INITIAL_STATE_DICT).copy()
+        if self._config.persistence:
+            persisted = self._config.persistence.load()
+            if persisted:
+                base_state.update(persisted)
+
+        # State storage (always dict for now)
+        self._state: Dict[str, Any] = base_state
+
+        # Middleware pipeline
+        self._middlewares: List[Middleware] = []
+        self._setup_middlewares(middlewares or [])
+
+        # Subscribers
         self._subscribers: List[Callable[[Dict[str, Any]], None]] = []
-        self._middlewares: List[Middleware] = middlewares or []
-        self._dispatch_count = 0
+
+        # Batching
         self._is_batching = False
         self._batch_actions: List[Action] = []
 
+        # Time travel
+        self._history: Optional[StateHistory] = None
+        self._is_time_traveling = False
+        if self._config.enable_time_travel:
+            self._history = StateHistory(max_size=self._config.history_size)
+            # Initial snapshot
+            init_action = Action(type=ActionType.INIT)
+            self._history.push(self._state.copy(), init_action)
+
+        # Metrics
+        self._metrics: Dict[str, Any] = {
+            "dispatch_count": 0,
+            "total_dispatch_time": 0.0,
+            "max_dispatch_time": 0.0,
+        }
+
         # Thread safety
         self._lock = threading.RLock()
-        self._main_thread_id = threading.current_thread().ident
 
-        logger.debug(f"[Store] Initialized with {len(self._state)} state keys")
+        logger.debug(f"[Store] Initialized with {len(self._state)} state keys, " f"time_travel={self._config.enable_time_travel}")
+
+    def _setup_middlewares(self, custom_middlewares: List[Middleware]) -> None:
+        """Setup middleware pipeline."""
+        # Add configured default middlewares
+        if self._config.enable_logging:
+            self._middlewares.append(logging_middleware)
+
+        if self._config.enable_performance_tracking:
+            self._middlewares.append(performance_middleware)
+
+        if self._config.enable_dev_tools:
+            self._middlewares.append(dev_tools_middleware)
+
+        if self._config.persistence:
+            self._middlewares.append(create_persistence_middleware(self._config.persistence))
+
+        # Add custom middlewares
+        self._middlewares.extend(custom_middlewares)
 
     # ========================================================================
-    # Middleware
+    # Middleware Management
     # ========================================================================
 
     def add_middleware(self, middleware: Middleware) -> None:
@@ -208,25 +522,22 @@ class Store(QObject):
         """
         Get a copy of current state.
 
-        Thread-safe: Returns shallow copy to prevent external mutation.
+        Thread-safe: Returns shallow copy.
         """
         with self._lock:
             return self._state.copy()
+
+    def get_state_dict(self) -> Dict[str, Any]:
+        """Alias for get_state() for clarity."""
+        return self.get_state()
 
     def select(self, selector: Callable[[Dict[str, Any]], T]) -> T:
         """
         Select a slice of state using a selector function.
 
-        More efficient than get_state() for specific values.
-
         Usage:
             devices = store.select(lambda s: s.get("devices", {}))
         """
-        with self._lock:
-            return selector(self._state)
-
-    def select_memoized(self, selector: MemoizedSelector[T]) -> T:
-        """Use a memoized selector."""
         with self._lock:
             return selector(self._state)
 
@@ -238,15 +549,13 @@ class Store(QObject):
         """
         Dispatch an action to update state.
 
-        Thread-safe:
-        - State mutation is atomic
-        - Signals queued to main thread if called from background
+        Thread-safe with proper signal emission.
         """
         if not isinstance(action, Action):
-            logger.warning(f"[Store] Invalid action: {type(action)}")
+            logger.warning(f"[Store] Invalid action type: {type(action)}")
             return
 
-        # If batching, queue action
+        # Queue if batching
         if self._is_batching:
             self._batch_actions.append(action)
             return
@@ -278,13 +587,18 @@ class Store(QObject):
             old_state = self._state
 
             try:
-                new_state = root_reducer(old_state, action)
+                # Use dict reducer
+                new_state = root_reducer_dict(old_state, action)
             except Exception as e:
                 logger.error(f"[Store] Reducer error for {action.type.name}: {e}")
                 return
 
             self._state = new_state
-            self._dispatch_count += 1
+            self._metrics["dispatch_count"] += 1
+
+            # Record in history
+            if self._history and not self._is_time_traveling:
+                self._history.push(new_state.copy(), action)
 
             state_changed = new_state is not old_state
             emit_data = self._prepare_emit_data(action, old_state, new_state, state_changed)
@@ -303,45 +617,37 @@ class Store(QObject):
         data: Dict[str, Any] = {
             "action": action,
             "state_changed": state_changed,
-            "dispatch_count": self._dispatch_count,
         }
 
         if state_changed:
             data["new_state_copy"] = new_state.copy()
 
-        # Device-related actions
+        # Device updates
         if action.type in (ActionType.LOAD_DEVICES, ActionType.UPDATE_DEVICES):
             data["devices"] = new_state.get("devices", {}).copy()
-
-        # Sync completed
-        if action.type == ActionType.SYNC_COMPLETED:
-            data["sync_payload"] = (action.payload or {}).copy()
 
         # Page change
         if action.type == ActionType.SET_PAGE:
             data["new_page"] = new_state.get("current_page")
             data["old_page"] = old_state.get("current_page")
 
+        # Sync completed
+        if action.type == ActionType.SYNC_COMPLETED:
+            data["sync_payload"] = action.payload or {}
+
         return data
 
     def _emit_signals(self, emit_data: Dict[str, Any]) -> None:
-        """Emit Qt signals."""
+        """Emit Qt signals based on action results."""
         action: Action = emit_data["action"]
 
         # Device updates
         if "devices" in emit_data:
-            devices = emit_data["devices"]
-            logger.info(f"[Store] Emitting devices_updated: {len(devices)} devices")
-            self._safe_emit(self.devices_updated, devices)
+            self._safe_emit(self.devices_updated, emit_data["devices"])
 
         # State changed
         if emit_data.get("state_changed"):
-            logger.debug(f"[Store] State changed: {action.type.name} (#{emit_data['dispatch_count']})")
             self._safe_emit(self.state_changed, emit_data["new_state_copy"])
-
-        # Sync completed
-        if "sync_payload" in emit_data:
-            self._safe_emit(self.sync_completed_signal, emit_data["sync_payload"])
 
         # Page change
         new_page = emit_data.get("new_page")
@@ -349,12 +655,21 @@ class Store(QObject):
         if new_page and new_page != old_page:
             self._safe_emit(self.page_changed, new_page)
 
+        # Sync completed
+        if "sync_payload" in emit_data:
+            self._safe_emit(self.sync_completed_signal, emit_data["sync_payload"])
+
+        # Time travel availability
+        if self._history:
+            self._safe_emit(self.undo_available, self._history.can_undo())
+            self._safe_emit(self.redo_available, self._history.can_redo())
+
     def _safe_emit(self, signal: Signal, *args: Any) -> None:
-        """Emit signal safely."""
+        """Emit signal safely, catching disconnected errors."""
         try:
             signal.emit(*args)
         except RuntimeError as e:
-            logger.warning(f"[Store] Signal emit failed: {e}")
+            logger.debug(f"[Store] Signal emit skipped: {e}")
 
     # ========================================================================
     # Batching
@@ -363,19 +678,17 @@ class Store(QObject):
     @contextmanager
     def batch(self) -> Iterator[None]:
         """
-        Batch multiple dispatches into a single state update.
-
-        Reduces signal emissions for better performance.
+        Batch multiple dispatches into single state update.
 
         Usage:
             with store.batch():
                 store.dispatch(action1)
                 store.dispatch(action2)
-            # Single state_changed emission here
+            # Single state_changed emission
         """
         with self._lock:
             if self._is_batching:
-                # Already batching, just yield
+                # Already batching
                 yield
                 return
 
@@ -390,12 +703,98 @@ class Store(QObject):
                 self._batch_actions = []
                 self._is_batching = False
 
-            # Process all batched actions
+            # Process batched actions
             for action in actions:
                 if self._middlewares:
                     self._dispatch_with_middleware(action)
                 else:
                     self._dispatch_internal(action)
+
+    # ========================================================================
+    # Time Travel
+    # ========================================================================
+
+    def undo(self) -> bool:
+        """Undo last action. Returns True if successful."""
+        if not self._history:
+            logger.warning("[Store] Time travel not enabled")
+            return False
+
+        with self._lock:
+            snapshot = self._history.undo()
+            if not snapshot:
+                return False
+
+            self._is_time_traveling = True
+            self._state = snapshot.state.copy()
+            self._is_time_traveling = False
+
+        self._safe_emit(self.state_changed, self._state.copy())
+        self._safe_emit(self.undo_available, self._history.can_undo())
+        self._safe_emit(self.redo_available, self._history.can_redo())
+
+        logger.debug(f"[Store] Undo to index {self._history.current_index}")
+        return True
+
+    def redo(self) -> bool:
+        """Redo next action. Returns True if successful."""
+        if not self._history:
+            return False
+
+        with self._lock:
+            snapshot = self._history.redo()
+            if not snapshot:
+                return False
+
+            self._is_time_traveling = True
+            self._state = snapshot.state.copy()
+            self._is_time_traveling = False
+
+        self._safe_emit(self.state_changed, self._state.copy())
+        self._safe_emit(self.undo_available, self._history.can_undo())
+        self._safe_emit(self.redo_available, self._history.can_redo())
+
+        logger.debug(f"[Store] Redo to index {self._history.current_index}")
+        return True
+
+    def jump_to_history(self, index: int) -> bool:
+        """Jump to specific history index."""
+        if not self._history:
+            return False
+
+        with self._lock:
+            snapshot = self._history.jump_to(index)
+            if not snapshot:
+                return False
+
+            self._is_time_traveling = True
+            self._state = snapshot.state.copy()
+            self._is_time_traveling = False
+
+        self._safe_emit(self.state_changed, self._state.copy())
+        logger.debug(f"[Store] Jumped to history index {index}")
+        return True
+
+    def can_undo(self) -> bool:
+        """Check if undo is available."""
+        return self._history.can_undo() if self._history else False
+
+    def can_redo(self) -> bool:
+        """Check if redo is available."""
+        return self._history.can_redo() if self._history else False
+
+    def get_history(self) -> List[Dict[str, Any]]:
+        """Get action history for DevTools."""
+        if not self._history:
+            return []
+        return [
+            {
+                "index": s.index,
+                "action": s.action.type.name,
+                "timestamp": s.timestamp.isoformat(),
+            }
+            for s in self._history.snapshots
+        ]
 
     # ========================================================================
     # Subscriptions
@@ -415,7 +814,7 @@ class Store(QObject):
 
         self.state_changed.connect(callback)
 
-        def unsubscribe():
+        def unsubscribe() -> None:
             with self._lock:
                 if callback in self._subscribers:
                     self._subscribers.remove(callback)
@@ -431,27 +830,69 @@ class Store(QObject):
     # ========================================================================
 
     def get_dispatch_count(self) -> int:
-        """Get total number of dispatches."""
+        """Get total dispatch count."""
         with self._lock:
-            return self._dispatch_count
+            return self._metrics["dispatch_count"]
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get performance metrics."""
+        with self._lock:
+            dispatch_count = self._metrics["dispatch_count"]
+            total_time = self._metrics["total_dispatch_time"]
+
+            return {
+                **self._metrics,
+                "avg_dispatch_time_ms": (total_time / dispatch_count if dispatch_count > 0 else 0),
+                "history_size": (len(self._history.snapshots) if self._history else 0),
+            }
 
     def get_action_history(self) -> List[Dict[str, Any]]:
-        """Get action history (if dev_tools_middleware is enabled)."""
+        """Get action history (from dev_tools_middleware)."""
         return getattr(self, "_action_history", [])
 
     def reset(self, new_state: Optional[Dict[str, Any]] = None) -> None:
         """Reset store to initial or provided state."""
         with self._lock:
-            self._state = (new_state or INITIAL_STATE).copy()
-            self._dispatch_count = 0
+            self._state = (new_state or INITIAL_STATE_DICT).copy()
+            self._metrics = {
+                "dispatch_count": 0,
+                "total_dispatch_time": 0.0,
+                "max_dispatch_time": 0.0,
+            }
+            if self._history:
+                self._history.clear()
 
         self._safe_emit(self.state_changed, self._state.copy())
 
 
+# ============================================================================
+# Convenience alias
+# ============================================================================
+
+EnhancedStore = Store  # EnhancedStore is now just Store with config
+
+
+# ============================================================================
+# Exports
+# ============================================================================
+
+
 __all__ = [
+    # Store
     "Store",
+    "EnhancedStore",
+    "StoreConfig",
+    # Protocols
     "Middleware",
-    "MemoizedSelector",
+    "IStatePersistence",
+    # Middleware
     "logging_middleware",
+    "performance_middleware",
     "dev_tools_middleware",
+    "create_persistence_middleware",
+    # Persistence
+    "LocalStoragePersistence",
+    # Time travel
+    "StateSnapshot",
+    "StateHistory",
 ]

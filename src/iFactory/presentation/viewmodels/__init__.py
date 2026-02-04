@@ -1,42 +1,62 @@
-# File: presentation/viewmodels/__init__.py
+# src/iFactory/presentation/viewmodels/__init__.py
 """
 ViewModels Package.
 
-MVVM ViewModels that:
-- Own UI state
-- Expose reactive signals
-- Orchestrate Use Cases
-- Contain zero business rules
+MVVM ViewModels for the presentation layer.
+
+ViewModels:
+- Own UI state and business logic
+- Expose data via properties and signals
+- Handle commands/actions from views
+- Coordinate with application services
+
+Data Models:
+- Pure immutable data containers
+- Used by ViewModels to represent state
+- No behavior, only data
+
+Usage:
+    from iFactory.presentation.viewmodels import (
+        ShellViewModel,
+        DeviceListViewModel,
+        GanttChartViewModel,
+    )
+
+    shell_vm = ShellViewModel(theme_service=theme_service)
+    shell_vm.initialize()
 """
 
-# Base classes
 from .base import (
     BaseViewModel,
+    AsyncViewModelMixin,
     UiState,
     UiStateType,
-    AsyncViewModelMixin,
+    ReactiveProperty,
+    ComputedProperty,
+    ICommand,
+    RelayCommand,
+    AsyncRelayCommand,
+    PropertyChangeTracker,
+    ValidationResult,
 )
 
-# ViewModels
-from .device_viewmodel import DeviceListViewModel
-from .gantt_viewmodel import GanttChartViewModel, GanttFetchWorker
 from .shell_viewmodel import ShellViewModel
+from .device_viewmodel import DeviceListViewModel
+from .gantt_viewmodel import GanttChartViewModel, GanttMetrics
 
-# Data models (re-export for convenience)
 from .models import (
-    # Device models
+    # Device
     DeviceDisplayModel,
     DeviceSelectionModel,
     DeviceSyncStatusModel,
-    # Gantt models
+    MaterialInputModel,
+    # Gantt
+    GanttChartModel,
     GanttSegmentModel,
     GanttHourMarkModel,
     GanttStatsModel,
-    GanttChartModel,
     GanttLoadingState,
-    STATUS_GRADIENTS,
-    STATUS_NAMES,
-    # Shell models
+    # Shell
     SystemStatusModel,
     ShellStateModel,
     NavigationItem,
@@ -46,27 +66,31 @@ from .models import (
 __all__ = [
     # Base
     "BaseViewModel",
+    "AsyncViewModelMixin",
     "UiState",
     "UiStateType",
-    "AsyncViewModelMixin",
+    "ReactiveProperty",
+    "ComputedProperty",
+    "ICommand",
+    "RelayCommand",
+    "AsyncRelayCommand",
+    "PropertyChangeTracker",
+    "ValidationResult",
     # ViewModels
+    "ShellViewModel",
     "DeviceListViewModel",
     "GanttChartViewModel",
-    "GanttFetchWorker",
-    "ShellViewModel",
-    # Device models
+    "GanttMetrics",
+    # Models
     "DeviceDisplayModel",
     "DeviceSelectionModel",
     "DeviceSyncStatusModel",
-    # Gantt models
+    "MaterialInputModel",
+    "GanttChartModel",
     "GanttSegmentModel",
     "GanttHourMarkModel",
     "GanttStatsModel",
-    "GanttChartModel",
     "GanttLoadingState",
-    "STATUS_GRADIENTS",
-    "STATUS_NAMES",
-    # Shell models
     "SystemStatusModel",
     "ShellStateModel",
     "NavigationItem",

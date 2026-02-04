@@ -326,19 +326,24 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         self._selected_device_id = device_id
         self._pending_detail_device = device_id
 
+        # =========================================================================
+        # FIX: Handle panel state BEFORE emitting selection
+        # =========================================================================
+        if open_panel and self._shell_vm:
+            if is_same_device:
+                # Same device double-clicked → toggle
+                self._shell_vm.toggle_right_panel()
+            else:
+                # Different device → ALWAYS open (removed redundant check)
+                # open_right_panel() already checks if already open
+                self._shell_vm.open_right_panel()
+
+        # Emit selection AFTER panel state is updated
         selection = DeviceSelectionModel(
             selected_device_id=device_id,
             is_panel_open=self._shell_vm.right_panel_expanded if self._shell_vm else False,
         )
-
         self.selectionChanged.emit(selection)
-
-        if open_panel and self._shell_vm:
-            if is_same_device:
-                self._shell_vm.toggle_right_panel()
-            else:
-                if not self._shell_vm.right_panel_expanded:
-                    self._shell_vm.open_right_panel()
 
         # PARALLEL FETCH: Availability + Materials simultaneously
         if not is_same_device:

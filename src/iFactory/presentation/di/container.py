@@ -1,241 +1,341 @@
-# File: presentation/di/container.py
+# src/iFactory/presentation/di/container.py
 """
-UI Dependency Injection Container.
+Refactored UI Dependency Injection Container.
 
-Manages all presentation layer components with proper MVVM architecture.
-Uses ViewModels instead of Controllers/Presenters.
-
-Features:
-- Auto-refresh every 3 seconds for latest status
-- Initial history sync on startup
-- Proper shutdown handling
-- Centralized ThemeService management
-- Centralized IconService management
-- Icon preloading for faster startup
-- ID mapping support for display vs remote device IDs
+Changes from original:
+- Split into focused sub-containers
+- Interface-based dependencies
+- Lazy initialization
+- Better error handling
+- Cleaner lifecycle management
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Callable, Optional, Protocol, TypeVar
 
 from PySide6.QtCore import QObject, QTimer
-
-from ..constants.timing import Timing
-from ..resources.icons import Icons, DeviceIcons
-from ..services.theme_service import ThemeService, get_theme_service
-from ..services.icon_service import IconService, get_icon_service
-from ..state.reducers import INITIAL_STATE
-from ..state.store import Store
-from ..viewmodels import (
-    DeviceListViewModel,
-    GanttChartViewModel,
-    ShellViewModel,
-)
-from ..views.main_window import MainWindow
 
 if TYPE_CHECKING:
     from iFactory.shared.di.app_container import AppContainer
     from iFactory.application.services.sync_orchestrator import SyncOrchestrator
     from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
     from ..services.page_device_manager import PageDeviceManager
+    from ..services.theme_service import ThemeService
+    from ..services.icon_service import IconService
+    from ..state.store import Store
+    from ..viewmodels import (
+        DeviceListViewModel,
+        GanttChartViewModel,
+        ShellViewModel,
+    )
+    from ..views.main_window import MainWindow
 
 logger = logging.getLogger(__name__)
 
-AUTO_REFRESH_INTERVAL_MS = 3000
+T = TypeVar("T")
 
 
-class UIContainer(QObject):
+# ============================================================================
+# Configuration
+# ============================================================================
+
+
+@dataclass
+class UIContainerConfig:
+    """Configuration for UIContainer."""
+
+    auto_refresh_interval_ms: int = 3000
+    deferred_load_delay_ms: int = 100
+    preload_icons: bool = True
+    enable_time_travel: bool = False
+    persist_state: bool = False
+    state_persistence_path: Optional[str] = None
+
+
+# ============================================================================
+# Protocols for Dependencies
+# ============================================================================
+
+
+class IRemoteSource(Protocol):
+    """Protocol for remote data source."""
+
+    async def fetch_device_status(self, device_ids: list) -> dict: ...
+
+
+class IUnitOfWorkFactory(Protocol):
+    """Protocol for UoW factory."""
+
+    def __call__(self) -> "AbstractUnitOfWork": ...
+
+
+class IIdMapper(Protocol):
+    """Protocol for ID mapping."""
+
+    def get_remote_id(self, display_id: str) -> str: ...
+    def get_display_id(self, remote_id: str) -> str: ...
+
+
+# ============================================================================
+# Service Locator Pattern for Lazy Init
+# ============================================================================
+
+
+class ServiceRegistry:
     """
-    UI Container managing all presentation components.
+    Simple service registry for lazy initialization.
 
-    Architecture:
-    - Uses MVVM pattern with reactive signals
-    - ViewModels own UI state and orchestrate Use Cases
-    - Views bind to ViewModel signals (passive consumers)
-    - Redux Store for cross-cutting state
-    - Centralized ThemeService for theming
-    - Centralized IconService for icon management
-    - ID mapping via DeviceFileAdapter for display vs remote IDs
+    Services are created on first access.
     """
+
+    def __init__(self):
+        self._factories: dict[type, Callable] = {}
+        self._instances: dict[type, object] = {}
+        self._lock = None  # Thread lock if needed
+
+    def register(self, service_type: type, factory: Callable[[], T]) -> None:
+        """Register a service factory."""
+        self._factories[service_type] = factory
+
+    def get(self, service_type: type[T]) -> T:
+        """Get or create service instance."""
+        if service_type not in self._instances:
+            if service_type not in self._factories:
+                raise KeyError(f"Service {service_type} not registered")
+            self._instances[service_type] = self._factories[service_type]()
+        return self._instances[service_type]
+
+    def has(self, service_type: type) -> bool:
+        """Check if service is registered."""
+        return service_type in self._factories
+
+    def clear(self) -> None:
+        """Clear all instances (for shutdown)."""
+        self._instances.clear()
+
+
+# ============================================================================
+# Sub-Containers
+# ============================================================================
+
+
+class ServicesContainer:
+    """Container for core services."""
 
     def __init__(self, app_container: "AppContainer"):
-        super().__init__()
         self._app = app_container
-        self._is_initialized = False
-        self._initial_load_done = False
-        self._is_shutting_down = False
-
-        # Core services
-        self._store: Optional[Store] = None
+        self._theme_service: Optional["ThemeService"] = None
+        self._icon_service: Optional["IconService"] = None
         self._page_manager: Optional["PageDeviceManager"] = None
-        self._theme_service: Optional[ThemeService] = None
-        self._icon_service: Optional[IconService] = None
-        self._main_window: Optional[MainWindow] = None
+        self._id_mapper: Optional["DeviceFileAdapter"] = None
 
-        # ViewModels
-        self._shell_vm: Optional[ShellViewModel] = None
-        self._device_vm: Optional[DeviceListViewModel] = None
-        self._gantt_vm: Optional[GanttChartViewModel] = None
+    @property
+    def theme_service(self) -> "ThemeService":
+        if self._theme_service is None:
+            from ..services.theme_service import get_theme_service
 
-        # Application Layer services
-        self._sync_orchestrator: Optional["SyncOrchestrator"] = None
-        self._id_mapper: Optional["DeviceFileAdapter"] = None  # NEW
+            self._theme_service = get_theme_service()
+            logger.debug("[Services] ThemeService initialized")
+        return self._theme_service
 
-        # Timers
-        self._refresh_timer: Optional[QTimer] = None
+    @property
+    def icon_service(self) -> "IconService":
+        if self._icon_service is None:
+            from ..services.icon_service import get_icon_service
 
-    def initialize(self) -> None:
-        """Initialize all UI components."""
-        if self._is_initialized:
-            return
+            self._icon_service = get_icon_service(self.theme_service)
+            logger.debug("[Services] IconService initialized")
+        return self._icon_service
 
-        logger.info("[UIContainer] Initializing with MVVM architecture...")
+    @property
+    def page_manager(self) -> "PageDeviceManager":
+        if self._page_manager is None:
+            from ..services.page_device_manager import PageDeviceManager
 
-        # Initialize services FIRST
-        self._init_theme_service()
-        self._init_icon_service()
+            config_path = self._get_config_path()
+            self._page_manager = PageDeviceManager(config_path=config_path)
+            logger.debug("[Services] PageDeviceManager initialized")
+        return self._page_manager
 
-        # Preload icons for faster startup
-        self._preload_icons()
+    @property
+    def id_mapper(self) -> Optional["DeviceFileAdapter"]:
+        if self._id_mapper is None:
+            self._id_mapper = self._init_id_mapper()
+        return self._id_mapper
 
-        # Initialize remaining components
-        self._init_store()
-        self._init_page_manager()
-        self._init_id_mapper()  # NEW: Get ID mapper from AppContainer
-        self._preload_device_icons()
-        self._init_sync_orchestrator()
-        self._init_viewmodels()
-        self._wire_viewmodel_dependencies()
-        self._init_main_window()
-        self._connect_signals()
-        self._init_auto_refresh()
-
-        self._is_initialized = True
-        logger.info("[UIContainer] Initialized successfully")
-
-    def _init_theme_service(self) -> None:
-        """Initialize the centralized theme service."""
-        self._theme_service = get_theme_service()
-        logger.info("[UIContainer] ThemeService initialized")
-
-    def _init_icon_service(self) -> None:
-        """Initialize the centralized icon service."""
-        self._icon_service = get_icon_service(self._theme_service)
-        logger.info("[UIContainer] IconService initialized")
-
-    def _preload_icons(self) -> None:
-        """Preload commonly used icons for faster startup."""
-        if not self._icon_service:
-            return
-
-        # Preload navigation icons
-        count = self._icon_service.preload_navigation_icons()
-        count += self._icon_service.preload_action_icons()
-        logger.info(f"[UIContainer] Preloaded {count} navigation/action icons")
-
-    def _init_store(self) -> None:
-        """Initialize Redux-like store for cross-cutting state."""
-        self._store = Store(INITIAL_STATE)
-
-    def _init_page_manager(self) -> None:
-        """Initialize page device manager."""
-        from ..services.page_device_manager import PageDeviceManager
-
-        config_path = None
+    def _get_config_path(self) -> Optional[str]:
         try:
             from iFactory.infrastructure.configuration.paths import PATHS
 
-            config_path = PATHS.device_positions_path
+            return PATHS.device_positions_path
         except ImportError:
-            pass
+            return None
 
-        self._page_manager = PageDeviceManager(config_path=config_path)
-        all_devices = self._page_manager.get_all_devices()
-        logger.info(f"[UIContainer] PageDeviceManager: {len(all_devices)} devices")
-
-    def _init_id_mapper(self) -> None:
-        """Get ID mapper from AppContainer."""
+    def _init_id_mapper(self) -> Optional["DeviceFileAdapter"]:
+        """Initialize ID mapper from AppContainer or create local."""
         try:
-            if hasattr(self._app, "device_file_adapter") and self._app.device_file_adapter:
-                self._id_mapper = self._app.device_file_adapter
-                logger.info("[UIContainer] Using ID mapper from AppContainer")
-            elif hasattr(self._app, "id_mapper") and self._app.id_mapper:
-                self._id_mapper = self._app.id_mapper
-                logger.info("[UIContainer] Using ID mapper from AppContainer")
-            else:
-                # Create local instance as fallback
-                from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
+            # Try AppContainer first
+            for attr in ("device_file_adapter", "id_mapper"):
+                mapper = getattr(self._app, attr, None)
+                if mapper:
+                    logger.debug(f"[Services] Using ID mapper from AppContainer.{attr}")
+                    return mapper
 
-                self._id_mapper = DeviceFileAdapter()
-                logger.info("[UIContainer] Created local DeviceFileAdapter as ID mapper")
+            # Create local instance
+            from iFactory.infrastructure.adapters.device_file_adapter import DeviceFileAdapter
+
+            mapper = DeviceFileAdapter()
+            logger.debug("[Services] Created local DeviceFileAdapter")
+            return mapper
+
         except Exception as e:
-            logger.warning(f"[UIContainer] Failed to init ID mapper: {e}")
-            self._id_mapper = None
+            logger.warning(f"[Services] Failed to init ID mapper: {e}")
+            return None
 
-    def _preload_device_icons(self) -> None:
-        """Preload device icons based on page manager devices."""
-        if not self._icon_service or not self._page_manager:
-            return
+    def preload_icons(self) -> int:
+        """Preload commonly used icons."""
+        count = self.icon_service.preload_navigation_icons()
+        count += self.icon_service.preload_action_icons()
 
+        # Preload device icons based on page manager
         try:
-            all_devices = self._page_manager.get_all_devices()
-
-            # Extract unique equipment codes
+            all_devices = self.page_manager.get_all_devices()
             device_codes = set()
             for device_id in all_devices:
                 if len(device_id) >= 3:
-                    # Handle special cases like CA1, CA2
-                    if device_id.startswith("CA1") or device_id.startswith("CA2"):
+                    if device_id.startswith(("CA1", "CA2")):
                         device_codes.add(device_id[:3])
                     else:
-                        base_code = "".join(c for c in device_id[:3] if c.isalpha())
-                        if base_code:
-                            device_codes.add(base_code.upper())
-
-            # Preload
-            count = self._icon_service.preload_device_icons(list(device_codes))
-            logger.info(f"[UIContainer] Preloaded {count} device icons")
-
+                        base = "".join(c for c in device_id[:3] if c.isalpha())
+                        if base:
+                            device_codes.add(base.upper())
+            count += self.icon_service.preload_device_icons(list(device_codes))
         except Exception as e:
-            logger.warning(f"[UIContainer] Failed to preload device icons: {e}")
+            logger.warning(f"[Services] Device icon preload failed: {e}")
 
-    def _init_sync_orchestrator(self) -> None:
-        """Get or create SyncOrchestrator from Application Layer."""
+        return count
+
+    def shutdown(self) -> None:
+        """Cleanup services."""
+        if self._icon_service:
+            self._icon_service.clear_cache()
+
+
+class StateContainer:
+    """Container for state management."""
+
+    def __init__(self, config: UIContainerConfig):
+        self._config = config
+        self._store: Optional["Store"] = None
+
+    @property
+    def store(self) -> "Store":
+        if self._store is None:
+            self._store = self._create_store()
+        return self._store
+
+    def _create_store(self) -> "Store":
+        from ..state.store import Store, StoreConfig, LocalStoragePersistence
+        from ..state.reducers import INITIAL_STATE_DICT
+        from pathlib import Path
+
+        persistence = None
+        if self._config.persist_state and self._config.state_persistence_path:
+            persistence = LocalStoragePersistence(Path(self._config.state_persistence_path))
+
+        store_config = StoreConfig(
+            enable_time_travel=self._config.enable_time_travel,
+            persistence=persistence,
+            enable_logging=True,
+        )
+
+        return Store(
+            initial_state=INITIAL_STATE_DICT,
+            config=store_config,
+        )
+
+    def shutdown(self) -> None:
+        """Cleanup state."""
+        pass  # Store doesn't need cleanup
+
+
+class ViewModelsContainer:
+    """Container for ViewModels."""
+
+    def __init__(
+        self,
+        app_container: "AppContainer",
+        services: ServicesContainer,
+    ):
+        self._app = app_container
+        self._services = services
+
+        self._shell_vm: Optional["ShellViewModel"] = None
+        self._device_vm: Optional["DeviceListViewModel"] = None
+        self._gantt_vm: Optional["GanttChartViewModel"] = None
+
+        self._sync_orchestrator: Optional["SyncOrchestrator"] = None
+
+    @property
+    def sync_orchestrator(self) -> Optional["SyncOrchestrator"]:
+        if self._sync_orchestrator is None:
+            self._sync_orchestrator = self._init_sync_orchestrator()
+        return self._sync_orchestrator
+
+    @property
+    def shell_vm(self) -> "ShellViewModel":
+        if self._shell_vm is None:
+            self._shell_vm = self._create_shell_vm()
+        return self._shell_vm
+
+    @property
+    def device_vm(self) -> "DeviceListViewModel":
+        if self._device_vm is None:
+            self._device_vm = self._create_device_vm()
+        return self._device_vm
+
+    @property
+    def gantt_vm(self) -> "GanttChartViewModel":
+        if self._gantt_vm is None:
+            self._gantt_vm = self._create_gantt_vm()
+        return self._gantt_vm
+
+    def _init_sync_orchestrator(self) -> Optional["SyncOrchestrator"]:
+        """Get or create SyncOrchestrator."""
         try:
-            # Prefer using SyncOrchestrator from AppContainer (already has id_mapper)
+            # From AppContainer
             if hasattr(self._app, "sync_orchestrator") and self._app.sync_orchestrator:
-                self._sync_orchestrator = self._app.sync_orchestrator
-                logger.info("[UIContainer] Using SyncOrchestrator from AppContainer")
-                return
+                logger.debug("[ViewModels] Using SyncOrchestrator from AppContainer")
+                return self._app.sync_orchestrator
 
-            # Create local SyncOrchestrator if needed
+            # Create local
             remote_source = getattr(self._app, "remote_source", None)
-            uow_factory = getattr(self._app, "uow_factory", None)
-
             if remote_source:
                 from iFactory.application.services.sync_orchestrator import create_sync_orchestrator
 
-                # KEY: Pass id_mapper when creating local SyncOrchestrator
-                self._sync_orchestrator = create_sync_orchestrator(
+                orchestrator = create_sync_orchestrator(
                     remote_source=remote_source,
-                    uow_factory=uow_factory or self._create_null_uow_factory(),
-                    id_mapper=self._id_mapper,  # NEW: Pass ID mapper
+                    uow_factory=getattr(self._app, "uow_factory", None) or self._null_uow_factory(),
+                    id_mapper=self._services.id_mapper,
                 )
-                logger.info("[UIContainer] Created local SyncOrchestrator with ID mapping")
-            else:
-                logger.warning("[UIContainer] No remote source - SyncOrchestrator disabled")
+                logger.debug("[ViewModels] Created local SyncOrchestrator")
+                return orchestrator
+
+            logger.warning("[ViewModels] No remote source - SyncOrchestrator disabled")
+            return None
 
         except Exception as e:
-            logger.error(f"[UIContainer] Failed to init SyncOrchestrator: {e}")
-            self._sync_orchestrator = None
+            logger.error(f"[ViewModels] SyncOrchestrator init failed: {e}")
+            return None
 
-    def _create_null_uow_factory(self):
-        """Create no-op UoW factory when no local database is available."""
+    def _null_uow_factory(self):
+        """Create no-op UoW factory."""
         from iFactory.application.ports.uow import AbstractUnitOfWork
 
-        class NullUnitOfWork(AbstractUnitOfWork):
+        class NullUoW(AbstractUnitOfWork):
             devices = None
             history = None
 
@@ -251,219 +351,314 @@ class UIContainer(QObject):
             async def rollback(self):
                 pass
 
-        return lambda: NullUnitOfWork()
+        return lambda: NullUoW()
 
-    def _init_viewmodels(self) -> None:
-        """Initialize all ViewModels with proper dependencies."""
-        config_path = None
-        mssql_url = None
-        remote_source = None
+    def _create_shell_vm(self) -> "ShellViewModel":
+        from ..viewmodels import ShellViewModel
 
-        try:
-            from iFactory.infrastructure.configuration.paths import PATHS
-
-            config_path = PATHS.device_positions_path
-        except ImportError:
-            pass
-
-        try:
-            if hasattr(self._app, "db_config") and self._app.db_config:
-                mssql_url = self._app.db_config.mssql_url
-
-            if hasattr(self._app, "remote_source") and self._app.remote_source:
-                remote_source = self._app.remote_source
-        except Exception as e:
-            logger.warning(f"[UIContainer] Could not get remote config: {e}")
-
-        # 1. Shell ViewModel
-        self._shell_vm = ShellViewModel(
-            theme_service=self._theme_service,
-            config_path=config_path,
-            page_manager=self._page_manager,
+        vm = ShellViewModel(
+            theme_service=self._services.theme_service,
+            config_path=self._services._get_config_path(),
+            page_manager=self._services.page_manager,
         )
-        self._shell_vm.initialize()
+        vm.initialize()
+        return vm
 
-        # 2. Device List ViewModel - pass id_mapper for display ID conversion
-        self._device_vm = DeviceListViewModel(
-            page_manager=self._page_manager,
+    def _create_device_vm(self) -> "DeviceListViewModel":
+        from ..viewmodels import DeviceListViewModel
+
+        remote_source = getattr(self._app, "remote_source", None)
+
+        vm = DeviceListViewModel(
+            page_manager=self._services.page_manager,
             remote_source=remote_source,
-            sync_orchestrator=self._sync_orchestrator,
-            shell_vm=None,
-            id_mapper=self._id_mapper,  # NEW: Pass ID mapper to ViewModel
+            sync_orchestrator=self.sync_orchestrator,
+            shell_vm=None,  # Will be wired later
+            id_mapper=self._services.id_mapper,
         )
-        self._device_vm.initialize()
+        vm.initialize()
+        return vm
 
-        # 3. Gantt Chart ViewModel - pass id_mapper for history queries
-        self._gantt_vm = GanttChartViewModel(
+    def _create_gantt_vm(self) -> "GanttChartViewModel":
+        from ..viewmodels import GanttChartViewModel
+
+        mssql_url = None
+        if hasattr(self._app, "db_config") and self._app.db_config:
+            mssql_url = self._app.db_config.mssql_url
+
+        vm = GanttChartViewModel(
             mssql_url=mssql_url,
-            id_mapper=self._id_mapper,  # NEW: Pass ID mapper to ViewModel
+            id_mapper=self._services.id_mapper,
         )
-        self._gantt_vm.initialize()
+        vm.initialize()
+        return vm
 
-        logger.info("[UIContainer] ViewModels initialized with ID mapping support")
-
-    def _wire_viewmodel_dependencies(self) -> None:
-        """Wire up cross-ViewModel dependencies."""
+    def wire_dependencies(self) -> None:
+        """Wire cross-ViewModel dependencies."""
         if self._device_vm and self._shell_vm:
             self._device_vm.set_shell_viewmodel(self._shell_vm)
-            logger.info("[UIContainer] Wired DeviceVM -> ShellVM")
+            logger.debug("[ViewModels] Wired DeviceVM -> ShellVM")
+
+    def shutdown(self) -> None:
+        """Cleanup ViewModels."""
+        for vm in (self._device_vm, self._gantt_vm, self._shell_vm):
+            if vm and hasattr(vm, "dispose"):
+                vm.dispose()
+
+
+# ============================================================================
+# Main UIContainer
+# ============================================================================
+
+
+class UIContainer(QObject):
+    """
+    Main UI Container - Facade for all presentation layer components.
+
+    Uses sub-containers for organization:
+    - ServicesContainer: Core services (theme, icons, etc.)
+    - StateContainer: Redux store
+    - ViewModelsContainer: MVVM ViewModels
+    """
+
+    def __init__(
+        self,
+        app_container: "AppContainer",
+        config: Optional[UIContainerConfig] = None,
+    ):
+        super().__init__()
+
+        self._app = app_container
+        self._config = config or UIContainerConfig()
+
+        # State flags
+        self._is_initialized = False
+        self._initial_load_done = False
+        self._is_shutting_down = False
+
+        # Sub-containers (lazy init)
+        self._services: Optional[ServicesContainer] = None
+        self._state: Optional[StateContainer] = None
+        self._viewmodels: Optional[ViewModelsContainer] = None
+
+        # Main window
+        self._main_window: Optional["MainWindow"] = None
+
+        # Timers
+        self._refresh_timer: Optional[QTimer] = None
+
+    # ========================================================================
+    # Initialization
+    # ========================================================================
+
+    def initialize(self) -> None:
+        """Initialize all UI components."""
+        if self._is_initialized:
+            return
+
+        logger.info("[UIContainer] Initializing...")
+
+        try:
+            # 1. Services
+            self._services = ServicesContainer(self._app)
+            if self._config.preload_icons:
+                count = self._services.preload_icons()
+                logger.info(f"[UIContainer] Preloaded {count} icons")
+
+            # 2. State
+            self._state = StateContainer(self._config)
+
+            # 3. ViewModels
+            self._viewmodels = ViewModelsContainer(self._app, self._services)
+            self._viewmodels.wire_dependencies()
+
+            # 4. Main Window
+            self._init_main_window()
+
+            # 5. Connect signals
+            self._connect_signals()
+
+            # 6. Auto-refresh timer
+            self._init_auto_refresh()
+
+            self._is_initialized = True
+            logger.info("[UIContainer] Initialized successfully")
+
+        except Exception as e:
+            logger.error(f"[UIContainer] Initialization failed: {e}")
+            raise
 
     def _init_main_window(self) -> None:
         """Initialize main window."""
+        from ..views.main_window import MainWindow
+
         self._main_window = MainWindow(
-            store=self._store,
-            shell_vm=self._shell_vm,
-            device_vm=self._device_vm,
-            gantt_vm=self._gantt_vm,
-            theme_service=self._theme_service,
-            page_manager=self._page_manager,
+            store=self._state.store,
+            shell_vm=self._viewmodels.shell_vm,
+            device_vm=self._viewmodels.device_vm,
+            gantt_vm=self._viewmodels.gantt_vm,
+            theme_service=self._services.theme_service,
+            page_manager=self._services.page_manager,
         )
 
     def _connect_signals(self) -> None:
         """Connect ViewModel signals to Store."""
-        if self._device_vm and self._store:
-            self._device_vm.devicesChanged.connect(self._on_devices_changed)
-            self._device_vm.selectionChanged.connect(self._on_selection_changed)
-            self._device_vm.syncStatusChanged.connect(self._on_sync_status_changed)
+        store = self._state.store
+        device_vm = self._viewmodels.device_vm
+        shell_vm = self._viewmodels.shell_vm
+        gantt_vm = self._viewmodels.gantt_vm
 
-        if self._shell_vm and self._store:
-            self._shell_vm.themeChanged.connect(self._on_theme_changed)
-            self._shell_vm.pageChanged.connect(self._on_page_changed)
-            self._shell_vm.sidebarChanged.connect(self._on_sidebar_changed)
-            self._shell_vm.rightPanelChanged.connect(self._on_right_panel_changed)
+        # Device signals
+        if device_vm:
+            device_vm.devicesChanged.connect(self._on_devices_changed)
+            device_vm.selectionChanged.connect(self._on_selection_changed)
+            device_vm.syncStatusChanged.connect(self._on_sync_status_changed)
 
-        if self._gantt_vm:
-            self._gantt_vm.chartReady.connect(self._on_chart_ready)
+        # Shell signals
+        if shell_vm:
+            shell_vm.themeChanged.connect(self._on_theme_changed)
+            shell_vm.pageChanged.connect(self._on_page_changed)
+            shell_vm.sidebarChanged.connect(self._on_sidebar_changed)
+            shell_vm.rightPanelChanged.connect(self._on_right_panel_changed)
+
+        # Gantt signals
+        if gantt_vm:
+            gantt_vm.chartReady.connect(self._on_chart_ready)
 
     def _init_auto_refresh(self) -> None:
         """Initialize auto-refresh timer."""
         self._refresh_timer = QTimer(self)
-        self._refresh_timer.setInterval(AUTO_REFRESH_INTERVAL_MS)
+        self._refresh_timer.setInterval(self._config.auto_refresh_interval_ms)
         self._refresh_timer.timeout.connect(self._on_auto_refresh)
-        logger.info(f"[UIContainer] Auto-refresh: {AUTO_REFRESH_INTERVAL_MS}ms")
+        logger.debug(f"[UIContainer] Auto-refresh: {self._config.auto_refresh_interval_ms}ms")
 
-    # =========================================================================
+    # ========================================================================
     # Signal Handlers
-    # =========================================================================
+    # ========================================================================
 
     def _on_devices_changed(self, devices: dict) -> None:
         from ..state.actions import load_devices
 
-        self._store.dispatch(load_devices(devices))
+        self._state.store.dispatch(load_devices(devices))
 
     def _on_selection_changed(self, selection) -> None:
         from ..state.actions import select_device_only, deselect_device
 
         if selection.has_selection:
-            self._store.dispatch(select_device_only(selection.selected_device_id))
+            self._state.store.dispatch(select_device_only(selection.selected_device_id))
         else:
-            self._store.dispatch(deselect_device())
+            self._state.store.dispatch(deselect_device())
 
     def _on_sync_status_changed(self, status) -> None:
         from ..state.actions import update_system_status, set_loading
 
-        self._store.dispatch(set_loading(status.is_syncing))
+        self._state.store.dispatch(set_loading(status.is_syncing))
 
         if status.has_error:
-            self._store.dispatch(update_system_status(mssql=False, sqlite=True, message=status.error_message))
+            self._state.store.dispatch(update_system_status(mssql=False, sqlite=True, message=status.error_message))
         elif status.last_sync_time:
-            self._store.dispatch(
-                update_system_status(mssql=True, sqlite=True, message=f"Synced {status.synced_count} devices @ {status.last_sync_time}")
+            self._state.store.dispatch(
+                update_system_status(
+                    mssql=True,
+                    sqlite=True,
+                    message=f"Synced {status.synced_count} devices @ {status.last_sync_time}",
+                )
             )
 
     def _on_theme_changed(self, theme: str) -> None:
         from ..state.actions import set_theme
 
-        self._store.dispatch(set_theme(theme))
+        self._state.store.dispatch(set_theme(theme))
 
     def _on_page_changed(self, page: str) -> None:
         from ..state.actions import set_page
 
-        self._store.dispatch(set_page(page))
+        self._state.store.dispatch(set_page(page))
 
     def _on_sidebar_changed(self, expanded: bool) -> None:
-        state = self._store.get_state()
+        state = self._state.store.get_state()
         if state.get("sidebar_expanded") != expanded:
             from ..state.actions import toggle_sidebar
 
-            self._store.dispatch(toggle_sidebar())
+            self._state.store.dispatch(toggle_sidebar())
 
     def _on_right_panel_changed(self, expanded: bool) -> None:
-        state = self._store.get_state()
+        state = self._state.store.get_state()
         if state.get("right_panel_expanded") != expanded:
             from ..state.actions import toggle_right_panel
 
-            self._store.dispatch(toggle_right_panel())
-            logger.debug(f"[UIContainer] Store right_panel_expanded -> {expanded}")
+            self._state.store.dispatch(toggle_right_panel())
 
     def _on_chart_ready(self, chart) -> None:
         from ..state.actions import set_selected_device_gantt
 
-        self._store.dispatch(set_selected_device_gantt(chart))
+        self._state.store.dispatch(set_selected_device_gantt(chart))
 
     def _on_auto_refresh(self) -> None:
         if self._is_shutting_down:
             return
-        if self._device_vm:
-            self._device_vm.load_devices()
+        if self._viewmodels and self._viewmodels._device_vm:
+            self._viewmodels.device_vm.load_devices()
 
-    # =========================================================================
+    # ========================================================================
     # Public API
-    # =========================================================================
+    # ========================================================================
 
     def schedule_deferred_data_load(self) -> None:
-        """Schedule deferred data loading."""
-        QTimer.singleShot(Timing.DEFERRED_LOAD_DELAY_MS, self._start_data_loading)
+        """Schedule deferred data loading after window shown."""
+        QTimer.singleShot(
+            self._config.deferred_load_delay_ms,
+            self._start_data_loading,
+        )
 
     def _start_data_loading(self) -> None:
         """Start initial data loading."""
         if self._initial_load_done:
             return
+
         self._initial_load_done = True
         logger.info("[UIContainer] Starting initial data load...")
 
-        # Trigger initial page load - this emits page_changed signal
-        # DeviceListViewModel listens to this and calls load_devices()
-        if self._page_manager:
-            self._page_manager.force_load_current_page()
+        # Trigger initial page load
+        if self._services and self._services._page_manager:
+            self._services.page_manager.force_load_current_page()
 
-        # Start auto-refresh timer
+        # Start auto-refresh
         if self._refresh_timer:
             self._refresh_timer.start()
-            logger.info("[UIContainer] Auto-refresh timer started")
+            logger.info("[UIContainer] Auto-refresh started")
 
-    def get_main_window(self) -> Optional[MainWindow]:
+    # Getters
+    def get_main_window(self) -> Optional["MainWindow"]:
         return self._main_window
 
-    def get_device_viewmodel(self) -> Optional[DeviceListViewModel]:
-        return self._device_vm
+    def get_device_viewmodel(self) -> Optional["DeviceListViewModel"]:
+        return self._viewmodels.device_vm if self._viewmodels else None
 
-    def get_gantt_viewmodel(self) -> Optional[GanttChartViewModel]:
-        return self._gantt_vm
+    def get_gantt_viewmodel(self) -> Optional["GanttChartViewModel"]:
+        return self._viewmodels.gantt_vm if self._viewmodels else None
 
-    def get_shell_viewmodel(self) -> Optional[ShellViewModel]:
-        return self._shell_vm
+    def get_shell_viewmodel(self) -> Optional["ShellViewModel"]:
+        return self._viewmodels.shell_vm if self._viewmodels else None
 
     def get_page_manager(self) -> Optional["PageDeviceManager"]:
-        return self._page_manager
+        return self._services.page_manager if self._services else None
 
-    def get_store(self) -> Optional[Store]:
-        return self._store
+    def get_store(self) -> Optional["Store"]:
+        return self._state.store if self._state else None
 
-    def get_theme_service(self) -> Optional[ThemeService]:
-        return self._theme_service
+    def get_theme_service(self) -> Optional["ThemeService"]:
+        return self._services.theme_service if self._services else None
 
-    def get_icon_service(self) -> Optional[IconService]:
-        """Get the centralized icon service."""
-        return self._icon_service
+    def get_icon_service(self) -> Optional["IconService"]:
+        return self._services.icon_service if self._services else None
 
     def get_id_mapper(self) -> Optional["DeviceFileAdapter"]:
-        """Get the ID mapper for display <-> remote ID conversion."""
-        return self._id_mapper
+        return self._services.id_mapper if self._services else None
 
-    # =========================================================================
+    # ========================================================================
     # Lifecycle
-    # =========================================================================
+    # ========================================================================
 
     def shutdown(self) -> None:
         """Shutdown all components."""
@@ -473,24 +668,23 @@ class UIContainer(QObject):
         self._is_shutting_down = True
         logger.info("[UIContainer] Shutting down...")
 
+        # Stop timer
         if self._refresh_timer:
             self._refresh_timer.stop()
             self._refresh_timer.deleteLater()
             self._refresh_timer = None
 
-        if self._device_vm:
-            self._device_vm.dispose()
+        # Shutdown sub-containers
+        if self._viewmodels:
+            self._viewmodels.shutdown()
 
-        if self._gantt_vm:
-            self._gantt_vm.dispose()
+        if self._services:
+            self._services.shutdown()
 
-        if self._shell_vm:
-            self._shell_vm.dispose()
+        if self._state:
+            self._state.shutdown()
 
-        # Clear icon cache
-        if self._icon_service:
-            self._icon_service.clear_cache()
-
+        # Close window
         if self._main_window:
             self._main_window.close()
 
@@ -498,4 +692,11 @@ class UIContainer(QObject):
         logger.info("[UIContainer] Shutdown complete")
 
 
-__all__ = ["UIContainer"]
+__all__ = [
+    "UIContainer",
+    "UIContainerConfig",
+    "ServicesContainer",
+    "StateContainer",
+    "ViewModelsContainer",
+    "ServiceRegistry",
+]
