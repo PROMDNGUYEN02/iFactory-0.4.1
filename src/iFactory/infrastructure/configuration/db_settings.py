@@ -1,12 +1,14 @@
 # src/iFactory/infrastructure/configuration/db_settings.py
 """
-Infrastructure: Database Configuration - Enhanced with Pydantic v2.
+Database Configuration - Production-ready with Pydantic v2.
 
-Features:
-- Pydantic Settings with env variable support
+FEATURES v2.0:
+- Environment variable support with prefixes
 - Connection URL builders for multiple databases
 - Connection pooling configuration
 - Health check utilities
+- Secure password handling
+- Validation and normalization
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from __future__ import annotations
 import logging
 from functools import cached_property
 from pathlib import Path
-from typing import Annotated, Any, Final, Optional
+from typing import Annotated, Any, Dict, Final, Optional
 from urllib.parse import quote_plus
 
 from pydantic import (
@@ -38,6 +40,40 @@ DEFAULT_POOL_SIZE: Final[int] = 20
 DEFAULT_MAX_OVERFLOW: Final[int] = 40
 DEFAULT_POOL_TIMEOUT: Final[int] = 30
 DEFAULT_POOL_RECYCLE: Final[int] = 1800  # 30 minutes
+DEFAULT_CONNECT_TIMEOUT: Final[int] = 10
+DEFAULT_COMMAND_TIMEOUT: Final[int] = 30
+
+
+# ============================================================================
+# Pool Configuration
+# ============================================================================
+
+
+class PoolConfig:
+    """Connection pool configuration."""
+
+    def __init__(
+        self,
+        pool_size: int = DEFAULT_POOL_SIZE,
+        max_overflow: int = DEFAULT_MAX_OVERFLOW,
+        pool_timeout: int = DEFAULT_POOL_TIMEOUT,
+        pool_recycle: int = DEFAULT_POOL_RECYCLE,
+        pool_pre_ping: bool = True,
+    ):
+        self.pool_size = pool_size
+        self.max_overflow = max_overflow
+        self.pool_timeout = pool_timeout
+        self.pool_recycle = pool_recycle
+        self.pool_pre_ping = pool_pre_ping
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pool_size": self.pool_size,
+            "max_overflow": self.max_overflow,
+            "pool_timeout": self.pool_timeout,
+            "pool_recycle": self.pool_recycle,
+            "pool_pre_ping": self.pool_pre_ping,
+        }
 
 
 # ============================================================================
@@ -51,10 +87,13 @@ class DatabaseConfig(BaseSettings):
 
     Environment Variables (prefix: DB_):
         DB_MSSQL_HOST: MSSQL server hostname
+        DB_MSSQL_PORT: MSSQL server port (default: 1433)
         DB_MSSQL_DB: Database name
         DB_MSSQL_USER: Username
         DB_MSSQL_PASSWORD: Password (SecretStr)
         DB_MSSQL_DRIVER: ODBC driver name
+        DB_MSSQL_TIMEOUT: Query timeout
+        DB_MSSQL_CONNECT_TIMEOUT: Connection timeout
         DB_POOL_SIZE: Connection pool size
         DB_MAX_OVERFLOW: Max pool overflow
         DB_ECHO: Enable SQL echo logging
@@ -76,7 +115,6 @@ class DatabaseConfig(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
-        # Pydantic v2: Use env_nested_delimiter for nested settings
         env_nested_delimiter="__",
     )
 
@@ -87,6 +125,7 @@ class DatabaseConfig(BaseSettings):
     mssql_host: Optional[str] = Field(
         default=None,
         description="MSSQL server hostname or IP",
+        json_schema_extra={"env": "DB_MSSQL_HOST"},
     )
 
     mssql_port: int = Field(
@@ -122,9 +161,16 @@ class DatabaseConfig(BaseSettings):
     )
 
     mssql_timeout: int = Field(
-        default=30,
+        default=DEFAULT_COMMAND_TIMEOUT,
         ge=5,
         le=300,
+        description="Query timeout in seconds",
+    )
+
+    mssql_connect_timeout: int = Field(
+        default=DEFAULT_CONNECT_TIMEOUT,
+        ge=5,
+        le=60,
         description="Connection timeout in seconds",
     )
 
@@ -183,6 +229,8 @@ class DatabaseConfig(BaseSettings):
             "sql server": "SQL Server",
             "odbc driver 17": "ODBC Driver 17 for SQL Server",
             "odbc driver 18": "ODBC Driver 18 for SQL Server",
+            "17": "ODBC Driver 17 for SQL Server",
+            "18": "ODBC Driver 18 for SQL Server",
         }
 
         return driver_map.get(driver.lower(), driver)
@@ -195,9 +243,9 @@ class DatabaseConfig(BaseSettings):
         has_user = bool(self.mssql_user)
         has_pass = bool(self.mssql_password)
 
-        # If any MSSQL setting is provided, all required ones must be present
-        if any([has_host, has_db]) and not all([has_host, has_db, has_user]):
-            logger.warning("Incomplete MSSQL configuration. " "Required: mssql_host, mssql_db, mssql_user")
+        # If any MSSQL setting is provided, check completeness
+        if any([has_host, has_db]) and not all([has_host, has_db]):
+            logger.warning("Incomplete MSSQL configuration. " "Required: mssql_host, mssql_db")
 
         return self
 
@@ -206,16 +254,20 @@ class DatabaseConfig(BaseSettings):
     # ========================================================================
 
     @cached_property
-    def storage_db_url(self) -> str:
-        """SQLite URL for local storage database."""
+    def storage_db_path(self) -> Path:
+        """Get storage database path."""
         PATHS.storage_dir.mkdir(parents=True, exist_ok=True)
-        return f"sqlite+aiosqlite:///{PATHS.storage_db_path}"
+        return PATHS.storage_db_path
+
+    @cached_property
+    def storage_db_url(self) -> str:
+        """SQLite async URL for local storage database."""
+        return f"sqlite+aiosqlite:///{self.storage_db_path}"
 
     @cached_property
     def storage_db_sync_url(self) -> str:
         """Synchronous SQLite URL for local storage."""
-        PATHS.storage_dir.mkdir(parents=True, exist_ok=True)
-        return f"sqlite:///{PATHS.storage_db_path}"
+        return f"sqlite:///{self.storage_db_path}"
 
     # Aliases for backward compatibility
     @property
@@ -253,7 +305,8 @@ class DatabaseConfig(BaseSettings):
             f"DATABASE={self.mssql_db}",
             f"UID={self.mssql_user}",
             f"PWD={password}",
-            f"Connection Timeout={self.mssql_timeout}",
+            f"Connection Timeout={self.mssql_connect_timeout}",
+            f"Command Timeout={self.mssql_timeout}",
         ]
 
         if self.mssql_trust_cert:
@@ -289,7 +342,7 @@ class DatabaseConfig(BaseSettings):
         encoded = quote_plus(conn_str)
         return f"mssql+pyodbc:///?odbc_connect={encoded}"
 
-    # Aliases for backward compatibility
+    # Alias for backward compatibility
     @property
     def mssql_url(self) -> Optional[str]:
         """Alias for mssql_async_url."""
@@ -299,23 +352,37 @@ class DatabaseConfig(BaseSettings):
     # Engine Configuration
     # ========================================================================
 
-    def get_engine_options(self, *, async_mode: bool = True) -> dict[str, Any]:
+    def get_pool_config(self) -> PoolConfig:
+        """Get pool configuration object."""
+        return PoolConfig(
+            pool_size=self.pool_size,
+            max_overflow=self.max_overflow,
+            pool_timeout=self.pool_timeout,
+            pool_recycle=self.pool_recycle,
+        )
+
+    def get_engine_options(
+        self,
+        *,
+        async_mode: bool = True,
+        use_pool: bool = True,
+    ) -> Dict[str, Any]:
         """
         Get SQLAlchemy engine options.
 
         Args:
             async_mode: Whether engine is async
+            use_pool: Whether to use connection pooling
 
         Returns:
             Dictionary of engine options
         """
-        options: dict[str, Any] = {
+        options: Dict[str, Any] = {
             "echo": self.echo,
-            "pool_pre_ping": True,  # Verify connections before use
+            "pool_pre_ping": True,
         }
 
-        # Pool settings (not applicable to SQLite in async mode)
-        if not async_mode or "mssql" in str(self.mssql_async_url or ""):
+        if use_pool:
             options.update(
                 {
                     "pool_size": self.pool_size,
@@ -354,6 +421,8 @@ class DatabaseConfig(BaseSettings):
 
             return True, "Connection successful"
 
+        except ImportError:
+            return False, "aioodbc not installed"
         except Exception as e:
             return False, f"Connection failed: {e}"
 
@@ -365,7 +434,7 @@ class DatabaseConfig(BaseSettings):
             Tuple of (success, message)
         """
         try:
-            storage_path = PATHS.storage_db_path
+            storage_path = self.storage_db_path
             storage_dir = storage_path.parent
 
             if not storage_dir.exists():
@@ -381,9 +450,21 @@ class DatabaseConfig(BaseSettings):
         except Exception as e:
             return False, f"Storage path error: {e}"
 
+    def get_status(self) -> Dict[str, Any]:
+        """Get configuration status summary."""
+        return {
+            "mssql_configured": self.is_mssql_configured,
+            "mssql_host": self.mssql_host,
+            "mssql_db": self.mssql_db,
+            "mssql_driver": self.mssql_driver,
+            "storage_path": str(self.storage_db_path),
+            "pool_size": self.pool_size,
+            "max_overflow": self.max_overflow,
+        }
+
 
 # ============================================================================
-# Module-level convenience function
+# Module-level convenience functions
 # ============================================================================
 
 _db_config: Optional[DatabaseConfig] = None
@@ -403,8 +484,13 @@ def reset_db_config() -> None:
     _db_config = None
 
 
+# ============================================================================
+# Exports
+# ============================================================================
+
 __all__ = [
     "DatabaseConfig",
+    "PoolConfig",
     "get_db_config",
     "reset_db_config",
 ]

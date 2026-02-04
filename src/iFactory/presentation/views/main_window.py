@@ -36,6 +36,12 @@ from .widgets.device_canvas import DeviceCanvasWidget
 from .widgets.device_gantt_widget import DeviceGanttDisplayWidget
 from .widgets.legend_widget import LegendWidget
 
+# ============================================================================
+# FIX: Import ToastContainer and LoadingOverlay
+# ============================================================================
+from .components.toast import ToastContainer
+from .components import LoadingOverlay
+
 if TYPE_CHECKING:
     from ..services.page_device_manager import PageDeviceManager
     from ..services.theme_service import ThemeService
@@ -92,6 +98,34 @@ class MainWindow(QMainWindow):
         self._store.state_changed.connect(self._on_state_changed)
 
         logger.info("[MainWindow] Initialized with MVVM and ThemeService (OPTIMIZED)")
+
+        # Add toast container
+        self._toast_container = ToastContainer(
+            toast_manager=self._store.toasts,
+            theme_service=self._theme_service,
+            position="top-right",
+            parent=self,
+        )
+
+        # Add loading overlay
+        self._loading_overlay = LoadingOverlay(parent=self)
+
+        # Connect loading state
+        self._store.loading_changed.connect(self._on_loading_changed)
+
+    @Slot(str, bool)
+    def _on_loading_changed(self, key: str, is_loading: bool) -> None:
+        if key == "sync" and is_loading:
+            self._loading_overlay.show_loading("Syncing devices...")
+        elif key == "sync" and not is_loading:
+            self._loading_overlay.hide_loading()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # Update toast container position
+        self._toast_container._update_geometry()
+        # Update loading overlay
+        self._loading_overlay.setGeometry(self.rect())
 
     def _apply_theme_initial(self) -> None:
         """Apply initial theme without triggering signals."""

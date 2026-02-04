@@ -279,6 +279,9 @@ class ViewModelsContainer:
 
         self._sync_orchestrator: Optional["SyncOrchestrator"] = None
 
+        # Track if dependencies are wired
+        self._dependencies_wired: bool = False
+
     @property
     def sync_orchestrator(self) -> Optional["SyncOrchestrator"]:
         if self._sync_orchestrator is None:
@@ -289,12 +292,16 @@ class ViewModelsContainer:
     def shell_vm(self) -> "ShellViewModel":
         if self._shell_vm is None:
             self._shell_vm = self._create_shell_vm()
+            # Auto-wire after creation if device_vm exists
+            self._try_wire_dependencies()
         return self._shell_vm
 
     @property
     def device_vm(self) -> "DeviceListViewModel":
         if self._device_vm is None:
             self._device_vm = self._create_device_vm()
+            # Auto-wire after creation if shell_vm exists
+            self._try_wire_dependencies()
         return self._device_vm
 
     @property
@@ -373,7 +380,7 @@ class ViewModelsContainer:
             page_manager=self._services.page_manager,
             remote_source=remote_source,
             sync_orchestrator=self.sync_orchestrator,
-            shell_vm=None,  # Will be wired later
+            shell_vm=self._shell_vm,  # Pass if already created
             id_mapper=self._services.id_mapper,
         )
         vm.initialize()
@@ -393,11 +400,39 @@ class ViewModelsContainer:
         vm.initialize()
         return vm
 
+    def _try_wire_dependencies(self) -> None:
+        """Try to wire dependencies if both VMs exist."""
+        if self._dependencies_wired:
+            return
+
+        if self._device_vm is not None and self._shell_vm is not None:
+            # Check if already wired (shell_vm might be passed in constructor)
+            if self._device_vm._shell_vm is None:
+                self._device_vm.set_shell_viewmodel(self._shell_vm)
+                logger.debug("[ViewModels] Auto-wired DeviceVM -> ShellVM")
+            self._dependencies_wired = True
+
     def wire_dependencies(self) -> None:
-        """Wire cross-ViewModel dependencies."""
+        """
+        Wire cross-ViewModel dependencies.
+
+        NOTE: This is now mostly handled by _try_wire_dependencies()
+        which is called automatically when VMs are created.
+        This method is kept for explicit wiring if needed.
+        """
+        if self._dependencies_wired:
+            return
+
+        # Force creation of both VMs to trigger auto-wiring
+        _ = self.shell_vm
+        _ = self.device_vm
+
+        # Explicit wire as fallback
         if self._device_vm and self._shell_vm:
-            self._device_vm.set_shell_viewmodel(self._shell_vm)
-            logger.debug("[ViewModels] Wired DeviceVM -> ShellVM")
+            if self._device_vm._shell_vm is None:
+                self._device_vm.set_shell_viewmodel(self._shell_vm)
+                logger.debug("[ViewModels] Explicitly wired DeviceVM -> ShellVM")
+            self._dependencies_wired = True
 
     def shutdown(self) -> None:
         """Cleanup ViewModels."""
@@ -470,15 +505,18 @@ class UIContainer(QObject):
 
             # 3. ViewModels
             self._viewmodels = ViewModelsContainer(self._app, self._services)
-            self._viewmodels.wire_dependencies()
+            # NOTE: Don't call wire_dependencies() here yet - VMs are lazy!
 
-            # 4. Main Window
+            # 4. Main Window - This triggers VM creation
             self._init_main_window()
 
-            # 5. Connect signals
+            # 5. Wire dependencies AFTER VMs are created by MainWindow
+            self._viewmodels.wire_dependencies()
+
+            # 6. Connect signals
             self._connect_signals()
 
-            # 6. Auto-refresh timer
+            # 7. Auto-refresh timer
             self._init_auto_refresh()
 
             self._is_initialized = True

@@ -5,12 +5,39 @@ iFactory Component Library
 Reusable, themed UI components for consistent design.
 """
 
-# Base classes
+# Base classes (includes animation, loading, and themed components)
 from .base import (
+    # Animation
+    AnimationDuration,
+    AnimationEasing,
+    AnimationMixin,
+    HoverEffectMixin,
+    RippleEffectMixin,
+    # Loading - from base.py
+    SkeletonLoader,
+    LoadingOverlay,
+    SpinnerWidget,
+    # Lifecycle
+    ComponentState,
+    ComponentContext,
+    # Mixins
+    ThemedComponentMixin,
+    StatefulViewMixin,
+    DisposableMixin,
+    # Base
+    BaseComponent,
+    # Themed
     ThemedWidget,
     ThemedFrame,
     ThemedButton,
     ThemedLabel,
+    # Registry
+    ComponentRegistry,
+    get_component_registry,
+    register_component,
+    # Helpers
+    create_h_layout,
+    create_v_layout,
 )
 
 # Buttons
@@ -64,12 +91,52 @@ from .inputs import (
     SearchInput,
 )
 
+# Toast notifications
+from .toast import (
+    ToastWidget,
+    ToastContainer,
+)
+
+# Extended loading components from loading.py (if different from base.py)
+from .loading import (
+    DeviceCardSkeleton,
+    GanttRowSkeleton,
+)
+
 __all__ = [
+    # Animation
+    "AnimationDuration",
+    "AnimationEasing",
+    "AnimationMixin",
+    "HoverEffectMixin",
+    "RippleEffectMixin",
+    # Loading
+    "SkeletonLoader",
+    "LoadingOverlay",
+    "SpinnerWidget",
+    "DeviceCardSkeleton",
+    "GanttRowSkeleton",
+    # Lifecycle
+    "ComponentState",
+    "ComponentContext",
+    # Mixins
+    "ThemedComponentMixin",
+    "StatefulViewMixin",
+    "DisposableMixin",
     # Base
+    "BaseComponent",
+    # Themed
     "ThemedWidget",
     "ThemedFrame",
     "ThemedButton",
     "ThemedLabel",
+    # Registry
+    "ComponentRegistry",
+    "get_component_registry",
+    "register_component",
+    # Helpers
+    "create_h_layout",
+    "create_v_layout",
     # Buttons
     "PrimaryButton",
     "SecondaryButton",
@@ -103,4 +170,7 @@ __all__ = [
     # Inputs
     "TextInput",
     "SearchInput",
+    # Toast
+    "ToastWidget",
+    "ToastContainer",
 ]

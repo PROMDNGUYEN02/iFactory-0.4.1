@@ -1,22 +1,25 @@
-# File: presentation/views/shell/right_panel.py
+# presentation/views/shell/right_panel.py
 """
-Right Panel - Device details view.
+Enhanced Right Panel - Device details with Loading/Error/Stale states.
 
-OPTIMIZED:
-- Cached style strings per theme
-- Skip redundant renders
-- Lazy style computation
+NEW FEATURES:
+- Skeleton loading animation
+- Error state with retry button
+- Stale data banner
+- Connection indicator
+- Smooth transitions
 
-FEATURES:
-- Availability display with progress bar
-- Material Inputs list display (NEW)
+FIXED:
+- QGradient::setColorAt position must be in range 0-1
 """
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from dataclasses import dataclass
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QTimer, QPropertyAnimation, QEasingCurve, Property, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -25,33 +28,602 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QVBoxLayout,
     QWidget,
+    QPushButton,
+    QStackedWidget,
+    QGraphicsOpacityEffect,
+    QSizePolicy,
 )
+from PySide6.QtGui import QFont, QColor, QPainter, QLinearGradient
 
 from ...constants.layout import Layout
-from ...state.selectors import (
-    select_right_panel_expanded,
-    select_selected_device_id,
-    select_devices,
-)
 
 if TYPE_CHECKING:
     from ...services.theme_service import ThemeService
     from ...state.store import Store
     from ...viewmodels import DeviceListViewModel, ShellViewModel
-    from ...viewmodels.models.device_model import MaterialInputModel
+    from ...viewmodels.models.device_model import MaterialInputModel, DeviceDisplayModel
 
 logger = logging.getLogger(__name__)
 
 
-class MaterialInputWidget(QFrame):
-    """
-    Widget to display a single material input.
+# =============================================================================
+# Helper Functions
+# =============================================================================
 
-    Shows:
-    - Material batch
-    - Material name (truncated)
-    - Feed time
-    """
+
+def clamp(value: float, min_val: float = 0.0, max_val: float = 1.0) -> float:
+    """Clamp a value to the specified range [min_val, max_val]."""
+    return max(min_val, min(max_val, value))
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+
+class PanelState:
+    """Panel content states."""
+
+    PLACEHOLDER = 0
+    LOADING = 1
+    ERROR = 2
+    CONTENT = 3
+
+
+# =============================================================================
+# Skeleton Loader Component
+# =============================================================================
+
+
+class SkeletonLine(QWidget):
+    """Animated skeleton line with shimmer effect."""
+
+    def __init__(self, width: int = 100, height: int = 14, radius: int = 4, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._radius = radius
+        self._shimmer_pos = 0.0
+
+        self.setFixedSize(width, height)
+
+        # Animation timer
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._update_shimmer)
+
+    def _update_shimmer(self) -> None:
+        # FIXED: Keep shimmer_pos in range 0.0 to 1.0
+        self._shimmer_pos = (self._shimmer_pos + 0.03) % 1.0
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect()
+
+        # Base gradient with shimmer
+        gradient = QLinearGradient(0, 0, rect.width(), 0)
+
+        base = QColor("#E2E8F0")
+        highlight = QColor("#F8FAFC")
+
+        pos = self._shimmer_pos
+
+        # FIXED: Clamp all gradient positions to valid range [0.0, 1.0]
+        # Create shimmer effect that moves across the widget
+        shimmer_width = 0.3
+
+        pos_start = clamp(pos - shimmer_width)
+        pos_center = clamp(pos)
+        pos_end = clamp(pos + shimmer_width)
+
+        gradient.setColorAt(0.0, base)
+        if pos_start > 0.0:
+            gradient.setColorAt(pos_start, base)
+        gradient.setColorAt(pos_center, highlight)
+        if pos_end < 1.0:
+            gradient.setColorAt(pos_end, base)
+        gradient.setColorAt(1.0, base)
+
+        painter.setBrush(gradient)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, self._radius, self._radius)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._timer.start(30)
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._timer.stop()
+
+
+class DeviceDetailSkeleton(QFrame):
+    """Skeleton loader for device details panel."""
+
+    def __init__(self, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._theme_service = theme_service
+        self.setObjectName("detail_skeleton")
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 20, 16, 20)
+        layout.setSpacing(16)
+
+        # Header skeleton
+        header = QHBoxLayout()
+        header.addWidget(SkeletonLine(120, 18, 4))
+        header.addStretch()
+        header.addWidget(SkeletonLine(60, 24, 12))  # Badge
+        layout.addLayout(header)
+
+        # Description
+        layout.addWidget(SkeletonLine(200, 12, 4))
+        layout.addWidget(SkeletonLine(150, 12, 4))
+
+        # Separator
+        layout.addSpacing(8)
+
+        # Section header
+        layout.addWidget(SkeletonLine(100, 14, 4))
+
+        # Material items
+        for _ in range(2):
+            item = QFrame()
+            item.setFixedHeight(60)
+            item_layout = QVBoxLayout(item)
+            item_layout.setContentsMargins(8, 8, 8, 8)
+            item_layout.addWidget(SkeletonLine(140, 12, 4))
+            item_layout.addWidget(SkeletonLine(100, 10, 4))
+            item_layout.addWidget(SkeletonLine(80, 10, 4))
+            layout.addWidget(item)
+
+        layout.addSpacing(8)
+
+        # Metrics
+        for _ in range(3):
+            metric = QHBoxLayout()
+            metric.addWidget(SkeletonLine(80, 14, 4))
+            metric.addStretch()
+            metric.addWidget(SkeletonLine(50, 14, 4))
+            layout.addLayout(metric)
+
+            # Progress bar
+            layout.addWidget(SkeletonLine(250, 8, 4))
+
+        layout.addStretch()
+
+    def _apply_style(self) -> None:
+        tokens = self._theme_service.tokens
+        self.setStyleSheet(
+            f"""
+            QFrame#detail_skeleton {{
+                background: transparent;
+            }}
+        """
+        )
+
+
+# =============================================================================
+# Error State Component
+# =============================================================================
+
+
+class ErrorStateWidget(QFrame):
+    """Error state with retry button."""
+
+    retry_clicked = Signal()
+
+    def __init__(self, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._theme_service = theme_service
+        self._error_message = ""
+        self._retry_count = 0
+        self._max_retries = 3
+
+        self.setObjectName("error_state")
+        self._setup_ui()
+        self._apply_style()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 40, 24, 40)
+
+        # Icon
+        self._icon = QLabel("⚠️")
+        self._icon.setFont(QFont("Segoe UI Emoji", 36))
+        self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._icon)
+
+        # Title
+        self._title = QLabel("Failed to load device data")
+        self._title.setObjectName("error_title")
+        self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._title)
+
+        # Message
+        self._message = QLabel("")
+        self._message.setObjectName("error_message")
+        self._message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._message.setWordWrap(True)
+        layout.addWidget(self._message)
+
+        # Retry button
+        self._retry_btn = QPushButton("🔄 Retry")
+        self._retry_btn.setObjectName("retry_button")
+        self._retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._retry_btn.setFixedWidth(120)
+        self._retry_btn.clicked.connect(self._on_retry)
+        layout.addWidget(self._retry_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Retry count label
+        self._retry_label = QLabel("")
+        self._retry_label.setObjectName("retry_label")
+        self._retry_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._retry_label)
+
+    def _apply_style(self) -> None:
+        tokens = self._theme_service.tokens
+
+        self.setStyleSheet(
+            f"""
+            QFrame#error_state {{
+                background: {tokens.error_subtle};
+                border: 1px solid {tokens.error};
+                border-radius: {tokens.radius_lg};
+                margin: 16px;
+            }}
+            
+            QLabel#error_title {{
+                color: {tokens.error};
+                font-size: {tokens.font_size_lg};
+                font-weight: {tokens.font_weight_semibold};
+            }}
+            
+            QLabel#error_message {{
+                color: {tokens.text_secondary};
+                font-size: {tokens.font_size_sm};
+            }}
+            
+            QPushButton#retry_button {{
+                background: {tokens.error};
+                color: white;
+                border: none;
+                border-radius: {tokens.radius_md};
+                padding: 10px 20px;
+                font-weight: {tokens.font_weight_medium};
+                font-size: {tokens.font_size_base};
+            }}
+            
+            QPushButton#retry_button:hover {{
+                background: {tokens.error_hover};
+            }}
+            
+            QPushButton#retry_button:disabled {{
+                background: {tokens.interactive_disabled_bg};
+                color: {tokens.interactive_disabled_text};
+            }}
+            
+            QLabel#retry_label {{
+                color: {tokens.text_muted};
+                font-size: {tokens.font_size_xs};
+            }}
+        """
+        )
+
+    def set_error(self, message: str, retry_count: int = 0) -> None:
+        """Set error state."""
+        self._error_message = message
+        self._retry_count = retry_count
+
+        # Truncate long messages
+        display_msg = message[:100] + "..." if len(message) > 100 else message
+        self._message.setText(display_msg)
+        self._message.setToolTip(message)
+
+        if retry_count > 0:
+            self._retry_label.setText(f"Attempt {retry_count}/{self._max_retries}")
+            self._retry_label.show()
+        else:
+            self._retry_label.hide()
+
+        # Disable retry if max reached
+        if retry_count >= self._max_retries:
+            self._retry_btn.setEnabled(False)
+            self._retry_btn.setText("Max retries reached")
+        else:
+            self._retry_btn.setEnabled(True)
+            self._retry_btn.setText("🔄 Retry")
+
+    def _on_retry(self) -> None:
+        self.retry_clicked.emit()
+
+
+# =============================================================================
+# Stale Data Banner
+# =============================================================================
+
+
+class StaleDataBanner(QFrame):
+    """Banner indicating stale/outdated data."""
+
+    refresh_clicked = Signal()
+
+    def __init__(self, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._theme_service = theme_service
+
+        self.setObjectName("stale_banner")
+        self.setFixedHeight(40)
+        self._setup_ui()
+        self._apply_style()
+        self.hide()
+
+    def _setup_ui(self) -> None:
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(8)
+
+        # Icon
+        icon = QLabel("⏰")
+        layout.addWidget(icon)
+
+        # Message
+        self._message = QLabel("Data may be outdated")
+        self._message.setObjectName("stale_message")
+        layout.addWidget(self._message)
+
+        layout.addStretch()
+
+        # Refresh button
+        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn.setObjectName("refresh_btn")
+        self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._refresh_btn.clicked.connect(self.refresh_clicked.emit)
+        layout.addWidget(self._refresh_btn)
+
+    def _apply_style(self) -> None:
+        tokens = self._theme_service.tokens
+
+        self.setStyleSheet(
+            f"""
+            QFrame#stale_banner {{
+                background: {tokens.warning_subtle};
+                border-bottom: 1px solid {tokens.warning};
+            }}
+            
+            QLabel#stale_message {{
+                color: {tokens.warning};
+                font-size: {tokens.font_size_sm};
+                font-weight: {tokens.font_weight_medium};
+            }}
+            
+            QPushButton#refresh_btn {{
+                background: {tokens.warning};
+                color: white;
+                border: none;
+                border-radius: {tokens.radius_sm};
+                padding: 4px 12px;
+                font-size: {tokens.font_size_xs};
+                font-weight: {tokens.font_weight_medium};
+            }}
+            
+            QPushButton#refresh_btn:hover {{
+                background: {tokens.warning_hover};
+            }}
+        """
+        )
+
+    def show_stale(self, last_update: Optional[datetime] = None) -> None:
+        """Show stale indicator with age info."""
+        if last_update:
+            age_seconds = (datetime.now() - last_update).total_seconds()
+
+            if age_seconds < 60:
+                age_text = f"{int(age_seconds)}s"
+            elif age_seconds < 3600:
+                age_text = f"{int(age_seconds / 60)}m"
+            else:
+                age_text = f"{int(age_seconds / 3600)}h"
+
+            self._message.setText(f"Data is {age_text} old")
+        else:
+            self._message.setText("Data may be outdated")
+
+        self.show()
+
+
+# =============================================================================
+# Connection Indicator
+# =============================================================================
+
+
+class ConnectionIndicator(QWidget):
+    """Small connection status indicator."""
+
+    def __init__(self, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._theme_service = theme_service
+        self._is_connected = True
+
+        self.setFixedSize(16, 16)
+        self.setToolTip("Connected")
+
+    def set_connected(self, connected: bool) -> None:
+        if connected == self._is_connected:
+            return
+
+        self._is_connected = connected
+        self.setToolTip("Connected" if connected else "Disconnected")
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        tokens = self._theme_service.tokens
+        color = QColor(tokens.success if self._is_connected else tokens.error)
+
+        # Draw circle
+        painter.setBrush(color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(4, 4, 8, 8)
+
+
+# =============================================================================
+# Enhanced Panel Header
+# =============================================================================
+
+
+class PanelHeader(QFrame):
+    """Panel header with title, connection indicator, and close button."""
+
+    close_clicked = Signal()
+
+    def __init__(self, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._theme_service = theme_service
+
+        self.setObjectName("panel_header")
+        self.setFixedHeight(52)
+        self._setup_ui()
+        self._apply_style()
+
+    def _setup_ui(self) -> None:
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 0, 8, 0)
+        layout.setSpacing(12)
+
+        # Title
+        self._title = QLabel("Device Details")
+        self._title.setObjectName("panel_title")
+        layout.addWidget(self._title)
+
+        layout.addStretch()
+
+        # Connection indicator
+        self._connection = ConnectionIndicator(self._theme_service)
+        layout.addWidget(self._connection)
+
+        # Close button
+        self._close_btn = QPushButton("×")
+        self._close_btn.setObjectName("close_btn")
+        self._close_btn.setFixedSize(32, 32)
+        self._close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._close_btn.clicked.connect(self.close_clicked.emit)
+        layout.addWidget(self._close_btn)
+
+    def _apply_style(self) -> None:
+        tokens = self._theme_service.tokens
+
+        self.setStyleSheet(
+            f"""
+            QFrame#panel_header {{
+                background: {tokens.surface_card};
+                border-bottom: 1px solid {tokens.border_default};
+            }}
+            
+            QLabel#panel_title {{
+                color: {tokens.text_primary};
+                font-size: {tokens.font_size_lg};
+                font-weight: {tokens.font_weight_semibold};
+            }}
+            
+            QPushButton#close_btn {{
+                background: transparent;
+                border: none;
+                color: {tokens.text_muted};
+                font-size: 22px;
+                font-weight: bold;
+                border-radius: {tokens.radius_sm};
+            }}
+            
+            QPushButton#close_btn:hover {{
+                background: {tokens.interactive_hover};
+                color: {tokens.text_primary};
+            }}
+        """
+        )
+
+    def set_connected(self, connected: bool) -> None:
+        self._connection.set_connected(connected)
+
+    def set_title(self, title: str) -> None:
+        self._title.setText(title)
+
+
+# =============================================================================
+# Placeholder Content
+# =============================================================================
+
+
+class PlaceholderContent(QFrame):
+    """Empty state placeholder."""
+
+    def __init__(self, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._theme_service = theme_service
+
+        self.setObjectName("placeholder")
+        self._setup_ui()
+        self._apply_style()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(16)
+
+        # Icon
+        icon = QLabel("📋")
+        icon.setFont(QFont("Segoe UI Emoji", 48))
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(icon)
+
+        # Text
+        text = QLabel("Select a device to view details")
+        text.setObjectName("placeholder_text")
+        text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(text)
+
+        # Hint
+        hint = QLabel("Click or double-click on a device in the canvas")
+        hint.setObjectName("placeholder_hint")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
+
+    def _apply_style(self) -> None:
+        tokens = self._theme_service.tokens
+
+        self.setStyleSheet(
+            f"""
+            QFrame#placeholder {{
+                background: transparent;
+            }}
+            
+            QLabel#placeholder_text {{
+                color: {tokens.text_secondary};
+                font-size: {tokens.font_size_lg};
+                font-weight: {tokens.font_weight_medium};
+            }}
+            
+            QLabel#placeholder_hint {{
+                color: {tokens.text_muted};
+                font-size: {tokens.font_size_sm};
+            }}
+        """
+        )
+
+
+# =============================================================================
+# Material Input Widget (Enhanced)
+# =============================================================================
+
+
+class MaterialInputWidget(QFrame):
+    """Enhanced material input display widget."""
 
     def __init__(
         self,
@@ -68,72 +640,469 @@ class MaterialInputWidget(QFrame):
         tokens = self._theme_service.tokens
 
         self.setObjectName("material_item")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(
             f"""
             QFrame#material_item {{
-                background-color: {tokens.get_rgba("card.bg", 0.6)};
-                border: 1px solid {tokens.get_rgba("border", 0.3)};
-                border-radius: 6px;
-                padding: 6px;
-                margin: 2px 0;
+                background-color: {tokens.surface_elevated};
+                border: 1px solid {tokens.border_subtle};
+                border-radius: {tokens.radius_md};
             }}
             QFrame#material_item:hover {{
-                background-color: {tokens.get_rgba("card.bg", 0.9)};
-                border-color: {tokens.accent};
+                background-color: {tokens.interactive_hover};
+                border-color: {tokens.primary};
             }}
         """
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(2)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(4)
 
-        # Batch label (bold, primary)
-        self._batch_label = QLabel(f"📦 {self._material.material_batch}")
+        # Batch
+        batch_layout = QHBoxLayout()
+        batch_icon = QLabel("📦")
+        batch_layout.addWidget(batch_icon)
+
+        self._batch_label = QLabel(self._material.material_batch)
         self._batch_label.setStyleSheet(
             f"""
-            font-weight: 600;
-            font-size: 11px;
-            color: {tokens.app_fg};
+            font-weight: {tokens.font_weight_semibold};
+            font-size: {tokens.font_size_sm};
+            color: {tokens.text_primary};
         """
         )
-        layout.addWidget(self._batch_label)
+        batch_layout.addWidget(self._batch_label)
+        batch_layout.addStretch()
+        layout.addLayout(batch_layout)
 
-        # Material name (smaller, hint color)
-        name_display = self._material.display_name
-        self._name_label = QLabel(name_display)
+        # Name
+        self._name_label = QLabel(self._material.display_name)
         self._name_label.setStyleSheet(
             f"""
-            font-size: 10px;
-            color: {tokens.hint};
+            font-size: {tokens.font_size_xs};
+            color: {tokens.text_secondary};
         """
         )
         self._name_label.setWordWrap(True)
-        self._name_label.setToolTip(self._material.material_name)  # Full name on hover
+        self._name_label.setToolTip(self._material.material_name)
         layout.addWidget(self._name_label)
 
-        # Feed time (smallest)
+        # Time
         self._time_label = QLabel(f"⏰ {self._material.formatted_time}")
         self._time_label.setStyleSheet(
             f"""
-            font-size: 9px;
-            color: {tokens.hint};
+            font-size: {tokens.font_size_xs};
+            color: {tokens.text_muted};
         """
         )
         layout.addWidget(self._time_label)
 
 
+# =============================================================================
+# Device Content (Main content when device is loaded)
+# =============================================================================
+
+
+class DeviceContent(QFrame):
+    """Main device details content."""
+
+    def __init__(self, theme_service: "ThemeService", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._theme_service = theme_service
+        self._material_widgets: List[MaterialInputWidget] = []
+
+        self.setObjectName("device_content")
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        # Scroll area for content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        content = QWidget()
+        self._layout = QVBoxLayout(content)
+        self._layout.setContentsMargins(16, 16, 16, 16)
+        self._layout.setSpacing(12)
+
+        # Device info section
+        self._setup_device_info()
+
+        # Materials section
+        self._setup_materials_section()
+
+        # Metrics section
+        self._setup_metrics_section()
+
+        # Details section
+        self._setup_details_section()
+
+        self._layout.addStretch()
+
+        scroll.setWidget(content)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(scroll)
+
+        self._apply_style()
+
+    def _setup_device_info(self) -> None:
+        """Setup device info header."""
+        header = QHBoxLayout()
+
+        # Name and status
+        info = QVBoxLayout()
+        self._name_label = QLabel("--")
+        self._name_label.setObjectName("device_name")
+        info.addWidget(self._name_label)
+
+        self._last_update = QLabel("🕒 --")
+        self._last_update.setObjectName("last_update")
+        info.addWidget(self._last_update)
+
+        header.addLayout(info)
+        header.addStretch()
+
+        self._status_badge = QLabel("--")
+        self._status_badge.setObjectName("status_badge")
+        self._status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(self._status_badge)
+
+        self._layout.addLayout(header)
+
+        # Description
+        self._desc = QLabel("")
+        self._desc.setObjectName("description")
+        self._desc.setWordWrap(True)
+        self._desc.setVisible(False)
+        self._layout.addWidget(self._desc)
+
+    def _setup_materials_section(self) -> None:
+        """Setup materials input section."""
+        # Section header
+        self._mat_header = QLabel("📥 Material Inputs")
+        self._mat_header.setObjectName("section_header")
+        self._layout.addWidget(self._mat_header)
+
+        # Lot number
+        self._lot_label = QLabel("🏷️ LOT: --")
+        self._lot_label.setObjectName("lot_label")
+        self._layout.addWidget(self._lot_label)
+
+        # Material container
+        self._mat_container = QVBoxLayout()
+        self._mat_container.setSpacing(6)
+        self._layout.addLayout(self._mat_container)
+
+        # No materials label
+        self._no_mat_label = QLabel("No materials loaded")
+        self._no_mat_label.setObjectName("no_mat")
+        self._no_mat_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._mat_container.addWidget(self._no_mat_label)
+
+    def _setup_metrics_section(self) -> None:
+        """Setup OEE/Availability/Yield metrics."""
+        tokens = self._theme_service.tokens
+
+        # OEE
+        self._lbl_oee = QLabel("📊 OEE: 0%")
+        self._lbl_oee.setObjectName("metric_label")
+        self._layout.addWidget(self._lbl_oee)
+
+        self._bar_oee = QProgressBar()
+        self._bar_oee.setTextVisible(False)
+        self._bar_oee.setFixedHeight(8)
+        self._layout.addWidget(self._bar_oee)
+
+        # Availability
+        self._lbl_avail = QLabel("📈 Availability: 0%")
+        self._lbl_avail.setObjectName("metric_label")
+        self._layout.addWidget(self._lbl_avail)
+
+        self._bar_avail = QProgressBar()
+        self._bar_avail.setTextVisible(False)
+        self._bar_avail.setFixedHeight(8)
+        self._layout.addWidget(self._bar_avail)
+
+        # Run time
+        self._lbl_runtime = QLabel("⏱️ Run: 00:00:00 / Total: 00:00:00")
+        self._lbl_runtime.setObjectName("runtime_label")
+        self._layout.addWidget(self._lbl_runtime)
+
+        # Yield
+        self._lbl_yield = QLabel("🎯 Yield: 0%")
+        self._lbl_yield.setObjectName("metric_label")
+        self._layout.addWidget(self._lbl_yield)
+
+        self._bar_yield = QProgressBar()
+        self._bar_yield.setTextVisible(False)
+        self._bar_yield.setFixedHeight(8)
+        self._layout.addWidget(self._bar_yield)
+
+    def _setup_details_section(self) -> None:
+        """Setup details card."""
+        self._details_frame = QFrame()
+        self._details_frame.setObjectName("details_card")
+
+        details_layout = QVBoxLayout(self._details_frame)
+        details_layout.setContentsMargins(12, 12, 12, 12)
+        details_layout.setSpacing(8)
+
+        self._inputs = QLabel("📥 Inputs: 0")
+        self._outputs = QLabel("📦 Outputs: 0")
+        self._cycle = QLabel("⏱️ Cycle Time: 0s")
+
+        details_layout.addWidget(self._inputs)
+        details_layout.addWidget(self._outputs)
+        details_layout.addWidget(self._cycle)
+
+        self._layout.addWidget(self._details_frame)
+
+        # Error status
+        self._error = QLabel("✅ Healthy")
+        self._error.setObjectName("error_status")
+        self._error.setWordWrap(True)
+        self._layout.addWidget(self._error)
+
+    def _apply_style(self) -> None:
+        tokens = self._theme_service.tokens
+
+        self.setStyleSheet(
+            f"""
+            QLabel#device_name {{
+                color: {tokens.text_primary};
+                font-size: {tokens.font_size_lg};
+                font-weight: {tokens.font_weight_bold};
+            }}
+            
+            QLabel#last_update {{
+                color: {tokens.text_muted};
+                font-size: {tokens.font_size_sm};
+            }}
+            
+            QLabel#description {{
+                color: {tokens.text_secondary};
+                font-size: {tokens.font_size_sm};
+            }}
+            
+            QLabel#section_header {{
+                color: {tokens.text_primary};
+                font-size: {tokens.font_size_base};
+                font-weight: {tokens.font_weight_semibold};
+                margin-top: 8px;
+            }}
+            
+            QLabel#lot_label {{
+                color: {tokens.primary};
+                font-size: {tokens.font_size_sm};
+                font-weight: {tokens.font_weight_medium};
+            }}
+            
+            QLabel#no_mat {{
+                color: {tokens.text_muted};
+                font-size: {tokens.font_size_sm};
+                font-style: italic;
+                padding: 12px;
+            }}
+            
+            QLabel#metric_label {{
+                color: {tokens.text_primary};
+                font-size: {tokens.font_size_sm};
+                font-weight: {tokens.font_weight_medium};
+                margin-top: 4px;
+            }}
+            
+            QLabel#runtime_label {{
+                color: {tokens.text_muted};
+                font-size: {tokens.font_size_xs};
+            }}
+            
+            QProgressBar {{
+                background: {tokens.interactive_hover};
+                border: none;
+                border-radius: 4px;
+            }}
+            
+            QProgressBar::chunk {{
+                background: {tokens.primary};
+                border-radius: 4px;
+            }}
+            
+            QFrame#details_card {{
+                background: {tokens.surface_elevated};
+                border: 1px solid {tokens.border_default};
+                border-radius: {tokens.radius_md};
+            }}
+            
+            QFrame#details_card QLabel {{
+                color: {tokens.text_primary};
+                font-size: {tokens.font_size_sm};
+            }}
+        """
+        )
+
+    def render_device(self, device: "DeviceDisplayModel") -> None:
+        """Render device data."""
+        tokens = self._theme_service.tokens
+
+        # Header
+        self._name_label.setText(str(device.display_name))
+
+        if device.last_update:
+            clean_time = str(device.last_update).replace("T", " ").split(".")[0]
+            self._last_update.setText(f"🕒 {clean_time}")
+        else:
+            self._last_update.setText("🕒 --")
+
+        # Status badge
+        self._status_badge.setText(str(device.status_name).upper())
+        self._status_badge.setStyleSheet(
+            f"""
+            background-color: {device.status_color};
+            color: white;
+            font-weight: 600;
+            padding: 6px 14px;
+            border-radius: 12px;
+            font-size: 10px;
+        """
+        )
+
+        # Description
+        if device.description:
+            self._desc.setText(str(device.description))
+            self._desc.setVisible(True)
+        else:
+            self._desc.setVisible(False)
+
+        # Materials
+        self._render_materials(device.material_inputs, device.current_lot_no)
+
+        # Metrics
+        self._render_metrics(device)
+
+        # Details
+        self._inputs.setText(f"📥 Inputs: {device.input_count:,}")
+        self._outputs.setText(f"📦 Outputs: {device.output_count:,}")
+        self._cycle.setText(f"⏱️ Cycle Time: {device.cycle_time}s")
+
+        # Error
+        if device.last_error:
+            self._error.setText(f"⚠️ {device.last_error}")
+            self._error.setStyleSheet(f"color: {tokens.error}; font-weight: 600;")
+        else:
+            self._error.setText("✅ Healthy")
+            self._error.setStyleSheet(f"color: {tokens.success};")
+
+    def _render_materials(self, materials: Tuple, lot_no: str) -> None:
+        """Render material inputs."""
+        # Clear existing
+        for widget in self._material_widgets:
+            widget.deleteLater()
+        self._material_widgets.clear()
+
+        # Lot
+        if lot_no:
+            self._lot_label.setText(f"🏷️ LOT: {lot_no}")
+        else:
+            self._lot_label.setText("🏷️ LOT: --")
+
+        # Materials
+        has_materials = len(materials) > 0
+        self._no_mat_label.setVisible(not has_materials)
+
+        if has_materials:
+            for material in materials:
+                widget = MaterialInputWidget(
+                    material=material,
+                    theme_service=self._theme_service,
+                )
+                self._mat_container.insertWidget(self._mat_container.count() - 1, widget)
+                self._material_widgets.append(widget)
+
+    def _render_metrics(self, device: "DeviceDisplayModel") -> None:
+        """Render OEE/Availability/Yield."""
+        tokens = self._theme_service.tokens
+
+        # OEE
+        oee = float(device.oee) if device.oee else 0
+        self._lbl_oee.setText(f"📊 OEE: {oee:.1f}%")
+        self._bar_oee.setValue(int(min(oee, 100)))
+
+        oee_color = tokens.success if oee > 85 else tokens.warning if oee > 60 else tokens.error
+        self._bar_oee.setStyleSheet(
+            f"""
+            QProgressBar {{ background: {tokens.interactive_hover}; border: none; border-radius: 4px; }}
+            QProgressBar::chunk {{ background: {oee_color}; border-radius: 4px; }}
+        """
+        )
+
+        # Availability
+        avail = float(device.availability) if hasattr(device, "availability") else 0
+        self._lbl_avail.setText(f"📈 Availability: {avail:.1f}%")
+        self._bar_avail.setValue(int(min(avail, 100)))
+
+        avail_color = tokens.success if avail > 80 else tokens.warning if avail > 50 else tokens.error
+        self._bar_avail.setStyleSheet(
+            f"""
+            QProgressBar {{ background: {tokens.interactive_hover}; border: none; border-radius: 4px; }}
+            QProgressBar::chunk {{ background: {avail_color}; border-radius: 4px; }}
+        """
+        )
+
+        # Runtime
+        run_time = float(device.run_time_seconds) if hasattr(device, "run_time_seconds") else 0
+        total_time = float(device.total_time_seconds) if hasattr(device, "total_time_seconds") else 0
+        self._lbl_runtime.setText(f"⏱️ Run: {self._format_time(run_time)} / Total: {self._format_time(total_time)}")
+
+        # Yield
+        yield_rate = float(device.yield_rate) if device.yield_rate else 0
+        self._lbl_yield.setText(f"🎯 Yield: {yield_rate:.1f}%")
+        self._bar_yield.setValue(int(min(yield_rate, 100)))
+
+    @staticmethod
+    def _format_time(seconds: float) -> str:
+        """Format seconds to HH:MM:SS."""
+        total = int(max(0, seconds))
+        h = total // 3600
+        m = (total % 3600) // 60
+        s = total % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def clear(self) -> None:
+        """Clear all content."""
+        for widget in self._material_widgets:
+            widget.deleteLater()
+        self._material_widgets.clear()
+
+
+# =============================================================================
+# Enhanced Right Panel View
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class RightPanelState:
+    """Immutable right panel state."""
+
+    is_expanded: bool
+    selected_device_id: Optional[str]
+    theme: str
+    content_state: int = PanelState.PLACEHOLDER
+
+
 class RightPanelView:
     """
-    Right panel showing device details.
+    Enhanced Right Panel with Loading/Error/Stale states.
 
-    OPTIMIZED:
-    - Cached styles per theme
-    - Skip redundant renders
-
-    FEATURES:
-    - Availability display below OEE
-    - Material Inputs list (scrollable)
+    Features:
+    - Skeleton loading animation
+    - Error state with retry
+    - Stale data indicator
+    - Connection status
+    - Smooth transitions
     """
 
     def __init__(
@@ -149,647 +1118,280 @@ class RightPanelView:
         self._device_vm = device_vm
         self._shell_vm = shell_vm
         self._theme_service = theme_service
-        self._last_device_id: Optional[str] = None
-        self._last_render_data: Optional[Dict] = None
-        self._is_panel_open = False
-        self._current_theme = theme_service.current_theme
-        self._cached_styles: Dict[str, Dict[str, str]] = {}
 
-        self._layout: Optional[QVBoxLayout] = None
-        self._material_widgets: List[MaterialInputWidget] = []
+        # State
+        self._state = RightPanelState(
+            is_expanded=False, selected_device_id=None, theme=theme_service.current_theme, content_state=PanelState.PLACEHOLDER
+        )
 
-        self._setup()
-        self._apply_theme_styles()
-        self._bind_viewmodels()
+        self._setup_ui()
+        self._bind_signals()
+        self._apply_container_style()
 
-    def _bind_viewmodels(self) -> None:
+    def _setup_ui(self) -> None:
+        """Setup panel UI with stacked content."""
+        # Clear existing
+        if self._container.layout():
+            while self._container.layout().count():
+                item = self._container.layout().takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+        else:
+            QVBoxLayout(self._container)
+
+        layout = self._container.layout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Header
+        self._header = PanelHeader(self._theme_service)
+        self._header.close_clicked.connect(self._shell_vm.close_right_panel)
+        layout.addWidget(self._header)
+
+        # Stale banner
+        self._stale_banner = StaleDataBanner(self._theme_service)
+        self._stale_banner.refresh_clicked.connect(self._on_refresh)
+        layout.addWidget(self._stale_banner)
+
+        # Stacked content
+        self._stack = QStackedWidget()
+        layout.addWidget(self._stack, 1)
+
+        # 0: Placeholder
+        self._placeholder = PlaceholderContent(self._theme_service)
+        self._stack.addWidget(self._placeholder)
+
+        # 1: Loading skeleton
+        self._skeleton = DeviceDetailSkeleton(self._theme_service)
+        self._stack.addWidget(self._skeleton)
+
+        # 2: Error state
+        self._error_state = ErrorStateWidget(self._theme_service)
+        self._error_state.retry_clicked.connect(self._on_retry)
+        self._stack.addWidget(self._error_state)
+
+        # 3: Device content
+        self._content = DeviceContent(self._theme_service)
+        self._stack.addWidget(self._content)
+
+        # Initial state
+        self._stack.setCurrentIndex(PanelState.PLACEHOLDER)
+
+    def _bind_signals(self) -> None:
+        """Bind to ViewModel signals."""
         self._device_vm.selectionChanged.connect(self._on_selection_changed)
-        self._device_vm.materialInputsChanged.connect(self._on_material_inputs_changed)
+        self._device_vm.deviceLoadingChanged.connect(self._on_loading_changed)
+        self._device_vm.deviceErrorChanged.connect(self._on_error_changed)
+        self._device_vm.materialInputsChanged.connect(self._on_materials_changed)
+        self._device_vm.connectionStateChanged.connect(self._on_connection_changed)
+        self._device_vm.staleDataDetected.connect(self._on_stale_detected)
+        self._device_vm.availabilityChanged.connect(self._on_availability_changed)
+
         self._shell_vm.themeChanged.connect(self._on_theme_changed)
         self._shell_vm.rightPanelChanged.connect(self._on_panel_changed)
 
+    def _apply_container_style(self) -> None:
+        """Apply container styling."""
+        tokens = self._theme_service.tokens
+
+        self._container.setStyleSheet(
+            f"""
+            QFrame#right_slide_menu_frame {{
+                background-color: {tokens.surface_panel};
+                border: none;
+                border-left: 1px solid {tokens.border_default};
+            }}
+        """
+        )
+
+    # =========================================================================
+    # Signal Handlers
+    # =========================================================================
+
     @Slot(object)
     def _on_selection_changed(self, selection) -> None:
-        if selection.has_selection:
-            device_id = selection.selected_device_id
-            is_different_device = device_id != self._last_device_id
-
-            device = self._device_vm.selected_device
-            if device:
-                self._render_device_from_model(device)
-                self._last_device_id = device_id
-
-                if is_different_device:
-                    logger.debug(f"[RightPanelView] Updated content for device: {device_id}")
-            else:
-                self._show_loading_device(device_id)
-        else:
-            self._show_no_selection()
-            self._last_device_id = None
-
-    @Slot(str, list)
-    def _on_material_inputs_changed(self, device_id: str, materials: List) -> None:
-        """Handle material inputs update."""
-        if device_id != self._last_device_id:
+        """Handle device selection."""
+        if not selection.has_selection:
+            self._state = RightPanelState(
+                is_expanded=self._state.is_expanded, selected_device_id=None, theme=self._state.theme, content_state=PanelState.PLACEHOLDER
+            )
+            self._stack.setCurrentIndex(PanelState.PLACEHOLDER)
+            self._stale_banner.hide()
+            self._header.set_title("Device Details")
             return
 
-        # Re-render the materials section
+        device_id = selection.selected_device_id
+        is_same = device_id == self._state.selected_device_id
+
+        self._state = RightPanelState(
+            is_expanded=self._state.is_expanded, selected_device_id=device_id, theme=self._state.theme, content_state=self._state.content_state
+        )
+
+        # Check states
+        if self._device_vm.is_device_loading(device_id):
+            self._stack.setCurrentIndex(PanelState.LOADING)
+            self._header.set_title(f"Loading {device_id}...")
+            return
+
+        error = self._device_vm.get_device_error(device_id)
+        if error:
+            retry_count = self._device_vm._loading_state.get_retry_count(device_id)
+            self._error_state.set_error(error, retry_count)
+            self._stack.setCurrentIndex(PanelState.ERROR)
+            self._header.set_title(f"Error - {device_id}")
+            return
+
+        # Show content
         device = self._device_vm.selected_device
         if device:
-            self._render_material_inputs(device.material_inputs, device.current_lot_no)
-            logger.debug(f"[RightPanelView] Material inputs updated: {len(materials)} items")
+            self._content.render_device(device)
+            self._stack.setCurrentIndex(PanelState.CONTENT)
+            self._header.set_title(device_id)
+
+            # Check stale
+            if self._device_vm.is_device_stale(device_id):
+                last_update = self._device_vm._loading_state.get_last_update(device_id)
+                self._stale_banner.show_stale(last_update)
+            else:
+                self._stale_banner.hide()
+        else:
+            self._stack.setCurrentIndex(PanelState.LOADING)
+            self._header.set_title(f"Loading {device_id}...")
+
+    @Slot(str, bool)
+    def _on_loading_changed(self, device_id: str, is_loading: bool) -> None:
+        """Handle loading state change."""
+        if device_id != self._state.selected_device_id:
+            return
+
+        if is_loading:
+            self._stack.setCurrentIndex(PanelState.LOADING)
+            self._header.set_title(f"Loading {device_id}...")
+        else:
+            # Trigger content update
+            device = self._device_vm.selected_device
+            if device:
+                self._content.render_device(device)
+                self._stack.setCurrentIndex(PanelState.CONTENT)
+                self._header.set_title(device_id)
+                self._stale_banner.hide()
+
+    @Slot(str, str)
+    def _on_error_changed(self, device_id: str, error: str) -> None:
+        """Handle error state."""
+        if device_id != self._state.selected_device_id:
+            return
+
+        retry_count = self._device_vm._loading_state.get_retry_count(device_id)
+        self._error_state.set_error(error, retry_count)
+        self._stack.setCurrentIndex(PanelState.ERROR)
+        self._header.set_title(f"Error - {device_id}")
+
+    @Slot(str, list)
+    def _on_materials_changed(self, device_id: str, materials: List) -> None:
+        """Handle materials update."""
+        if device_id != self._state.selected_device_id:
+            return
+
+        device = self._device_vm.selected_device
+        if device and self._stack.currentIndex() == PanelState.CONTENT:
+            self._content.render_device(device)
+
+    @Slot(bool)
+    def _on_connection_changed(self, connected: bool) -> None:
+        """Handle connection state."""
+        self._header.set_connected(connected)
+
+    @Slot(list)
+    def _on_stale_detected(self, stale_devices: List[str]) -> None:
+        """Handle stale data detection."""
+        if self._state.selected_device_id in stale_devices:
+            last_update = self._device_vm._loading_state.get_last_update(self._state.selected_device_id)
+            self._stale_banner.show_stale(last_update)
+
+    @Slot(str, object)
+    def _on_availability_changed(self, device_id: str, data: dict) -> None:
+        """Handle availability update."""
+        if device_id != self._state.selected_device_id:
+            return
+
+        device = self._device_vm.selected_device
+        if device and self._stack.currentIndex() == PanelState.CONTENT:
+            self._content.render_device(device)
+            self._stale_banner.hide()
 
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
-        """Handle theme change - OPTIMIZED."""
-        if theme == self._current_theme:
+        """Handle theme change."""
+        if theme == self._state.theme:
             return
 
-        self._current_theme = theme
-        self._apply_theme_styles()
+        self._state = RightPanelState(
+            is_expanded=self._state.is_expanded,
+            selected_device_id=self._state.selected_device_id,
+            theme=theme,
+            content_state=self._state.content_state,
+        )
 
-        # Re-render material widgets with new theme
-        device = self._device_vm.selected_device
-        if device and device.has_material_inputs:
-            self._render_material_inputs(device.material_inputs, device.current_lot_no)
+        self._apply_container_style()
+        # Components handle their own theme updates
 
     @Slot(bool)
     def _on_panel_changed(self, expanded: bool) -> None:
-        self._is_panel_open = expanded
+        """Handle panel expansion."""
+        self._state = RightPanelState(
+            is_expanded=expanded,
+            selected_device_id=self._state.selected_device_id if expanded else None,
+            theme=self._state.theme,
+            content_state=self._state.content_state,
+        )
+
         width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
         self._container.setFixedWidth(width)
 
-        if not expanded:
-            self._last_device_id = None
-
-    def _setup(self) -> None:
-        if not self._container:
-            return
-
-        self._layout = self._container.layout()
-        if not self._layout:
-            self._layout = QVBoxLayout(self._container)
-
-        self._clear_layout()
-        self._layout.setContentsMargins(16, 20, 16, 20)
-        self._layout.setSpacing(12)
-
-        # Header with title and status badge
-        header_layout = QHBoxLayout()
-        self._title = QLabel("SELECT DEVICE")
-        self._title.setObjectName("panel_title")
-        self._status_badge = QLabel("N/A")
-        self._status_badge.setObjectName("status_badge")
-        self._status_badge.setAlignment(Qt.AlignCenter)
-        header_layout.addWidget(self._title)
-        header_layout.addStretch()
-        header_layout.addWidget(self._status_badge)
-        self._layout.addLayout(header_layout)
-
-        # Description
-        self._desc = QLabel("")
-        self._desc.setObjectName("device_description")
-        self._desc.setWordWrap(True)
-        self._layout.addWidget(self._desc)
-
-        # Last update time
-        self._last_update = QLabel("Last Update: --")
-        self._last_update.setObjectName("last_update")
-        self._layout.addWidget(self._last_update)
-
-        # ================================================================
-        # Material Inputs Section - NEW
-        # ================================================================
-        self._mat_section_label = QLabel("📥 Material Inputs")
-        self._mat_section_label.setObjectName("section_label")
-        self._layout.addWidget(self._mat_section_label)
-
-        # LOT NO label
-        self._lot_label = QLabel("LOT: --")
-        self._lot_label.setObjectName("lot_label")
-        self._layout.addWidget(self._lot_label)
-
-        # Scrollable area for material inputs
-        self._mat_scroll = QScrollArea()
-        self._mat_scroll.setObjectName("mat_scroll")
-        self._mat_scroll.setWidgetResizable(True)
-        self._mat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._mat_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._mat_scroll.setMaximumHeight(150)  # Limit height
-        self._mat_scroll.setMinimumHeight(60)
-
-        self._mat_container = QWidget()
-        self._mat_container_layout = QVBoxLayout(self._mat_container)
-        self._mat_container_layout.setContentsMargins(0, 0, 0, 0)
-        self._mat_container_layout.setSpacing(4)
-        self._mat_container_layout.addStretch()
-
-        self._mat_scroll.setWidget(self._mat_container)
-        self._layout.addWidget(self._mat_scroll)
-
-        # No materials placeholder
-        self._no_mat_label = QLabel("No materials loaded")
-        self._no_mat_label.setObjectName("no_mat_label")
-        self._no_mat_label.setAlignment(Qt.AlignCenter)
-        self._mat_container_layout.insertWidget(0, self._no_mat_label)
-        # ================================================================
-
-        # OEE
-        self._lbl_oee = QLabel("OEE: 0%")
-        self._bar_oee = QProgressBar()
-        self._bar_oee.setTextVisible(False)
-        self._bar_oee.setFixedHeight(8)
-        self._layout.addWidget(self._lbl_oee)
-        self._layout.addWidget(self._bar_oee)
-
-        # ================================================================
-        # Availability Section
-        # ================================================================
-        self._lbl_availability = QLabel("Availability: 0%")
-        self._lbl_availability.setObjectName("lbl_availability")
-        self._bar_availability = QProgressBar()
-        self._bar_availability.setTextVisible(False)
-        self._bar_availability.setFixedHeight(8)
-        self._bar_availability.setObjectName("bar_availability")
-        self._lbl_run_time = QLabel("⏱️ Run: 00:00:00 / Total: 00:00:00")
-        self._lbl_run_time.setObjectName("lbl_run_time")
-        self._layout.addWidget(self._lbl_availability)
-        self._layout.addWidget(self._bar_availability)
-        self._layout.addWidget(self._lbl_run_time)
-        # ================================================================
-
-        # Yield Rate
-        self._lbl_yield = QLabel("Yield Rate: 0%")
-        self._bar_yield = QProgressBar()
-        self._bar_yield.setTextVisible(False)
-        self._bar_yield.setFixedHeight(8)
-        self._layout.addWidget(self._lbl_yield)
-        self._layout.addWidget(self._bar_yield)
-
-        # Details frame
-        self._details_frame = QFrame()
-        self._details_frame.setObjectName("details_frame")
-        details_layout = QVBoxLayout(self._details_frame)
-        details_layout.setContentsMargins(10, 10, 10, 10)
-        details_layout.setSpacing(6)
-        self._inputs = QLabel("Inputs: 0")
-        self._outputs = QLabel("Outputs: 0")
-        self._cycle = QLabel("Cycle Time: 0.0s")
-        details_layout.addWidget(self._inputs)
-        details_layout.addWidget(self._outputs)
-        details_layout.addWidget(self._cycle)
-        self._layout.addWidget(self._details_frame)
-
-        # Error status
-        self._error = QLabel("Last Error: None")
-        self._error.setWordWrap(True)
-        self._layout.addWidget(self._error)
-
-        self._layout.addStretch()
-
-    def _clear_layout(self) -> None:
-        if not self._layout:
-            return
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-    def _clear_material_widgets(self) -> None:
-        """Clear all material input widgets."""
-        for widget in self._material_widgets:
-            try:
-                widget.deleteLater()
-            except RuntimeError:
-                pass
-        self._material_widgets.clear()
-
-    def _get_cached_styles(self) -> Dict[str, str]:
-        """Get or compute cached styles for current theme."""
-        if self._current_theme in self._cached_styles:
-            return self._cached_styles[self._current_theme]
-
-        tokens = self._theme_service.tokens
-        card_style = self._theme_service.get_card_style()
-        bar_style = self._theme_service.get_progress_bar_style()
-
-        styles = {
-            "container": f"""
-                QFrame#right_slide_menu_frame {{
-                    background-color: {tokens.get_rgba("slide.bg", 0.98)};
-                    border: none;
-                    border-left: 1px solid {tokens.get_rgba("border", 0.5)};
-                }}
-            """,
-            "title": f"font-size: 14px; font-weight: 700; color: {tokens.app_fg};",
-            "desc": f"font-size: 11px; color: {tokens.hint};",
-            "last_update": f"font-size: 11px; color: {tokens.hint};",
-            "card_frame": f"QFrame {{ {card_style} }}",
-            "section_label": f"font-weight: 700; font-size: 12px; color: {tokens.app_fg}; margin-top: 8px;",
-            "lot_label": f"font-size: 11px; font-weight: 600; color: {tokens.accent};",
-            "no_mat_label": f"font-size: 10px; color: {tokens.hint}; font-style: italic;",
-            "mat_scroll": f"""
-                QScrollArea#mat_scroll {{
-                    background-color: transparent;
-                    border: 1px solid {tokens.get_rgba("border", 0.3)};
-                    border-radius: 6px;
-                }}
-                QScrollArea#mat_scroll > QWidget > QWidget {{
-                    background-color: transparent;
-                }}
-            """,
-            "lbl_oee": f"font-weight: 600; margin-top: 6px; color: {tokens.app_fg};",
-            "lbl_availability": f"font-weight: 600; margin-top: 6px; color: {tokens.app_fg};",
-            "lbl_run_time": f"font-size: 10px; color: {tokens.hint}; margin-bottom: 4px;",
-            "lbl_yield": f"font-weight: 600; margin-top: 4px; color: {tokens.app_fg};",
-            "bar_style": bar_style,
-            "detail_label": f"color: {tokens.app_fg};",
-        }
-
-        self._cached_styles[self._current_theme] = styles
-        return styles
-
-    def _apply_theme_styles(self) -> None:
-        """Apply theme styles - CACHED."""
-        styles = self._get_cached_styles()
-
-        self._container.setStyleSheet(styles["container"])
-        self._title.setStyleSheet(styles["title"])
-        self._desc.setStyleSheet(styles["desc"])
-        self._last_update.setStyleSheet(styles["last_update"])
-
-        # Material section styles
-        self._mat_section_label.setStyleSheet(styles["section_label"])
-        self._lot_label.setStyleSheet(styles["lot_label"])
-        self._no_mat_label.setStyleSheet(styles["no_mat_label"])
-        self._mat_scroll.setStyleSheet(styles["mat_scroll"])
-
-        self._details_frame.setStyleSheet(styles["card_frame"].replace("QFrame", "QFrame#details_frame"))
-        self._lbl_oee.setStyleSheet(styles["lbl_oee"])
-        self._lbl_availability.setStyleSheet(styles["lbl_availability"])
-        self._lbl_run_time.setStyleSheet(styles["lbl_run_time"])
-        self._lbl_yield.setStyleSheet(styles["lbl_yield"])
-        self._bar_oee.setStyleSheet(styles["bar_style"])
-        self._bar_availability.setStyleSheet(styles["bar_style"])
-        self._bar_yield.setStyleSheet(styles["bar_style"])
-
-        for label in [self._inputs, self._outputs, self._cycle]:
-            label.setStyleSheet(styles["detail_label"])
-
-    def _format_run_time(self, seconds: float) -> str:
-        """Format run time seconds to HH:MM:SS."""
-        total_seconds = int(max(0, seconds))  # Ensure non-negative
-        hours = total_seconds // 3600
-        minutes = (total_seconds % 3600) // 60
-        secs = total_seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-
-    def _render_material_inputs(
-        self,
-        materials: tuple,
-        lot_no: str = "",
-    ) -> None:
-        """Render material inputs in the scrollable area."""
-        # Clear existing widgets
-        self._clear_material_widgets()
-
-        # Update LOT label
-        if lot_no:
-            self._lot_label.setText(f"🏷️ LOT: {lot_no}")
-            self._lot_label.setVisible(True)
-        else:
-            self._lot_label.setText("LOT: --")
-
-        # Show/hide no materials label
-        has_materials = len(materials) > 0
-        self._no_mat_label.setVisible(not has_materials)
-
-        if not has_materials:
-            return
-
-        # Create widgets for each material
-        for material in materials:
-            widget = MaterialInputWidget(
-                material=material,
-                theme_service=self._theme_service,
-                parent=self._mat_container,
-            )
-            # Insert before the stretch
-            self._mat_container_layout.insertWidget(
-                self._mat_container_layout.count() - 1,
-                widget,
-            )
-            self._material_widgets.append(widget)
-
-        logger.debug(f"[RightPanelView] Rendered {len(materials)} material inputs")
-
-    def _render_device_from_model(self, device) -> None:
-        """Render device information from DeviceDisplayModel."""
-        tokens = self._theme_service.tokens
-
-        if hasattr(device, "device_id"):
-            # Title and description
-            self._title.setText(str(device.display_name))
-            self._desc.setText(str(device.description) if device.description else "")
-            self._desc.setVisible(bool(device.description))
-
-            # Last update
-            if device.last_update:
-                clean_time = str(device.last_update).replace("T", " ").split(".")[0]
-                self._last_update.setText(f"🕒 {clean_time}")
-            else:
-                self._last_update.setText("🕒 --")
-
-            # Status badge
-            self._status_badge.setText(str(device.status_name).upper())
-            self._status_badge.setStyleSheet(
-                f"background-color: {device.status_color}; color: white; font-weight: 600; "
-                f"padding: 4px 12px; border-radius: 10px; font-size: 10px;"
-            )
-
-            # ================================================================
-            # Material Inputs - NEW
-            # ================================================================
-            self._render_material_inputs(
-                device.material_inputs,
-                device.current_lot_no,
-            )
-            # ================================================================
-
-            # OEE
-            oee_val = float(device.oee) if device.oee else 0
-            self._lbl_oee.setText(f"OEE: {oee_val:.1f}%")
-            self._bar_oee.setValue(int(min(oee_val, 100)))
-
-            if oee_val > 85:
-                oee_bar_color = tokens.success
-            elif oee_val > 60:
-                oee_bar_color = tokens.warning
-            else:
-                oee_bar_color = tokens.error
-
-            self._bar_oee.setStyleSheet(self._theme_service.get_progress_bar_style(oee_bar_color))
-
-            # ================================================================
-            # Availability
-            # ================================================================
-            availability_val = float(device.availability) if hasattr(device, "availability") else 0.0
-            run_time_seconds = float(device.run_time_seconds) if hasattr(device, "run_time_seconds") else 0.0
-            total_time_seconds = float(device.total_time_seconds) if hasattr(device, "total_time_seconds") else 0.0
-
-            self._lbl_availability.setText(f"📊 Availability: {availability_val:.1f}%")
-            self._bar_availability.setValue(int(min(availability_val, 100)))
-
-            # Format run time and total time as HH:MM:SS
-            run_time_str = self._format_run_time(run_time_seconds)
-            total_time_str = self._format_run_time(total_time_seconds)
-            self._lbl_run_time.setText(f"⏱️ Run: {run_time_str} / Total: {total_time_str}")
-
-            # Color coding for availability bar
-            if availability_val > 80:
-                avail_bar_color = tokens.success
-            elif availability_val > 50:
-                avail_bar_color = tokens.warning
-            else:
-                avail_bar_color = tokens.error
-
-            self._bar_availability.setStyleSheet(self._theme_service.get_progress_bar_style(avail_bar_color))
-            # ================================================================
-
-            # Yield Rate
-            yield_val = float(device.yield_rate) if device.yield_rate else 0
-            self._lbl_yield.setText(f"Yield: {yield_val:.1f}%")
-            self._bar_yield.setValue(int(min(yield_val, 100)))
-            self._bar_yield.setStyleSheet(self._theme_service.get_progress_bar_style(tokens.accent))
-
-            # Details
-            self._inputs.setText(f"📥 Inputs: {device.input_count:,}")
-            self._outputs.setText(f"📦 Outputs: {device.output_count:,}")
-            self._cycle.setText(f"⏱️ Cycle: {device.cycle_time}s")
-
-            # Error status
-            if device.last_error:
-                self._error.setText(f"⚠️ {device.last_error}")
-                self._error.setStyleSheet(f"color: {tokens.error}; font-weight: 600;")
-            else:
-                self._error.setText("✅ Healthy")
-                self._error.setStyleSheet(f"color: {tokens.success};")
-        else:
-            # Fallback to dict-based rendering
-            self._render_device_info(device, device.get("device_id", "Unknown"))
-
-    def _show_no_selection(self) -> None:
-        """Show default state when no device is selected."""
-        tokens = self._theme_service.tokens
-
-        self._title.setText("SELECT DEVICE")
-        self._status_badge.setText("N/A")
-        self._status_badge.setStyleSheet(
-            f"background-color: {tokens.hint}; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;"
-        )
-        self._desc.setText("")
-        self._desc.setVisible(False)
-        self._last_update.setText("🕒 --")
-
-        # Material inputs
-        self._lot_label.setText("LOT: --")
-        self._clear_material_widgets()
-        self._no_mat_label.setVisible(True)
-
-        self._lbl_oee.setText("OEE: 0%")
-        self._bar_oee.setValue(0)
-
-        # Availability
-        self._lbl_availability.setText("📊 Availability: 0%")
-        self._bar_availability.setValue(0)
-        self._lbl_run_time.setText("⏱️ Run: 00:00:00 / Total: 00:00:00")
-
-        self._lbl_yield.setText("Yield: 0%")
-        self._bar_yield.setValue(0)
-        self._inputs.setText("📥 Inputs: 0")
-        self._outputs.setText("📦 Outputs: 0")
-        self._cycle.setText("⏱️ Cycle: 0s")
-        self._error.setText("--")
-        self._error.setStyleSheet(f"color: {tokens.hint};")
-
-    def _show_loading_device(self, device_id: str) -> None:
-        """Show loading state for a device."""
-        tokens = self._theme_service.tokens
-
-        self._title.setText(device_id)
-        self._status_badge.setText("LOADING")
-        self._status_badge.setStyleSheet(
-            f"background-color: {tokens.hint}; color: white; padding: 4px 10px; " "border-radius: 10px; font-size: 10px;"
-        )
-        self._desc.setText("Loading device data...")
-        self._desc.setVisible(True)
-        self._last_update.setText("🕒 --")
-
-        # Material inputs loading
-        self._lot_label.setText("LOT: Loading...")
-        self._clear_material_widgets()
-        self._no_mat_label.setText("Loading materials...")
-        self._no_mat_label.setVisible(True)
-
-        self._lbl_oee.setText("OEE: --%")
-        self._bar_oee.setValue(0)
-
-        # Availability
-        self._lbl_availability.setText("📊 Availability: --%")
-        self._bar_availability.setValue(0)
-        self._lbl_run_time.setText("⏱️ Run: --:--:-- / Total: --:--:--")
-
-        self._lbl_yield.setText("Yield: --%")
-        self._bar_yield.setValue(0)
-        self._inputs.setText("📥 Inputs: --")
-        self._outputs.setText("📦 Outputs: --")
-        self._cycle.setText("⏱️ Cycle: --")
-        self._error.setText("--")
-        self._error.setStyleSheet(f"color: {tokens.hint};")
-
-    def _render_device_info(self, device: Any, device_id: str) -> None:
-        """Render device information from dict (legacy support)."""
-        tokens = self._theme_service.tokens
-
-        def get_val(key: str, default: Any = None) -> Any:
-            if isinstance(device, dict):
-                return device.get(key, default)
-            return getattr(device, key, default)
-
-        display_name = get_val("display_name") or get_val("equip_name") or device_id
-        status_name = get_val("status_name") or "Unknown"
-        status_color = get_val("status_color") or tokens.hint
-        description = get_val("description") or ""
-        last_update = get_val("last_update")
-        oee = get_val("oee") or 0
-        yield_rate = get_val("yield_rate") or 0
-        input_count = get_val("input_count") or 0
-        output_count = get_val("output_count") or 0
-        cycle_time = get_val("cycle_time") or 0
-        last_error = get_val("last_error")
-
-        # Availability
-        availability = get_val("availability") or 0
-        run_time_seconds = get_val("run_time_seconds") or 0
-        total_time_seconds = get_val("total_time_seconds") or 0
-
-        # Material inputs
-        material_inputs = get_val("material_inputs") or []
-        current_lot_no = get_val("current_lot_no") or ""
-
-        self._title.setText(str(display_name))
-        self._desc.setText(str(description) if description else "")
-        self._desc.setVisible(bool(description))
-
-        if last_update:
-            clean_time = str(last_update).replace("T", " ").split(".")[0]
-            self._last_update.setText(f"🕒 {clean_time}")
-        else:
-            self._last_update.setText("🕒 --")
-
-        self._status_badge.setText(str(status_name).upper())
-        self._status_badge.setStyleSheet(
-            f"background-color: {status_color}; color: white; font-weight: 600; " f"padding: 4px 12px; border-radius: 10px; font-size: 10px;"
-        )
-
-        # Material inputs (from dict)
-        if material_inputs:
-            from ...viewmodels.models.device_model import MaterialInputModel
-
-            mats = []
-            for m in material_inputs:
-                if isinstance(m, dict):
-                    mats.append(MaterialInputModel.from_dict(m))
-                else:
-                    mats.append(m)
-            self._render_material_inputs(tuple(mats), current_lot_no)
-        else:
-            self._lot_label.setText("LOT: --")
-            self._clear_material_widgets()
-            self._no_mat_label.setText("No materials loaded")
-            self._no_mat_label.setVisible(True)
-
-        # OEE
-        oee_val = float(oee) if oee else 0
-        self._lbl_oee.setText(f"OEE: {oee_val:.1f}%")
-        self._bar_oee.setValue(int(min(oee_val, 100)))
-
-        if oee_val > 85:
-            bar_color = tokens.success
-        elif oee_val > 60:
-            bar_color = tokens.warning
-        else:
-            bar_color = tokens.error
-
-        self._bar_oee.setStyleSheet(self._theme_service.get_progress_bar_style(bar_color))
-
-        # Availability
-        availability_val = float(availability) if availability else 0
-        run_time_val = float(run_time_seconds) if run_time_seconds else 0
-        total_time_val = float(total_time_seconds) if total_time_seconds else 0
-
-        self._lbl_availability.setText(f"📊 Availability: {availability_val:.1f}%")
-        self._bar_availability.setValue(int(min(availability_val, 100)))
-
-        run_time_str = self._format_run_time(run_time_val)
-        total_time_str = self._format_run_time(total_time_val)
-        self._lbl_run_time.setText(f"⏱️ Run: {run_time_str} / Total: {total_time_str}")
-
-        if availability_val > 80:
-            avail_bar_color = tokens.success
-        elif availability_val > 50:
-            avail_bar_color = tokens.warning
-        else:
-            avail_bar_color = tokens.error
-
-        self._bar_availability.setStyleSheet(self._theme_service.get_progress_bar_style(avail_bar_color))
-
-        # Yield
-        yield_val = float(yield_rate) if yield_rate else 0
-        self._lbl_yield.setText(f"Yield: {yield_val:.1f}%")
-        self._bar_yield.setValue(int(min(yield_val, 100)))
-        self._bar_yield.setStyleSheet(self._theme_service.get_progress_bar_style(tokens.accent))
-
-        self._inputs.setText(f"📥 Inputs: {input_count:,}")
-        self._outputs.setText(f"📦 Outputs: {output_count:,}")
-        self._cycle.setText(f"⏱️ Cycle: {cycle_time}s")
-
-        if last_error:
-            self._error.setText(f"⚠️ {last_error}")
-            self._error.setStyleSheet(f"color: {tokens.error}; font-weight: 600;")
-        else:
-            self._error.setText("✅ Healthy")
-            self._error.setStyleSheet(f"color: {tokens.success};")
+    def _on_retry(self) -> None:
+        """Handle retry click."""
+        if self._state.selected_device_id:
+            self._stack.setCurrentIndex(PanelState.LOADING)
+            self._device_vm.retry_device(self._state.selected_device_id)
+
+    def _on_refresh(self) -> None:
+        """Handle refresh click."""
+        if self._state.selected_device_id:
+            self._device_vm._fetch_device_details_parallel(self._state.selected_device_id)
+
+    # =========================================================================
+    # Legacy Compatibility
+    # =========================================================================
 
     def render(self, state: Dict[str, Any]) -> None:
-        """Render panel based on state (legacy compatibility)."""
-        is_expanded = select_right_panel_expanded(state)
+        """Render from global state (legacy compatibility)."""
+        # Most updates now come through ViewModel signals
+        # This method ensures compatibility with MainWindow pattern
+        pass
 
-        width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if is_expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
-        self._container.setFixedWidth(width)
-        self._is_panel_open = is_expanded
+    def dispose(self) -> None:
+        """Clean up resources."""
+        self._content.clear()
 
-        if not is_expanded:
-            return
-
-        device_id = select_selected_device_id(state)
-
-        if not device_id:
-            self._show_no_selection()
-            self._last_device_id = None
-            return
-
-        devices = select_devices(state)
-        device = devices.get(device_id)
-
-        if not device:
-            self._show_loading_device(device_id)
-            return
-
-        if device_id != self._last_device_id or device != self._last_render_data:
-            self._render_device_info(device, device_id)
-            self._last_device_id = device_id
-            self._last_render_data = device
+        try:
+            self._device_vm.selectionChanged.disconnect(self._on_selection_changed)
+            self._device_vm.deviceLoadingChanged.disconnect(self._on_loading_changed)
+            self._device_vm.deviceErrorChanged.disconnect(self._on_error_changed)
+            self._device_vm.materialInputsChanged.disconnect(self._on_materials_changed)
+            self._device_vm.connectionStateChanged.disconnect(self._on_connection_changed)
+            self._device_vm.staleDataDetected.disconnect(self._on_stale_detected)
+            self._device_vm.availabilityChanged.disconnect(self._on_availability_changed)
+            self._shell_vm.themeChanged.disconnect(self._on_theme_changed)
+            self._shell_vm.rightPanelChanged.disconnect(self._on_panel_changed)
+        except (RuntimeError, TypeError):
+            pass
 
 
-__all__ = ["RightPanelView", "MaterialInputWidget"]
+__all__ = [
+    "RightPanelView",
+    "DeviceDetailSkeleton",
+    "ErrorStateWidget",
+    "StaleDataBanner",
+    "MaterialInputWidget",
+]
