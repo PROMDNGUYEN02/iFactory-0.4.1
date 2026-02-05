@@ -178,14 +178,33 @@ class ApplicationRunner:
         logger.info("Application cleanup complete")
 
     async def _async_cleanup(self) -> None:
-        """Async cleanup for database connections."""
-        # Dispose container (handles all internal cleanup)
-        if self.container:
-            try:
-                await self.container.dispose()
-                logger.info("Container disposed")
-            except Exception as e:
-                logger.debug(f"Container dispose error: {e}")
+        """Async cleanup for database connections - IMPROVED."""
+
+        # This avoids "Event loop is closed" errors
+        cleanup_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(cleanup_loop)
+
+        try:
+            # Dispose container with new loop
+            if self.container:
+                try:
+                    await self.container.dispose()
+                    logger.info("Container disposed")
+                except Exception as e:
+                    logger.debug(f"Container dispose error: {e}")
+
+            # Cancel any remaining tasks
+            pending = asyncio.all_tasks(cleanup_loop)
+            if pending:
+                for task in pending:
+                    task.cancel()
+
+                # Wait for cancellations
+                await asyncio.gather(*pending, return_exceptions=True)
+
+        finally:
+            # Close cleanup loop
+            cleanup_loop.close()
 
 
 def run_application() -> int:

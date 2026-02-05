@@ -1115,6 +1115,25 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             )
             return
 
+        from ..services.device_status_service import get_device_status_service
+
+        status_service = get_device_status_service()
+
+        # Batch update status service
+        status_updates = {}
+        for code, new_model in devices.items():
+            status_updates[code] = {
+                "status_code": new_model.status_code,
+                "status_name": new_model.status_name,
+                "status_color": new_model.status_color,
+            }
+
+        # This will trigger statusChanged signals that GanttViewModel listens to
+        changes = status_service.update_batch(status_updates, emit_individual=True)
+
+        if changes:
+            logger.info(f"[DeviceListViewModel] Status service: {len(changes)} status changes")
+
         # Track status changes and update states
         status_changes: List[StatusChange] = []
 
@@ -1584,31 +1603,35 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             self.load_page(page_name, device_codes)
 
     # =========================================================================
-    # Disposal
+    # Lifecycle
     # =========================================================================
 
     def dispose(self) -> None:
-        """Clean up resources."""
+        """Clean up resources - IMPROVED."""
         if self._is_disposed:
             return
 
+        logger.info("[DeviceListViewModel] Starting disposal...")
         self._is_disposed = True
 
-        # Invalidate all pending requests
+        # Step 1: Invalidate all pending requests
         self._sync_generation += 1000
         self._detail_generation += 1000
         self._pending_detail_device = None
+        self._pending_load_ids = None
 
-        # Stop timers
+        # Step 2: Stop all timers immediately
         self._stop_panel_refresh()
 
-        for timer in [
+        timers_to_stop = [
             self._panel_refresh_timer,
             self._stale_check_timer,
             self._connection_check_timer,
             self._load_debounce_timer,
-        ]:
-            if timer:
+        ]
+
+        for timer in timers_to_stop:
+            if timer and timer.isActive():
                 timer.stop()
                 timer.deleteLater()
 
@@ -1617,25 +1640,58 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         self._connection_check_timer = None
         self._load_debounce_timer = None
 
-        # Shutdown executor
+        # Wait for executor to finish gracefully
         if self._executor:
             try:
-                self._executor.shutdown(wait=False)
-            except Exception:
-                pass
+                import time
+                from PySide6.QtCore import QCoreApplication
 
-        # Disconnect signals
+                logger.debug(f"[DeviceListViewModel] Shutting down executor with " f"{self._executor.active_count} active tasks")
+
+                # Wait for active operations to complete (with timeout)
+                start_time = time.time()
+                timeout = 1.0  # 1 second max wait
+
+                while self._executor.active_count > 0:
+                    elapsed = time.time() - start_time
+                    if elapsed > timeout:
+                        logger.warning(f"[DeviceListViewModel] Timeout waiting for " f"{self._executor.active_count} operations")
+                        break
+
+                    # Process Qt events to allow signals to be delivered
+                    QCoreApplication.processEvents()
+                    time.sleep(0.01)
+
+                # Cancel any remaining futures
+                if hasattr(self._executor, "_pending_futures"):
+                    for future in list(self._executor._pending_futures.values()):
+                        if not future.done():
+                            future.cancel()
+
+                # Final shutdown
+                self._executor.shutdown(wait=False)
+
+                logger.debug("[DeviceListViewModel] Executor shutdown complete")
+
+            except Exception as e:
+                logger.error(f"[DeviceListViewModel] Executor shutdown error: {e}")
+
+        # Step 3: Disconnect signals
         for signal, slot in self._connected_signals:
-            self._safe_disconnect(signal, slot)
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
         self._connected_signals.clear()
 
-        # Clear state
+        # Step 4: Clear state
         self._state_manager.clear()
         self._status_tracker.clear()
         self._devices.clear()
 
+        # Step 5: Call parent dispose
         BaseViewModel.dispose(self)
-        logger.info("[DeviceListViewModel] Disposed")
+        logger.info("[DeviceListViewModel] Disposed successfully")
 
 
 # ============================================================================

@@ -501,9 +501,31 @@ class MainWindow(QMainWindow):
 
             devices = self._device_vm.devices
             if devices:
+                logger.info(f"[MainWindow] Rendering {len(devices)} devices to canvases")
                 is_dark = self._theme_service.is_dark
                 devices_dict = {k: v.to_dict() if hasattr(v, "to_dict") else v for k, v in devices.items()}
+
                 self.canvas_electrode.render_state(devices_dict, is_dark)
+                self.canvas_assembly.render_state(devices_dict, is_dark)
+            else:
+                # No devices yet - subscribe to first update
+                logger.info("[MainWindow] Waiting for initial devices...")
+
+                # Create one-shot connection for initial render
+                def initial_render(devices_data):
+                    if devices_data and self._components_ready:
+                        logger.info(f"[MainWindow] Initial render triggered: {len(devices_data)} devices")
+                        is_dark = self._theme_service.is_dark
+                        devices_dict = {k: v.to_dict() if hasattr(v, "to_dict") else v for k, v in devices_data.items()}
+                        self.canvas_electrode.render_state(devices_dict, is_dark)
+                        self.canvas_assembly.render_state(devices_dict, is_dark)
+                        # Disconnect after first render
+                        try:
+                            self._device_vm.devicesChanged.disconnect(initial_render)
+                        except:
+                            pass
+
+                self._device_vm.devicesChanged.connect(initial_render)
 
             self.device_gantt_electrode.show_placeholder()
             self.device_gantt_assembly.show_placeholder()

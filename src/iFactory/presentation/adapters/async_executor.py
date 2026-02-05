@@ -223,35 +223,6 @@ class ExecutorMetrics:
 class AsyncExecutor(QObject):
     """
     Production-ready executor for async operations in Qt applications.
-
-    Features:
-    - Executes async coroutines in a thread pool
-    - Proper coroutine cleanup (no "never awaited" warnings)
-    - Thread-safe Qt signal callbacks
-    - Operation tracking and metrics
-    - Priority queue support
-    - Configurable slow operation threshold
-    - Graceful shutdown with timeout
-
-    Usage:
-        executor = AsyncExecutor(max_workers=4, parent=widget)
-
-        # Execute async operation
-        executor.execute(
-            fetch_data(),
-            on_success=lambda data: update_ui(data),
-            on_error=lambda e: show_error(str(e)),
-            timeout=10.0,
-        )
-
-        # Check metrics
-        print(executor.metrics)
-
-        # Cleanup
-        executor.shutdown()
-
-    Signals:
-        operationCompleted: Emitted when any operation completes
     """
 
     # Signals for thread-safe callbacks
@@ -298,6 +269,10 @@ class AsyncExecutor(QObject):
         self._signals_connected = True
         self._success_signal.connect(self._handle_success_callback)
         self._error_signal.connect(self._handle_error_callback)
+
+        # Thread-local event loop storage
+        self._thread_loops: Dict[int, asyncio.AbstractEventLoop] = {}
+        self._loop_lock = threading.Lock()
 
     # =========================================================================
     # Properties
@@ -411,15 +386,27 @@ class AsyncExecutor(QObject):
         on_error: Optional[Callable[[Exception], None]],
         timeout: Optional[float],
     ) -> Optional[AsyncResult[T]]:
-        """Run operation in worker thread."""
-        # Early exit if shutting down
+        """Run operation in worker thread with persistent event loop."""
+
         if not self._is_running or self._is_shutting_down:
             self._close_coroutine(coro)
             return None
 
         start_time = time.perf_counter()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+
+        thread_id = threading.get_ident()
+
+        with self._loop_lock:
+            if thread_id not in self._thread_loops:
+                # Create new loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                self._thread_loops[thread_id] = loop
+                logger.debug(f"[AsyncExecutor] Created event loop for thread {thread_id}")
+            else:
+                # Reuse existing loop
+                loop = self._thread_loops[thread_id]
+                asyncio.set_event_loop(loop)
 
         try:
             # Double-check before running
@@ -433,39 +420,31 @@ class AsyncExecutor(QObject):
             else:
                 result = loop.run_until_complete(coro)
 
-            # Check before callback
-            if not self._is_running or self._is_shutting_down:
-                return None
+            # ... existing success handling ...
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             is_slow = elapsed_ms > self._slow_threshold_ms
-
-            # Record metrics
             self._metrics.record_success(elapsed_ms, is_slow)
 
             if is_slow:
                 logger.warning("[AsyncExecutor] Op #%d took %.0fms", operation_id, elapsed_ms)
 
-            # Emit success callback via signal
             if on_success and self._signals_connected:
                 self._success_signal.emit(on_success, result)
 
-            # Emit completion signal
             self.operationCompleted.emit(operation_id, True)
-
             return AsyncResult.ok(result, elapsed_ms)
 
         except asyncio.TimeoutError:
+            # ... existing timeout handling ...
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             self._metrics.record_timeout(elapsed_ms)
-
             error = TimeoutError(f"Operation timed out after {timeout}s")
 
             if self._is_running and on_error and self._signals_connected:
                 self._error_signal.emit(on_error, error)
 
             self.operationCompleted.emit(operation_id, False)
-
             return AsyncResult.err(error, elapsed_ms, OperationStatus.TIMEOUT)
 
         except asyncio.CancelledError:
@@ -481,7 +460,6 @@ class AsyncExecutor(QObject):
                 self._error_signal.emit(on_error, e)
 
             self.operationCompleted.emit(operation_id, False)
-
             return AsyncResult.err(e, elapsed_ms)
 
         finally:
@@ -489,15 +467,15 @@ class AsyncExecutor(QObject):
                 # Cancel any pending tasks
                 pending = asyncio.all_tasks(loop)
                 for task in pending:
-                    task.cancel()
+                    if not task.done():
+                        task.cancel()
 
                 # Give tasks a chance to cleanup
                 if pending:
                     loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
-                loop.close()
-            except Exception:
-                pass
+            except Exception as cleanup_err:
+                logger.debug(f"[AsyncExecutor] Cleanup error: {cleanup_err}")
 
             # Remove from pending
             with self._lock:
@@ -573,19 +551,12 @@ class AsyncExecutor(QObject):
         wait: bool = False,
         timeout: float = DEFAULT_SHUTDOWN_TIMEOUT,
     ) -> None:
-        """
-        Shutdown the executor.
-
-        Args:
-            wait: If True, wait for pending operations (up to timeout)
-            timeout: Maximum seconds to wait for pending operations
-        """
+        """Shutdown the executor with proper cleanup."""
         if not self._is_running:
             return
 
         logger.debug("[AsyncExecutor] Shutting down (%d pending)", self.pending_count)
 
-        # Mark as shutting down
         self._is_shutting_down = True
         self._is_running = False
         self._signals_connected = False
@@ -606,9 +577,33 @@ class AsyncExecutor(QObject):
         if cancelled:
             logger.debug("[AsyncExecutor] Cancelled %d operations", cancelled)
 
+        with self._loop_lock:
+            for thread_id, loop in list(self._thread_loops.items()):
+                try:
+                    # Cancel all tasks in this loop
+                    if not loop.is_closed():
+                        pending = asyncio.all_tasks(loop)
+                        for task in pending:
+                            if not task.done():
+                                task.cancel()
+
+                        # Wait briefly for cancellations
+                        try:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        except Exception:
+                            pass
+
+                        # Close the loop
+                        loop.close()
+                        logger.debug(f"[AsyncExecutor] Closed loop for thread {thread_id}")
+                except Exception as e:
+                    logger.debug(f"[AsyncExecutor] Error closing loop {thread_id}: {e}")
+
+            self._thread_loops.clear()
+
         # Shutdown thread pool
         try:
-            self._executor.shutdown(wait=wait, cancel_futures=False)
+            self._executor.shutdown(wait=wait, cancel_futures=not wait)
         except Exception as e:
             logger.debug("[AsyncExecutor] Shutdown error: %s", e)
 

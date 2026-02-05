@@ -1,7 +1,6 @@
 # src/iFactory/shared/di/app_container.py
 """
 Main Application DI Container - Enhanced with dependency-injector.
-
 Uses the dependency-injector library for professional DI management:
 - Lazy initialization
 - Proper lifecycle management
@@ -78,10 +77,24 @@ def _create_remote_source(db_config: DatabaseConfig) -> Optional["MssqlAdapter"]
 
 def _create_db_manager(db_config: DatabaseConfig) -> Optional["DatabaseManager"]:
     """Factory for database manager."""
+    # Clear legacy cache to prevent duplicate engine
     try:
-        from iFactory.infrastructure.persistence.sqlalchemy.database import DatabaseManager
+        from iFactory.infrastructure.persistence.sqlalchemy.database import (
+            DatabaseManager,
+            get_storage_engine,
+            get_hot_engine,
+            get_cold_engine,
+        )
+
+        # Clear all legacy LRU caches
+        for func in [get_storage_engine, get_hot_engine, get_cold_engine]:
+            if hasattr(func, "cache_clear"):
+                func.cache_clear()
+
+        logger.debug("[AppContainer] Cleared legacy database engine caches")
 
         return DatabaseManager(db_config.storage_db_url)
+
     except Exception as e:
         logger.error(f"Database manager creation failed: {e}")
         return None
@@ -202,6 +215,7 @@ class AppContainer:
         PATHS.ensure_directories()
 
         # Initialize database manager (async)
+        # The factory already cleared legacy cache
         db_manager = self._infrastructure.database_manager()
         if db_manager:
             await db_manager.initialize()
@@ -273,6 +287,16 @@ class AppContainer:
             self._ui_container.initialize()
             logger.info("[AppContainer] UI container initialized")
 
+            import asyncio
+            from PySide6.QtCore import QTimer
+
+            def trigger_initial_load():
+                if self._ui_container:
+                    self._ui_container.schedule_deferred_data_load()
+
+            # Delay initial load to ensure UI is fully ready
+            QTimer.singleShot(500, trigger_initial_load)
+
         except Exception as e:
             logger.error(f"Presentation init failed: {e}")
             self._ui_container = None
@@ -330,46 +354,72 @@ class AppContainer:
     # ========================================================================
 
     async def dispose(self) -> None:
-        """Dispose all resources."""
+        """Dispose all resources with proper cancellation - IMPROVED."""
         logger.info("[AppContainer] Disposing...")
 
-        # Shutdown UI first
+        # Step 1: Shutdown UI first (stops new operations)
         if self._ui_container:
             try:
                 self._ui_container.shutdown()
+                await asyncio.sleep(0.1)  # Brief pause
             except Exception as e:
                 logger.warning(f"UI shutdown error: {e}")
             self._ui_container = None
 
-        # Brief delay for pending operations
-        await asyncio.sleep(0.1)
+        # Step 2: Dispose sync orchestrator
+        if self._sync_orchestrator:
+            try:
+                if hasattr(self._sync_orchestrator, "dispose"):
+                    self._sync_orchestrator.dispose()
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                logger.warning(f"Sync orchestrator dispose error: {e}")
 
-        # Dispose remote source
+        # Step 3: Wait for pending operations
+        await asyncio.sleep(0.2)
+
+        # Step 4: Dispose remote source (with proper task cleanup)
         remote = self._infrastructure.remote_data_source()
         if remote:
             try:
+                # Cancel pending tasks first
                 if hasattr(remote, "cancel_pending"):
                     await remote.cancel_pending()
+                    await asyncio.sleep(0.1)
+
+                # Then dispose
                 await remote.dispose()
+                logger.info("[AppContainer] Remote source disposed")
+
+            except RuntimeError as e:
+                error_msg = str(e)
+                if "different loop" in error_msg or "future belongs" in error_msg:
+                    logger.debug("[AppContainer] Remote disposal race: %s", error_msg[:100])
+                else:
+                    logger.warning(f"Remote source dispose error: {e}")
             except Exception as e:
                 logger.warning(f"Remote source dispose error: {e}")
 
-        # Dispose database manager
+        # Step 5: Dispose database manager
         db_manager = self._infrastructure.database_manager()
         if db_manager:
             try:
                 await db_manager.dispose()
+                logger.info("[AppContainer] Database manager disposed")
             except Exception as e:
                 logger.warning(f"Database manager dispose error: {e}")
 
-        # Clear device adapter cache
-        adapter = self._infrastructure.device_file_adapter()
-        if adapter and hasattr(adapter, "invalidate_cache"):
-            adapter.invalidate_cache()
+        # Step 6: Process remaining events
+        try:
+            from PySide6.QtCore import QCoreApplication
 
-        # Reset container singletons
+            QCoreApplication.processEvents()
+            QCoreApplication.sendPostedEvents()
+        except Exception:
+            pass
+
+        # Step 7: Reset container
         self._infrastructure.reset_singletons()
-
         self._sync_orchestrator = None
         self._uow_factory = None
         self._initialized = False

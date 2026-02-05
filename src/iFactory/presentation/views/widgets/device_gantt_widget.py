@@ -1,12 +1,11 @@
-# File: presentation/views/widgets/device_gantt_widget.py
+# File: src/iFactory/presentation/views/widgets/device_gantt_widget.py
 """
-Device Gantt Widget - Optimized for 50px height.
+Device Gantt Widget - Updated with live status integration.
 
-OPTIMIZED:
-1. Skip redundant renders using render_id
-2. Lazy theme updates
-3. Cached color lookups
-4. Efficient segment precomputation
+CHANGES:
+- Uses effective_status from GanttChartModel (live status priority)
+- Subscribes to DeviceStatusService for real-time updates
+- Improved _get_current_status_color logic
 """
 
 from __future__ import annotations
@@ -37,6 +36,10 @@ from PySide6.QtWidgets import (
 
 from ...constants.colors import get_color_registry, ColorRegistry
 from ...constants.status import Status
+from ...services.device_status_service import (
+    get_device_status_service,
+    DeviceStatus,
+)
 
 if TYPE_CHECKING:
     from ...services.theme_service import ThemeService
@@ -170,10 +173,7 @@ class DeviceGanttDisplayWidget(QWidget):
     """
     Compact Gantt chart widget - 50px height.
 
-    OPTIMIZED:
-    1. Skip redundant renders using render_id
-    2. Lazy theme updates (no double render)
-    3. Cached color lookups
+    UPDATED: Integrates with DeviceStatusService for live status sync.
     """
 
     device_clicked = Signal(str)
@@ -196,6 +196,9 @@ class DeviceGanttDisplayWidget(QWidget):
         self._theme_service = theme_service
         self._colors = get_color_registry()
 
+        # ✅ NEW: Status service integration
+        self._status_service = get_device_status_service()
+
         # Data state
         self._device_code: Optional[str] = None
         self._device_name: str = ""
@@ -204,6 +207,10 @@ class DeviceGanttDisplayWidget(QWidget):
         self._end_time: Optional[datetime] = None
         self._current_time: Optional[datetime] = None
         self._total_seconds: float = 86400
+
+        # ✅ NEW: Live status cache
+        self._live_status_code: Optional[int] = None
+        self._live_status_color: Optional[str] = None
 
         # UI state
         self._is_loading: bool = False
@@ -215,6 +222,9 @@ class DeviceGanttDisplayWidget(QWidget):
 
         self._setup_ui()
         self._theme_service.themeChanged.connect(self._on_theme_changed)
+
+        # ✅ NEW: Subscribe to status changes
+        self._status_service.statusChanged.connect(self._on_status_changed)
 
     @property
     def tokens(self):
@@ -249,16 +259,53 @@ class DeviceGanttDisplayWidget(QWidget):
 
         self._apply_theme()
 
+    # ========================================================================
+    # ✅ NEW: Status Service Integration
+    # ========================================================================
+
+    @Slot(str, object)
+    def _on_status_changed(self, device_id: str, change: Any) -> None:
+        """Handle status change from DeviceStatusService."""
+        if device_id != self._device_code:
+            return
+
+        # Get new status
+        status = self._status_service.get_device_status(device_id)
+        if not status:
+            return
+
+        # Update cached status
+        old_code = self._live_status_code
+        self._live_status_code = status.status_code
+        self._live_status_color = status.status_color
+
+        # Update label color if changed
+        if old_code != status.status_code:
+            self._update_label_style(status.status_color)
+            logger.debug(f"[GanttWidget] Live status update: {device_id} " f"{old_code} → {status.status_code}")
+
+    def _get_live_status_color(self) -> Optional[str]:
+        """Get live status color from service."""
+        if not self._device_code:
+            return None
+
+        status = self._status_service.get_device_status(self._device_code)
+        if status and not status.is_stale:
+            return status.status_color
+        return None
+
+    # ========================================================================
+    # Theme
+    # ========================================================================
+
     @Slot(str)
     def _on_theme_changed(self, theme: str) -> None:
-        """Handle theme change - OPTIMIZED."""
         if theme == self._current_theme:
-            return  # No change
+            return
 
         self._current_theme = theme
         self._apply_theme()
 
-        # Only re-render if we have data
         if self._device_code and self._precomputed_segments:
             self._render_timeline()
 
@@ -289,8 +336,7 @@ class DeviceGanttDisplayWidget(QWidget):
         )
 
     def set_theme(self, is_dark: bool) -> None:
-        """Compatibility method - now a no-op to prevent double rendering."""
-        # Theme is already handled by themeChanged signal
+        """Compatibility method."""
         pass
 
     def _update_label_style(self, bg_color: str) -> None:
@@ -308,6 +354,10 @@ class DeviceGanttDisplayWidget(QWidget):
         """
         )
 
+    # ========================================================================
+    # Public API
+    # ========================================================================
+
     def show_placeholder(self) -> None:
         self._stop_loading_animation()
         self._device_code = None
@@ -316,6 +366,8 @@ class DeviceGanttDisplayWidget(QWidget):
         self._precomputed_segments.clear()
         self._is_loading = False
         self._last_render_id = ""
+        self._live_status_code = None
+        self._live_status_color = None
         self._scene.clear()
 
         vp = self._view.viewport()
@@ -339,18 +391,25 @@ class DeviceGanttDisplayWidget(QWidget):
         start_time: datetime,
         end_time: datetime,
         current_time: Optional[datetime] = None,
+        live_status_code: Optional[int] = None,  # ✅ NEW: Optional live status
+        live_status_color: Optional[str] = None,
     ) -> None:
-        """Render Gantt chart - OPTIMIZED with render_id check."""
+        """
+        Render Gantt chart.
+
+        UPDATED: Accepts optional live_status_code for sync with Device Canvas.
+        """
         segment_count = len(segments) if segments else 0
         is_loading = "(Loading...)" in device_name
 
-        # Create render ID to skip duplicate renders
-        render_id = f"{device_code}:{segment_count}:{'L' if is_loading else 'D'}:{self._current_theme}"
+        # Create render ID
+        status_for_id = live_status_code if live_status_code is not None else "N"
+        render_id = f"{device_code}:{segment_count}:{'L' if is_loading else 'D'}:{self._current_theme}:{status_for_id}"
         if not is_loading and render_id == self._last_render_id:
-            return  # Skip duplicate render
+            return
 
         if not is_loading:
-            logger.debug(f"[GanttWidget] render: {device_code}, {segment_count} segments")
+            logger.debug(f"[GanttWidget] render: {device_code}, {segment_count} segments, live={live_status_code}")
 
         self._last_render_id = render_id
         self._device_code = device_code
@@ -361,10 +420,15 @@ class DeviceGanttDisplayWidget(QWidget):
         self._total_seconds = (end_time - start_time).total_seconds()
         self._is_loading = is_loading
 
+        # ✅ Store live status
+        self._live_status_code = live_status_code
+        self._live_status_color = live_status_color
+
         label_text = device_code[:6] if len(device_code) > 6 else device_code
         self._device_label.setText(label_text)
 
-        current_color = self._get_current_status_color(segments)
+        # ✅ UPDATED: Get color with live status priority
+        current_color = self._get_current_status_color_v2(segments, live_status_code, live_status_color)
         self._update_label_style(current_color)
 
         self._precompute_segments(segments or [])
@@ -375,17 +439,76 @@ class DeviceGanttDisplayWidget(QWidget):
             self._stop_loading_animation()
             self._render_timeline()
 
-    def _get_current_status_color(self, segments: List[Dict[str, Any]]) -> str:
+    def _get_current_status_color_v2(
+        self,
+        segments: List[Dict[str, Any]],
+        live_status_code: Optional[int] = None,
+        live_status_color: Optional[str] = None,
+    ) -> str:
+        """
+        Get current status color with live status priority.
+
+        Priority order:
+        1. Explicit live_status_color parameter
+        2. Live status from DeviceStatusService
+        3. Computed from segments (fallback)
+        """
+        # 1. Use explicit parameter if provided
+        if live_status_color:
+            return live_status_color
+
+        if live_status_code is not None:
+            return Status.get_color(live_status_code)
+
+        # 2. Try to get from DeviceStatusService
+        service_color = self._get_live_status_color()
+        if service_color:
+            return service_color
+
+        # 3. Fallback: compute from segments
+        return self._get_current_status_color_from_segments(segments)
+
+    def _get_current_status_color_from_segments(self, segments: List[Dict[str, Any]]) -> str:
+        """
+        Compute current status color from segments.
+
+        IMPROVED: Better logic for finding active segment.
+        """
         if not segments:
             return self.tokens.text_muted
 
         now = datetime.now()
+
+        # Find currently active segment
+        for seg in segments:
+            seg_start = seg.get("start_time")
+            seg_end = seg.get("end_time")
+
+            if not seg_start:
+                continue
+
+            # Check if segment is active now
+            if seg_start <= now:
+                # Active if: end_time is None (ongoing) OR end_time >= now
+                if seg_end is None or seg_end >= now:
+                    return Status.get_color(int(seg.get("status_code", 0)))
+
+        # Fallback: last segment with end_time >= now
         for seg in reversed(segments):
             end_time = seg.get("end_time")
             if end_time and end_time >= now:
                 return Status.get_color(int(seg.get("status_code", 0)))
 
-        return Status.get_color(int(segments[-1].get("status_code", 0)))
+        # Final fallback: last segment
+        if segments:
+            return Status.get_color(int(segments[-1].get("status_code", 0)))
+
+        return self.tokens.text_muted
+
+    # Keep original method for backward compatibility
+    def _get_current_status_color(self, segments: List[Dict[str, Any]]) -> str:
+        """DEPRECATED: Use _get_current_status_color_v2 instead."""
+        return self._get_current_status_color_from_segments(segments)
 
     def _precompute_segments(self, segments: List[Dict[str, Any]]) -> None:
         self._precomputed_segments.clear()
@@ -642,6 +765,19 @@ class DeviceGanttDisplayWidget(QWidget):
         super().showEvent(event)
         if self._is_loading:
             self._start_loading_animation()
+
+    # ========================================================================
+    # Cleanup
+    # ========================================================================
+
+    def cleanup(self) -> None:
+        """Clean up resources."""
+        try:
+            self._status_service.statusChanged.disconnect(self._on_status_changed)
+        except (RuntimeError, TypeError):
+            pass
+
+        self._stop_loading_animation()
 
 
 __all__ = ["DeviceGanttDisplayWidget", "GanttSegmentItem", "PrecomputedGanttSegment"]

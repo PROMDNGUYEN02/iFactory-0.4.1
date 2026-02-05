@@ -1128,6 +1128,43 @@ class RightPanelView:
         self._bind_signals()
         self._apply_container_style()
 
+    def _get_device_loading_state(self, device_id: str) -> Optional[Any]:
+        """
+        Get device loading state safely.
+
+        Handles different attribute names in DeviceListViewModel versions.
+
+        Returns:
+            Device state object with phase/last_update, or None
+        """
+        if not self._device_vm:
+            return None
+
+        # Try different attribute access patterns
+        try:
+            # New optimized version with DeviceStateManager
+            if hasattr(self._device_vm, "_state_manager"):
+                return self._device_vm._state_manager.get_state(device_id)
+
+            # Legacy version with dict-based state
+            elif hasattr(self._device_vm, "_loading_state"):
+                return self._device_vm._loading_state.get(device_id)
+
+            # Method-based access
+            elif hasattr(self._device_vm, "get_device_loading_phase"):
+
+                class StateProxy:
+                    def __init__(self, vm, dev_id):
+                        self.phase = vm.get_device_loading_phase(dev_id)
+                        self.last_update = vm.get_device_last_update(dev_id) if hasattr(vm, "get_device_last_update") else None
+
+                return StateProxy(self._device_vm, device_id)
+
+        except Exception as e:
+            logger.debug(f"[RightPanel] State access error for {device_id}: {e}")
+
+        return None
+
     def _setup_ui(self) -> None:
         """Setup panel UI with stacked content."""
         # Clear existing
@@ -1210,7 +1247,7 @@ class RightPanelView:
 
     @Slot(object)
     def _on_selection_changed(self, selection) -> None:
-        """Handle device selection."""
+        """Handle device selection with safe state access."""
         if not selection.has_selection:
             self._state = RightPanelState(
                 is_expanded=self._state.is_expanded, selected_device_id=None, theme=self._state.theme, content_state=PanelState.PLACEHOLDER
@@ -1221,21 +1258,29 @@ class RightPanelView:
             return
 
         device_id = selection.selected_device_id
-        is_same = device_id == self._state.selected_device_id
 
         self._state = RightPanelState(
             is_expanded=self._state.is_expanded, selected_device_id=device_id, theme=self._state.theme, content_state=self._state.content_state
         )
 
-        # Check states
+        # Check loading state safely
         if self._device_vm.is_device_loading(device_id):
             self._stack.setCurrentIndex(PanelState.LOADING)
             self._header.set_title(f"Loading {device_id}...")
             return
 
+        # Check error state safely
         error = self._device_vm.get_device_error(device_id)
         if error:
-            retry_count = self._device_vm._loading_state.get_retry_count(device_id)
+            # Get retry count safely
+            retry_count = 0
+            try:
+                state = self._get_device_loading_state(device_id)
+                if state and hasattr(state, "retry_count"):
+                    retry_count = state.retry_count
+            except Exception:
+                pass
+
             self._error_state.set_error(error, retry_count)
             self._stack.setCurrentIndex(PanelState.ERROR)
             self._header.set_title(f"Error - {device_id}")
@@ -1248,9 +1293,19 @@ class RightPanelView:
             self._stack.setCurrentIndex(PanelState.CONTENT)
             self._header.set_title(device_id)
 
-            # Check stale
+            # Check stale state safely
             if self._device_vm.is_device_stale(device_id):
-                last_update = self._device_vm._loading_state.get_last_update(device_id)
+                last_update = None
+                try:
+                    state = self._get_device_loading_state(device_id)
+                    if state:
+                        if hasattr(state, "last_update"):
+                            last_update = state.last_update
+                        elif isinstance(state, dict):
+                            last_update = state.get("last_update")
+                except Exception:
+                    pass
+
                 self._stale_banner.show_stale(last_update)
             else:
                 self._stale_banner.hide()
@@ -1278,11 +1333,18 @@ class RightPanelView:
 
     @Slot(str, str)
     def _on_error_changed(self, device_id: str, error: str) -> None:
-        """Handle error state."""
+        """Handle error state with safe retry count access."""
         if device_id != self._state.selected_device_id:
             return
 
-        retry_count = self._device_vm._loading_state.get_retry_count(device_id)
+        retry_count = 0
+        try:
+            state = self._get_device_loading_state(device_id)
+            if state and hasattr(state, "retry_count"):
+                retry_count = state.retry_count
+        except Exception:
+            pass
+
         self._error_state.set_error(error, retry_count)
         self._stack.setCurrentIndex(PanelState.ERROR)
         self._header.set_title(f"Error - {device_id}")
@@ -1304,9 +1366,19 @@ class RightPanelView:
 
     @Slot(list)
     def _on_stale_detected(self, stale_devices: List[str]) -> None:
-        """Handle stale data detection."""
+        """Handle stale data detection with safe state access."""
         if self._state.selected_device_id in stale_devices:
-            last_update = self._device_vm._loading_state.get_last_update(self._state.selected_device_id)
+            last_update = None
+            try:
+                state = self._get_device_loading_state(self._state.selected_device_id)
+                if state:
+                    if hasattr(state, "last_update"):
+                        last_update = state.last_update
+                    elif isinstance(state, dict):
+                        last_update = state.get("last_update")
+            except Exception:
+                pass
+
             self._stale_banner.show_stale(last_update)
 
     @Slot(str, object)

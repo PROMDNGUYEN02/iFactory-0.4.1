@@ -1,14 +1,40 @@
-# File: application/commands/sync.py
+# src/iFactory/application/commands/sync.py
 """
-Sync Commands - With Remote ID Mapping Support.
+Optimized Sync Commands with Batch Operations.
+
+OPTIMIZATION CONCEPTS IMPLEMENTED:
+1. Batch Repository Operations - Bulk database operations
+2. Memory-Optimized Models - Slots, frozen dataclasses
+3. Request Batching - Automatic request aggregation
+4. Parallel Execution - Concurrent chunk processing
+5. Progressive Results - Yield results as available
+
+Version: 2.0
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Protocol
+from enum import IntEnum
+from typing import (
+    Any,
+    AsyncGenerator,
+    Callable,
+    Dict,
+    FrozenSet,
+    Iterator,
+    List,
+    Optional,
+    Protocol,
+    Set,
+    Tuple,
+    TypeVar,
+)
 
 from iFactory.application.ports.uow import AbstractUnitOfWork
 from iFactory.application.ports.remote import IRemoteDataSource
@@ -19,6 +45,27 @@ from iFactory.domain.value_objects.status_period import StatusPeriod
 from iFactory.domain.value_objects.time_range import TimeRange
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+# Batch configuration
+DEFAULT_BATCH_SIZE = 20
+MAX_BATCH_SIZE = 50
+BATCH_DEBOUNCE_MS = 100
+MAX_CONCURRENT_BATCHES = 4
+CHUNK_SIZE = 5
+
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_BASE_DELAY_MS = 1000
+
+# Cache configuration
+CACHE_TTL_SECONDS = 30
 
 
 # =============================================================================
@@ -45,6 +92,8 @@ class IDeviceIdMapper(Protocol):
 class NoOpIdMapper:
     """Default mapper that returns IDs unchanged."""
 
+    __slots__ = ()
+
     def to_remote_ids(self, display_ids: List[str]) -> List[str]:
         return display_ids
 
@@ -56,61 +105,110 @@ class NoOpIdMapper:
 
 
 # =============================================================================
-# Command Data Classes (Explicit Arguments)
+# Memory-Optimized Data Models
 # =============================================================================
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SyncLatestStatusRequest:
-    """Request to sync latest status for specified devices."""
+    """
+    Immutable request for latest status sync.
 
-    device_ids: List[str]
-    """Explicit list of DISPLAY equipment codes to sync. Empty list = no-op."""
+    Uses frozen=True for immutability and hashability.
+    Uses slots=True for memory efficiency.
+    """
+
+    device_ids: Tuple[str, ...]  # Tuple for immutability
+    priority: int = 0  # 0 = normal, higher = more urgent
+    skip_cache: bool = False
+
+    @classmethod
+    def from_list(
+        cls,
+        device_ids: List[str],
+        priority: int = 0,
+        skip_cache: bool = False,
+    ) -> "SyncLatestStatusRequest":
+        """Create from list (converts to tuple)."""
+        return cls(
+            device_ids=tuple(device_ids),
+            priority=priority,
+            skip_cache=skip_cache,
+        )
+
+    def __hash__(self) -> int:
+        return hash(self.device_ids)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SyncHistoryRequest:
-    """Request to sync history for specified devices within a time range."""
+    """Immutable request for history sync."""
 
-    device_ids: List[str]
-    """Explicit list of DISPLAY equipment codes to sync."""
-
+    device_ids: Tuple[str, ...]
     start_time: datetime
-    """Start of time range (inclusive)."""
-
     end_time: datetime
-    """End of time range (inclusive)."""
+
+    @classmethod
+    def from_list(
+        cls,
+        device_ids: List[str],
+        start_time: datetime,
+        end_time: datetime,
+    ) -> "SyncHistoryRequest":
+        return cls(
+            device_ids=tuple(device_ids),
+            start_time=start_time,
+            end_time=end_time,
+        )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SyncIncrementalRequest:
-    """Request to sync recent history records for specified devices."""
+    """Immutable request for incremental sync."""
 
-    device_ids: List[str]
-    """Explicit list of DISPLAY equipment codes to sync."""
-
+    device_ids: Tuple[str, ...]
     record_limit: int = 2
-    """Number of recent records to fetch per device."""
+
+    @classmethod
+    def from_list(
+        cls,
+        device_ids: List[str],
+        record_limit: int = 2,
+    ) -> "SyncIncrementalRequest":
+        return cls(
+            device_ids=tuple(device_ids),
+            record_limit=record_limit,
+        )
 
 
-# =============================================================================
-# Response Data Classes
-# =============================================================================
-
-
-@dataclass
+@dataclass(frozen=True, slots=True)
 class SyncedDeviceData:
-    """Data transfer object for a synced device."""
+    """
+    Memory-optimized device data transfer object.
 
-    equip_code: str  # Display ID (e.g., ALS01)
-    status_code: str
+    Immutable for thread safety and reduced memory churn.
+    """
+
+    equip_code: str
+    status_code: int  # Use int instead of str for memory
     status_name: str
     last_update: Optional[datetime]
     equip_name: Optional[str]
     is_active: bool
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary (for serialization)."""
+        return {
+            "equip_code": self.equip_code,
+            "status_code": str(self.status_code),
+            "status_name": self.status_name,
+            "last_update": self.last_update,
+            "equip_name": self.equip_name,
+            "is_active": self.is_active,
+        }
 
-@dataclass
+
+@dataclass(slots=True)
 class SyncLatestStatusResult:
     """Result of a latest status sync operation."""
 
@@ -118,19 +216,34 @@ class SyncLatestStatusResult:
     count: int = 0
     timestamp: Optional[datetime] = None
     error: Optional[str] = None
+    from_cache: bool = False
+    duration_ms: float = 0.0
 
     @property
     def success(self) -> bool:
         return self.error is None
 
+    def merge(self, other: "SyncLatestStatusResult") -> "SyncLatestStatusResult":
+        """Merge two results."""
+        merged_devices = {**self.devices, **other.devices}
+        return SyncLatestStatusResult(
+            devices=merged_devices,
+            count=len(merged_devices),
+            timestamp=other.timestamp or self.timestamp,
+            error=other.error or self.error,
+            from_cache=self.from_cache and other.from_cache,
+            duration_ms=max(self.duration_ms, other.duration_ms),
+        )
 
-@dataclass
+
+@dataclass(slots=True)
 class SyncHistoryResult:
     """Result of a history sync operation."""
 
     records_synced: int = 0
     devices_processed: int = 0
     error: Optional[str] = None
+    duration_ms: float = 0.0
 
     @property
     def success(self) -> bool:
@@ -138,15 +251,320 @@ class SyncHistoryResult:
 
 
 # =============================================================================
-# Command Handlers
+# Batch Request Manager
+# =============================================================================
+
+
+class BatchRequestManager:
+    """
+    Manages automatic batching of sync requests.
+
+    Features:
+    - Request aggregation with debouncing
+    - Size-based batch splitting
+    - Priority ordering
+    - Deduplication
+    - In-flight tracking
+    """
+
+    def __init__(
+        self,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        debounce_ms: int = BATCH_DEBOUNCE_MS,
+        max_concurrent: int = MAX_CONCURRENT_BATCHES,
+    ):
+        self._batch_size = batch_size
+        self._debounce_ms = debounce_ms
+        self._max_concurrent = max_concurrent
+
+        # Pending requests by priority
+        self._pending: Dict[int, Set[str]] = defaultdict(set)
+
+        # In-flight tracking
+        self._in_flight: Set[str] = set()
+
+        # Futures for waiting callers
+        self._waiters: List[Tuple[Set[str], asyncio.Future]] = []
+
+        # State
+        self._batch_task: Optional[asyncio.Task] = None
+        self._debounce_event = asyncio.Event()
+        self._lock = asyncio.Lock()
+
+        # Stats
+        self._stats = {
+            "requests_received": 0,
+            "requests_batched": 0,
+            "batches_executed": 0,
+            "duplicates_skipped": 0,
+        }
+
+    async def add_request(
+        self,
+        device_ids: List[str],
+        priority: int = 0,
+    ) -> asyncio.Future:
+        """
+        Add devices to pending batch.
+
+        Args:
+            device_ids: Devices to sync
+            priority: Higher priority = processed first
+
+        Returns:
+            Future that resolves with the batch result
+        """
+        async with self._lock:
+            self._stats["requests_received"] += 1
+
+            # Filter already in-flight
+            new_ids = set(device_ids) - self._in_flight
+
+            if not new_ids:
+                self._stats["duplicates_skipped"] += 1
+                future = asyncio.Future()
+                future.set_result(SyncLatestStatusResult(count=0))
+                return future
+
+            # Add to pending
+            self._pending[priority].update(new_ids)
+            self._stats["requests_batched"] += len(new_ids)
+
+            # Create future for this request
+            future = asyncio.Future()
+            self._waiters.append((new_ids, future))
+
+            # Trigger debounced processing
+            self._debounce_event.set()
+
+            # Start batch processor if not running
+            if self._batch_task is None or self._batch_task.done():
+                self._batch_task = asyncio.create_task(self._process_loop())
+
+            return future
+
+    async def _process_loop(self) -> None:
+        """Main processing loop with debouncing."""
+        while True:
+            # Wait for requests or debounce timeout
+            try:
+                await asyncio.wait_for(
+                    self._debounce_event.wait(),
+                    timeout=self._debounce_ms / 1000,
+                )
+            except asyncio.TimeoutError:
+                pass
+
+            self._debounce_event.clear()
+
+            # Check if there's work to do
+            async with self._lock:
+                if not any(self._pending.values()):
+                    break
+
+                # Take batch from highest priority
+                batch = await self._take_batch()
+
+            if batch:
+                await self._execute_batch(batch)
+
+    async def _take_batch(self) -> List[str]:
+        """Take a batch of devices to process."""
+        batch: List[str] = []
+
+        # Process priorities in descending order
+        for priority in sorted(self._pending.keys(), reverse=True):
+            pending_set = self._pending[priority]
+
+            while pending_set and len(batch) < self._batch_size:
+                device_id = pending_set.pop()
+                batch.append(device_id)
+                self._in_flight.add(device_id)
+
+            if not pending_set:
+                del self._pending[priority]
+
+            if len(batch) >= self._batch_size:
+                break
+
+        return batch
+
+    async def _execute_batch(self, device_ids: List[str]) -> None:
+        """Execute batch and resolve waiting futures."""
+        self._stats["batches_executed"] += 1
+
+        try:
+            # This should be overridden or injected
+            result = await self._fetch_batch(device_ids)
+
+            # Resolve waiting futures
+            resolved_waiters = []
+
+            for waiting_ids, future in self._waiters:
+                # Check if any of the waiting IDs were in this batch
+                if waiting_ids & set(device_ids):
+                    if not future.done():
+                        # Filter result to only include requested devices
+                        filtered_result = SyncLatestStatusResult(
+                            devices={k: v for k, v in result.devices.items() if k in waiting_ids},
+                            count=len([k for k in result.devices if k in waiting_ids]),
+                            timestamp=result.timestamp,
+                        )
+                        future.set_result(filtered_result)
+                    resolved_waiters.append((waiting_ids, future))
+
+            # Remove resolved waiters
+            for waiter in resolved_waiters:
+                self._waiters.remove(waiter)
+
+        except Exception as e:
+            logger.error(f"[BatchManager] Batch execution failed: {e}")
+
+            # Reject waiting futures
+            for waiting_ids, future in self._waiters:
+                if waiting_ids & set(device_ids):
+                    if not future.done():
+                        future.set_exception(e)
+
+        finally:
+            # Remove from in-flight
+            async with self._lock:
+                self._in_flight -= set(device_ids)
+
+    async def _fetch_batch(self, device_ids: List[str]) -> SyncLatestStatusResult:
+        """
+        Fetch data for batch. Override or inject implementation.
+        """
+        raise NotImplementedError("Override _fetch_batch or inject implementation")
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get batch manager statistics."""
+        return {
+            **self._stats,
+            "pending_count": sum(len(s) for s in self._pending.values()),
+            "in_flight_count": len(self._in_flight),
+            "waiting_futures": len(self._waiters),
+        }
+
+
+# =============================================================================
+# Parallel Chunk Processor
+# =============================================================================
+
+
+class ParallelChunkProcessor:
+    """
+    Process large device lists in parallel chunks.
+
+    Optimizes large batch operations by:
+    - Splitting into optimal chunk sizes
+    - Processing chunks concurrently
+    - Aggregating results progressively
+    - Handling partial failures gracefully
+    """
+
+    def __init__(
+        self,
+        chunk_size: int = CHUNK_SIZE,
+        max_concurrent: int = MAX_CONCURRENT_BATCHES,
+    ):
+        self._chunk_size = chunk_size
+        self._max_concurrent = max_concurrent
+        self._semaphore: Optional[asyncio.Semaphore] = None
+
+    async def process(
+        self,
+        device_ids: List[str],
+        process_func: Callable[[List[str]], Any],
+    ) -> List[Any]:
+        """
+        Process devices in parallel chunks.
+
+        Args:
+            device_ids: All device IDs to process
+            process_func: Async function to process each chunk
+
+        Returns:
+            List of results from all successful chunks
+        """
+        if not device_ids:
+            return []
+
+        # Create semaphore for concurrency control
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._max_concurrent)
+
+        # Split into chunks
+        chunks = [device_ids[i : i + self._chunk_size] for i in range(0, len(device_ids), self._chunk_size)]
+
+        logger.debug(f"[ParallelProcessor] Processing {len(device_ids)} devices " f"in {len(chunks)} chunks")
+
+        # Process all chunks
+        async def process_with_semaphore(chunk: List[str], index: int):
+            async with self._semaphore:
+                try:
+                    return await process_func(chunk)
+                except Exception as e:
+                    logger.warning(f"[ParallelProcessor] Chunk {index} failed: {e}")
+                    return None
+
+        results = await asyncio.gather(*[process_with_semaphore(chunk, i) for i, chunk in enumerate(chunks)])
+
+        # Filter successful results
+        valid_results = [r for r in results if r is not None]
+
+        logger.debug(f"[ParallelProcessor] Completed: " f"{len(valid_results)}/{len(chunks)} chunks successful")
+
+        return valid_results
+
+    async def process_progressive(
+        self,
+        device_ids: List[str],
+        process_func: Callable[[List[str]], Any],
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Process chunks and yield results as they complete.
+
+        Use this for progressive UI updates.
+        """
+        if not device_ids:
+            return
+
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._max_concurrent)
+
+        chunks = [device_ids[i : i + self._chunk_size] for i in range(0, len(device_ids), self._chunk_size)]
+
+        async def process_with_semaphore(chunk: List[str]):
+            async with self._semaphore:
+                return await process_func(chunk)
+
+        # Create tasks
+        tasks = [asyncio.create_task(process_with_semaphore(chunk)) for chunk in chunks]
+
+        # Yield results as they complete
+        for completed in asyncio.as_completed(tasks):
+            try:
+                result = await completed
+                yield result
+            except Exception as e:
+                logger.warning(f"[ParallelProcessor] Chunk error: {e}")
+
+
+# =============================================================================
+# Optimized Sync Handlers
 # =============================================================================
 
 
 class SyncLatestStatusHandler:
     """
-    Handler: Sync latest status for explicitly specified devices.
+    Optimized handler for syncing latest device status.
 
-    Supports mapping between display IDs (UI) and remote IDs (database).
+    Features:
+    - Batch fetching
+    - Bulk repository operations
+    - Memory-efficient processing
+    - Result caching
     """
 
     def __init__(
@@ -154,154 +572,238 @@ class SyncLatestStatusHandler:
         remote_source: IRemoteDataSource,
         uow_factory: Callable[[], AbstractUnitOfWork],
         id_mapper: Optional[IDeviceIdMapper] = None,
+        enable_batching: bool = True,
+        enable_caching: bool = True,
     ):
         self._remote_source = remote_source
         self._uow_factory = uow_factory
         self._id_mapper = id_mapper or NoOpIdMapper()
+        self._enable_batching = enable_batching
+        self._enable_caching = enable_caching
+
+        # Batch manager
+        self._batch_manager: Optional[BatchRequestManager] = None
+        if enable_batching:
+            self._batch_manager = BatchRequestManager()
+            self._batch_manager._fetch_batch = self._fetch_batch_internal
+
+        # Chunk processor
+        self._chunk_processor = ParallelChunkProcessor()
+
+        # Result cache
+        self._cache: Dict[str, Tuple[SyncedDeviceData, float]] = {}
 
     async def execute(self, request: SyncLatestStatusRequest) -> SyncLatestStatusResult:
-        """
-        Execute sync for the specified devices.
-
-        Args:
-            request: Contains explicit device_ids (DISPLAY IDs) to sync.
-
-        Returns:
-            SyncLatestStatusResult with synced device data (using DISPLAY IDs).
-        """
+        """Execute sync with optimizations."""
         if not request.device_ids:
             return SyncLatestStatusResult(count=0, timestamp=datetime.now())
 
-        # Step 1: Convert display IDs to remote IDs for fetching
-        remote_ids = self._id_mapper.to_remote_ids(request.device_ids)
+        start_time = time.time()
+        device_ids = list(request.device_ids)
 
-        logger.debug(f"[SyncLatestStatus] Fetching remote IDs: {remote_ids}")
+        # Check cache first
+        cached_results: Dict[str, SyncedDeviceData] = {}
+        uncached_ids: List[str] = []
 
-        # Step 2: Fetch remote data using REMOTE IDs
+        if self._enable_caching and not request.skip_cache:
+            cached_results, uncached_ids = self._check_cache(device_ids)
+
+            if not uncached_ids:
+                # All from cache
+                duration = (time.time() - start_time) * 1000
+                return SyncLatestStatusResult(
+                    devices=cached_results,
+                    count=len(cached_results),
+                    timestamp=datetime.now(),
+                    from_cache=True,
+                    duration_ms=duration,
+                )
+        else:
+            uncached_ids = device_ids
+
+        # Use batch manager if enabled
+        if self._batch_manager and self._enable_batching:
+            try:
+                future = await self._batch_manager.add_request(uncached_ids, request.priority)
+                result = await future
+
+                # Merge with cached
+                if cached_results:
+                    result.devices.update(cached_results)
+                    result.count = len(result.devices)
+
+                result.duration_ms = (time.time() - start_time) * 1000
+                return result
+
+            except Exception as e:
+                logger.error(f"[SyncHandler] Batch execution failed: {e}")
+                return SyncLatestStatusResult(error=str(e))
+
+        # Direct execution
         try:
-            remote_records = await self._remote_source.fetch_latest_status(remote_ids)
+            result = await self._fetch_batch_internal(uncached_ids)
+
+            # Merge with cached
+            if cached_results:
+                result.devices.update(cached_results)
+                result.count = len(result.devices)
+
+            # Persist to database
+            await self._persist_devices(result.devices)
+
+            result.duration_ms = (time.time() - start_time) * 1000
+            return result
+
         except Exception as e:
-            logger.error(f"[SyncLatestStatus] Remote fetch failed: {e}")
+            logger.error(f"[SyncHandler] Execution failed: {e}")
             return SyncLatestStatusResult(error=str(e))
 
-        if not remote_records:
+    async def _fetch_batch_internal(self, device_ids: List[str]) -> SyncLatestStatusResult:
+        """Internal batch fetch implementation."""
+        # Convert to remote IDs
+        remote_ids = self._id_mapper.to_remote_ids(device_ids)
+
+        logger.debug(f"[SyncHandler] Fetching {len(remote_ids)} devices")
+
+        # Fetch from remote
+        records = await self._remote_source.fetch_latest_status(remote_ids)
+
+        if not records:
             return SyncLatestStatusResult(count=0, timestamp=datetime.now())
 
-        synced_devices: Dict[str, SyncedDeviceData] = {}
+        # Process records
+        devices: Dict[str, SyncedDeviceData] = {}
 
-        async with self._uow_factory() as uow:
-            # Pre-load ALL existing devices in ONE query
-            existing_devices_dict: Dict[str, Device] = {}
-            if uow.devices:
-                try:
-                    all_devices = await uow.devices.get_all()
-                    existing_devices_dict = {device.equipment_code.value.upper(): device for device in all_devices}
-                    logger.debug(f"[SyncLatestStatus] Pre-loaded {len(existing_devices_dict)} existing devices")
-                except Exception as e:
-                    logger.warning(f"[SyncLatestStatus] Failed to pre-load devices: {e}")
+        for record in records:
+            remote_code = record.get("equip_code", "")
+            if not remote_code:
+                continue
 
-            devices_to_save: List[Device] = []
+            display_code = self._id_mapper.to_display_id(remote_code)
 
-            for record in remote_records:
-                try:
-                    # Process record with ID mapping
-                    device = self._process_record(record, existing_devices_dict)
-                    if device:
-                        devices_to_save.append(device)
+            raw_status = record.get("raw_status") or record.get("equip_status", 0)
+            try:
+                status_code = int(raw_status)
+            except (ValueError, TypeError):
+                status_code = 0
 
-                        # Use DISPLAY ID as the key in result
-                        display_id = device.equipment_code.value
-                        synced_devices[display_id] = SyncedDeviceData(
-                            equip_code=display_id,
-                            status_code=str(device.current_status.value),
-                            status_name=device.current_status.name,
-                            last_update=device.last_updated_at,
-                            equip_name=device.equip_name,
-                            is_active=device.is_active,
-                        )
-                except Exception as e:
-                    code = record.get("equip_code", "unknown")
-                    logger.warning(f"[SyncLatestStatus] Error processing {code}: {e}")
+            device_data = SyncedDeviceData(
+                equip_code=display_code,
+                status_code=status_code,
+                status_name=MachineStatus(status_code).name if status_code in [s.value for s in MachineStatus] else "UNKNOWN",
+                last_update=record.get("last_update"),
+                equip_name=record.get("equip_name"),
+                is_active=True,
+            )
 
-            # Bulk save all modified devices
-            if uow.devices and devices_to_save:
-                try:
-                    if hasattr(uow.devices, "bulk_save"):
-                        await uow.devices.bulk_save(devices_to_save)
-                    else:
-                        for device in devices_to_save:
-                            await uow.devices.save(device)
-                except Exception as e:
-                    logger.error(f"[SyncLatestStatus] Bulk save failed: {e}")
+            devices[display_code] = device_data
 
-            await uow.commit()
-
-        logger.info(f"[SyncLatestStatus] Synced {len(synced_devices)} devices")
+            # Update cache
+            if self._enable_caching:
+                self._cache[display_code] = (device_data, time.time())
 
         return SyncLatestStatusResult(
-            devices=synced_devices,
-            count=len(synced_devices),
+            devices=devices,
+            count=len(devices),
             timestamp=datetime.now(),
         )
 
-    def _process_record(self, record: Dict[str, Any], existing_devices: Dict[str, Device]) -> Optional[Device]:
-        """
-        Process a single status record.
+    def _check_cache(self, device_ids: List[str]) -> Tuple[Dict[str, SyncedDeviceData], List[str]]:
+        """Check cache for devices."""
+        current_time = time.time()
+        cached: Dict[str, SyncedDeviceData] = {}
+        uncached: List[str] = []
 
-        Converts remote_id from database to display_id for internal use.
-        """
-        # Get remote code from database
-        remote_code = str(record.get("equip_code", "")).strip()
-        if not remote_code:
-            return None
+        for device_id in device_ids:
+            if device_id in self._cache:
+                data, timestamp = self._cache[device_id]
+                if current_time - timestamp < CACHE_TTL_SECONDS:
+                    cached[device_id] = data
+                    continue
 
-        # *** KEY CHANGE: Convert remote_id to display_id ***
-        display_code = self._id_mapper.to_display_id(remote_code)
+            uncached.append(device_id)
 
-        logger.debug(f"[SyncLatestStatus] Mapping: {remote_code} -> {display_code}")
+        return cached, uncached
 
-        raw_status = record.get("raw_status") or record.get("equip_status") or "0"
-        timestamp = record.get("last_update") or datetime.now()
-        equip_name = record.get("equip_name")
-        reason_code = record.get("reason_code")
+    async def _persist_devices(self, devices: Dict[str, SyncedDeviceData]) -> None:
+        """Bulk persist devices to database."""
+        if not devices:
+            return
 
         try:
-            status_enum = MachineStatus(int(raw_status))
-        except (ValueError, TypeError):
-            status_enum = MachineStatus.UNKNOWN
+            async with self._uow_factory() as uow:
+                if not uow.devices:
+                    return
 
-        # Use DISPLAY code for lookup and storage
-        code_upper = display_code.upper()
-        existing_device = existing_devices.get(code_upper)
+                # Pre-load existing devices
+                existing: Dict[str, Device] = {}
 
-        if existing_device:
-            updated = existing_device.sync_status(status_enum, timestamp)
-            if updated:
-                existing_device.update_remote_info(equip_name, reason_code)
-                return existing_device
-            else:
-                logger.debug(f"[SyncLatestStatus] Stale data ignored for {display_code}")
-                return None
-        else:
-            # Create new device with DISPLAY code
-            code_vo = EquipmentCode(display_code)
-            device = Device(
-                equipment_code=code_vo,
-                current_status=status_enum,
-                last_updated_at=timestamp,
-                equip_name=equip_name,
-                reason_code=reason_code,
-            )
-            existing_devices[code_upper] = device
-            return device
+                try:
+                    all_devices = await uow.devices.get_all()
+                    existing = {d.equipment_code.value.upper(): d for d in all_devices}
+                except Exception as e:
+                    logger.warning(f"[SyncHandler] Pre-load failed: {e}")
+
+                # Prepare batch
+                to_save: List[Device] = []
+
+                for code, data in devices.items():
+                    code_upper = code.upper()
+
+                    try:
+                        status_enum = MachineStatus(data.status_code)
+                    except ValueError:
+                        status_enum = MachineStatus.UNKNOWN
+
+                    if code_upper in existing:
+                        device = existing[code_upper]
+                        if device.sync_status(status_enum, data.last_update):
+                            device.update_remote_info(data.equip_name, None)
+                            to_save.append(device)
+                    else:
+                        device = Device(
+                            equipment_code=EquipmentCode(code),
+                            current_status=status_enum,
+                            last_updated_at=data.last_update or datetime.now(),
+                            equip_name=data.equip_name,
+                        )
+                        to_save.append(device)
+
+                # Bulk save
+                if to_save:
+                    if hasattr(uow.devices, "bulk_save"):
+                        await uow.devices.bulk_save(to_save)
+                    else:
+                        for device in to_save:
+                            await uow.devices.save(device)
+
+                await uow.commit()
+
+                logger.debug(f"[SyncHandler] Persisted {len(to_save)} devices")
+
+        except Exception as e:
+            logger.error(f"[SyncHandler] Persist failed: {e}")
+
+    def clear_cache(self) -> None:
+        """Clear result cache."""
+        self._cache.clear()
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get handler statistics."""
+        stats = {
+            "cache_size": len(self._cache),
+            "caching_enabled": self._enable_caching,
+            "batching_enabled": self._enable_batching,
+        }
+
+        if self._batch_manager:
+            stats["batch_manager"] = self._batch_manager.get_stats()
+
+        return stats
 
 
 class SyncHistoryHandler:
-    """
-    Handler: Sync history for a time range.
-
-    Supports mapping between display IDs (UI) and remote IDs (database).
-    """
+    """Optimized handler for history sync."""
 
     def __init__(
         self,
@@ -312,78 +814,81 @@ class SyncHistoryHandler:
         self._remote_source = remote_source
         self._uow_factory = uow_factory
         self._id_mapper = id_mapper or NoOpIdMapper()
+        self._chunk_processor = ParallelChunkProcessor()
 
     async def execute(self, request: SyncHistoryRequest) -> SyncHistoryResult:
-        """Execute history sync for the specified devices and time range."""
+        """Execute history sync with parallel processing."""
         if not request.device_ids:
             return SyncHistoryResult()
 
+        start_time = time.time()
+        device_ids = list(request.device_ids)
+
         total_synced = 0
         devices_processed = 0
-
         all_periods: List[StatusPeriod] = []
-        equip_names: Dict[str, str] = {}
 
-        try:
-            # Fetch all remote data first
-            device_records: Dict[str, List[Dict[str, Any]]] = {}
+        # Process in parallel chunks
+        async def fetch_device_history(chunk: List[str]) -> List[StatusPeriod]:
+            chunk_periods = []
 
-            for display_id in request.device_ids:
-                # Convert to remote ID for fetching
+            for display_id in chunk:
                 remote_id = self._id_mapper.to_remote_id(display_id)
 
                 try:
                     records = await self._remote_source.fetch_device_history_range(remote_id, request.start_time, request.end_time)
+
                     if records:
-                        # Store with display_id as key
-                        device_records[display_id] = records
+                        periods = self._convert_to_periods(display_id, records)
+                        chunk_periods.extend(periods)
+
                 except Exception as e:
-                    logger.warning(f"[SyncHistory] Remote fetch failed for {display_id}: {e}")
+                    logger.warning(f"[HistoryHandler] Fetch failed for {display_id}: {e}")
 
-            async with self._uow_factory() as uow:
-                if not uow.history:
-                    logger.warning("[SyncHistory] No history repository available")
-                    return SyncHistoryResult(error="No history repository")
+            return chunk_periods
 
-                for display_id, records in device_records.items():
-                    # Use DISPLAY ID for periods
-                    periods, equip_name = self._convert_to_periods(display_id, records)
-                    if periods:
-                        all_periods.extend(periods)
-                        if equip_name:
-                            equip_names[display_id] = equip_name
-                        total_synced += len(periods)
-                        devices_processed += 1
+        # Execute parallel chunks
+        results = await self._chunk_processor.process(device_ids, fetch_device_history)
 
-                if all_periods:
-                    await uow.history.bulk_save_status_history(all_periods, equip_name=next(iter(equip_names.values()), None))
+        # Aggregate results
+        for chunk_periods in results:
+            all_periods.extend(chunk_periods)
 
-                await uow.commit()
+        # Bulk save
+        if all_periods:
+            try:
+                async with self._uow_factory() as uow:
+                    if uow.history:
+                        await uow.history.bulk_save_status_history(all_periods)
+                    await uow.commit()
 
-        except Exception as e:
-            logger.error(f"[SyncHistory] Transaction failed: {e}")
-            return SyncHistoryResult(error=str(e))
+                total_synced = len(all_periods)
+                devices_processed = len(set(p.equipment_code.value for p in all_periods))
 
-        logger.info(f"[SyncHistory] Synced {total_synced} records for {devices_processed} devices")
+            except Exception as e:
+                logger.error(f"[HistoryHandler] Bulk save failed: {e}")
+                return SyncHistoryResult(error=str(e))
+
+        duration = (time.time() - start_time) * 1000
+
+        logger.info(f"[HistoryHandler] Synced {total_synced} records " f"for {devices_processed} devices in {duration:.0f}ms")
 
         return SyncHistoryResult(
             records_synced=total_synced,
             devices_processed=devices_processed,
+            duration_ms=duration,
         )
 
-    def _convert_to_periods(self, display_code: str, records: List[Dict[str, Any]]) -> tuple[List[StatusPeriod], Optional[str]]:  # Use display ID
-        """Convert raw records to StatusPeriod value objects using display ID."""
+    def _convert_to_periods(self, display_code: str, records: List[Dict[str, Any]]) -> List[StatusPeriod]:
+        """Convert records to StatusPeriod objects."""
         periods = []
-        equip_name = None
 
         for record in records:
-            equip_name = equip_name or record.get("equip_name")
             start_time = record.get("start_time")
-
             if not start_time:
                 continue
 
-            raw_status = record.get("equip_status", "0")
+            raw_status = record.get("equip_status", 0)
             try:
                 status_enum = MachineStatus(int(raw_status))
             except (ValueError, TypeError):
@@ -393,7 +898,6 @@ class SyncHistoryHandler:
             if end_time and end_time < start_time:
                 end_time = start_time
 
-            # Use DISPLAY code for the period
             period = StatusPeriod(
                 equipment_code=EquipmentCode(display_code),
                 status=status_enum,
@@ -401,15 +905,11 @@ class SyncHistoryHandler:
             )
             periods.append(period)
 
-        return periods, equip_name
+        return periods
 
 
 class SyncIncrementalHistoryHandler:
-    """
-    Handler: Sync recent history records for upsert.
-
-    Supports mapping between display IDs (UI) and remote IDs (database).
-    """
+    """Optimized handler for incremental history sync."""
 
     def __init__(
         self,
@@ -420,80 +920,74 @@ class SyncIncrementalHistoryHandler:
         self._remote_source = remote_source
         self._uow_factory = uow_factory
         self._id_mapper = id_mapper or NoOpIdMapper()
+        self._chunk_processor = ParallelChunkProcessor()
 
     async def execute(self, request: SyncIncrementalRequest) -> SyncHistoryResult:
-        """Execute incremental history sync."""
+        """Execute incremental sync."""
         if not request.device_ids:
             return SyncHistoryResult()
 
-        total_updated = 0
-        devices_processed = 0
+        start_time = time.time()
+        device_ids = list(request.device_ids)
 
         all_periods: List[StatusPeriod] = []
-        equip_names: Dict[str, str] = {}
 
-        try:
-            device_records: Dict[str, List[Dict[str, Any]]] = {}
+        async def fetch_recent(chunk: List[str]) -> List[StatusPeriod]:
+            chunk_periods = []
 
-            for display_id in request.device_ids:
-                # Convert to remote ID for fetching
+            for display_id in chunk:
                 remote_id = self._id_mapper.to_remote_id(display_id)
 
                 try:
                     records = await self._remote_source.fetch_latest_history_records(remote_id, limit=request.record_limit)
+
                     if records:
-                        device_records[display_id] = records
+                        periods = self._convert_to_periods(display_id, records)
+                        chunk_periods.extend(periods)
+
                 except Exception as e:
-                    logger.debug(f"[SyncIncremental] Remote fetch failed for {display_id}: {e}")
+                    logger.debug(f"[IncrementalHandler] Fetch failed for {display_id}: {e}")
 
-            async with self._uow_factory() as uow:
-                if not uow.history:
-                    return SyncHistoryResult(error="No history repository")
+            return chunk_periods
 
-                for display_id, records in device_records.items():
-                    periods, equip_name = self._convert_to_periods(display_id, records)
-                    if periods:
-                        all_periods.extend(periods)
-                        if equip_name:
-                            equip_names[display_id] = equip_name
-                        total_updated += len(periods)
-                        devices_processed += 1
+        results = await self._chunk_processor.process(device_ids, fetch_recent)
 
-                if all_periods:
-                    if hasattr(uow.history, "bulk_upsert_status_periods"):
-                        await uow.history.bulk_upsert_status_periods(all_periods)
-                    else:
-                        for period in all_periods:
-                            equip_name = equip_names.get(period.equipment_code.value)
-                            await uow.history.save_status_period(period, equip_name=equip_name)
+        for chunk_periods in results:
+            all_periods.extend(chunk_periods)
 
-                await uow.commit()
+        if all_periods:
+            try:
+                async with self._uow_factory() as uow:
+                    if uow.history:
+                        if hasattr(uow.history, "bulk_upsert_status_periods"):
+                            await uow.history.bulk_upsert_status_periods(all_periods)
+                        else:
+                            for period in all_periods:
+                                await uow.history.save_status_period(period)
+                    await uow.commit()
 
-        except Exception as e:
-            logger.error(f"[SyncIncremental] Transaction failed: {e}")
-            return SyncHistoryResult(error=str(e))
+            except Exception as e:
+                logger.error(f"[IncrementalHandler] Bulk upsert failed: {e}")
+                return SyncHistoryResult(error=str(e))
 
-        if total_updated > 0:
-            logger.debug(f"[SyncIncremental] Updated {total_updated} records")
+        duration = (time.time() - start_time) * 1000
 
         return SyncHistoryResult(
-            records_synced=total_updated,
-            devices_processed=devices_processed,
+            records_synced=len(all_periods),
+            devices_processed=len(set(p.equipment_code.value for p in all_periods)),
+            duration_ms=duration,
         )
 
-    def _convert_to_periods(self, display_code: str, records: List[Dict[str, Any]]) -> tuple[List[StatusPeriod], Optional[str]]:
-        """Convert raw records to StatusPeriod value objects using display ID."""
+    def _convert_to_periods(self, display_code: str, records: List[Dict[str, Any]]) -> List[StatusPeriod]:
+        """Convert records to StatusPeriod objects."""
         periods = []
-        equip_name = None
 
         for record in records:
-            equip_name = equip_name or record.get("equip_name")
             start_time = record.get("start_time")
-
             if not start_time:
                 continue
 
-            raw_status = record.get("equip_status", "0")
+            raw_status = record.get("equip_status", 0)
             try:
                 status_enum = MachineStatus(int(raw_status))
             except (ValueError, TypeError):
@@ -510,11 +1004,11 @@ class SyncIncrementalHistoryHandler:
             )
             periods.append(period)
 
-        return periods, equip_name
+        return periods
 
 
 # =============================================================================
-# Legacy Compatibility Wrappers (Updated with mapper support)
+# Legacy Compatibility Wrappers
 # =============================================================================
 
 
@@ -530,21 +1024,11 @@ class SyncLatestStatusCommand:
         self._handler = SyncLatestStatusHandler(remote_source, dual_uow_factory, id_mapper)
 
     async def execute(self, equipment_codes: List[str]) -> Dict[str, Any]:
-        request = SyncLatestStatusRequest(device_ids=equipment_codes)
+        request = SyncLatestStatusRequest.from_list(equipment_codes)
         result = await self._handler.execute(request)
 
         return {
-            "devices": {
-                k: {
-                    "equip_code": v.equip_code,
-                    "status_code": v.status_code,
-                    "status_name": v.status_name,
-                    "last_update": v.last_update,
-                    "equip_name": v.equip_name,
-                    "is_active": v.is_active,
-                }
-                for k, v in result.devices.items()
-            },
+            "devices": {k: v.to_dict() for k, v in result.devices.items()},
             "count": result.count,
             "timestamp": result.timestamp,
             **({"error": result.error} if result.error else {}),
@@ -572,17 +1056,13 @@ class SyncInitialHistoryCommand:
         start = start_time or now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = end_time or now
 
-        request = SyncHistoryRequest(
-            device_ids=equipment_codes,
-            start_time=start,
-            end_time=end,
-        )
+        request = SyncHistoryRequest.from_list(equipment_codes, start, end)
         result = await self._handler.execute(request)
         return result.records_synced
 
 
 class SyncIncrementalHistoryCommand:
-    """DEPRECATED: Use SyncIncrementalHistoryHandler with SyncIncrementalRequest."""
+    """DEPRECATED: Use SyncIncrementalHistoryHandler."""
 
     def __init__(
         self,
@@ -593,7 +1073,7 @@ class SyncIncrementalHistoryCommand:
         self._handler = SyncIncrementalHistoryHandler(remote_source, dual_uow_factory, id_mapper)
 
     async def execute(self, equipment_codes: List[str]) -> int:
-        request = SyncIncrementalRequest(device_ids=equipment_codes)
+        request = SyncIncrementalRequest.from_list(equipment_codes)
         result = await self._handler.execute(request)
         return result.records_synced
 
@@ -610,13 +1090,13 @@ class SyncAllDevicesCommand:
         self._handler = SyncLatestStatusHandler(remote_source, dual_uow_factory, id_mapper)
 
     async def execute(self, equipment_codes: Optional[List[str]] = None) -> int:
-        request = SyncLatestStatusRequest(device_ids=equipment_codes or [])
+        request = SyncLatestStatusRequest.from_list(equipment_codes or [])
         result = await self._handler.execute(request)
         return result.count
 
 
 class SyncDeviceStatusCommand:
-    """Handler: Sync history for a specific device (on-demand)."""
+    """Handler for single device history sync."""
 
     def __init__(
         self,
@@ -629,14 +1109,12 @@ class SyncDeviceStatusCommand:
         self._id_mapper = id_mapper or NoOpIdMapper()
 
     async def execute(self, equip_code: str, days: int = 1) -> bool:
-        """Sync history for a single device using display ID."""
+        """Sync history for a single device."""
         try:
             now = datetime.now()
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-            # Convert display ID to remote ID for fetching
             remote_code = self._id_mapper.to_remote_id(equip_code)
-
             data = await self._remote_api.fetch_device_history_range(remote_code, start, now)
 
             if not data:
@@ -650,7 +1128,7 @@ class SyncDeviceStatusCommand:
                 if not start_time:
                     continue
 
-                raw_status = record.get("equip_status", "0")
+                raw_status = record.get("equip_status", 0)
                 try:
                     status_enum = MachineStatus(int(raw_status))
                 except (ValueError, TypeError):
@@ -660,9 +1138,8 @@ class SyncDeviceStatusCommand:
                 if end_time and end_time < start_time:
                     end_time = start_time
 
-                # Use DISPLAY code for the period
                 period = StatusPeriod(
-                    equipment_code=EquipmentCode(equip_code),  # Display ID
+                    equipment_code=EquipmentCode(equip_code),
                     status=status_enum,
                     time_range=TimeRange(start=start_time, end=end_time),
                 )
@@ -681,21 +1158,29 @@ class SyncDeviceStatusCommand:
             return False
 
 
+# =============================================================================
+# Exports
+# =============================================================================
+
 __all__ = [
-    # Protocol
+    # Protocols
     "IDeviceIdMapper",
     "NoOpIdMapper",
-    # New API (Recommended)
+    # Request/Response (Memory-Optimized)
     "SyncLatestStatusRequest",
     "SyncHistoryRequest",
     "SyncIncrementalRequest",
     "SyncLatestStatusResult",
     "SyncHistoryResult",
     "SyncedDeviceData",
+    # Handlers (Optimized)
     "SyncLatestStatusHandler",
     "SyncHistoryHandler",
     "SyncIncrementalHistoryHandler",
-    # Legacy API (Deprecated)
+    # Batch Processing
+    "BatchRequestManager",
+    "ParallelChunkProcessor",
+    # Legacy (Deprecated)
     "SyncLatestStatusCommand",
     "SyncInitialHistoryCommand",
     "SyncIncrementalHistoryCommand",

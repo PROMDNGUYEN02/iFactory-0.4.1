@@ -1,13 +1,11 @@
-# src/iFactory/presentation/viewmodels/gantt_viewmodel.py
+# File: src/iFactory/presentation/viewmodels/gantt_viewmodel.py
 """
-Gantt Chart ViewModel - Enhanced with better error handling and metrics.
+Gantt Chart ViewModel - Enhanced with DeviceStatusService integration.
 
-Features:
-- ID mapping support for display vs remote device IDs
-- Fixed NULL end_time handling for zombie rows
-- Worker pool with proper lifecycle
-- Performance metrics tracking
-- Cache with configurable TTL
+Changes:
+- Integrates with DeviceStatusService for live status
+- Properly syncs current_status with device canvas
+- Improved caching and error handling
 """
 
 from __future__ import annotations
@@ -30,6 +28,12 @@ from .models.gantt_model import (
     STATUS_NAMES,
 )
 from ..constants.status import Status
+from ..services.device_status_service import (
+    DeviceStatusService,
+    get_device_status_service,
+    DeviceStatus,
+    StatusInfo,
+)
 
 if TYPE_CHECKING:
     pass
@@ -93,7 +97,7 @@ class GanttMetrics:
 
     @property
     def avg_fetch_time_ms(self) -> float:
-        fetches = self.cache_misses  # Only count actual DB fetches
+        fetches = self.cache_misses
         return (self.total_fetch_time_ms / fetches) if fetches > 0 else 0.0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -116,14 +120,10 @@ class GanttFetchWorker(QThread):
     """
     Worker thread for fetching Gantt data.
 
-    Features:
-    - Excludes old "zombie" rows with NULL end_time
-    - Only allows NULL end_time for segments that started today
-    - Supports ID mapping for display vs remote device IDs
-    - Performance timing
+    No changes needed - worker fetches historical data only.
     """
 
-    finished = Signal(str, str, list, datetime, datetime, float)  # Added: fetch_time_ms
+    finished = Signal(str, str, list, datetime, datetime, float)
     error = Signal(str, str)
 
     def __init__(
@@ -136,7 +136,7 @@ class GanttFetchWorker(QThread):
         self._mssql_url = mssql_url
         self._id_mapper = id_mapper or NoOpIdMapper()
         self._sync_url: Optional[str] = None
-        self._device_code: Optional[str] = None  # Display code
+        self._device_code: Optional[str] = None
         self._is_cancelled: bool = False
         self._mutex = QMutex()
 
@@ -147,12 +147,10 @@ class GanttFetchWorker(QThread):
         return async_url.replace("mssql+aioodbc", "mssql+pyodbc")
 
     def set_id_mapper(self, mapper: IDeviceIdMapper) -> None:
-        """Set ID mapper for display <-> remote ID conversion."""
         with QMutexLocker(self._mutex):
             self._id_mapper = mapper or NoOpIdMapper()
 
     def set_request(self, device_code: str) -> None:
-        """Set device code to fetch (display ID)."""
         with QMutexLocker(self._mutex):
             self._device_code = device_code
             self._is_cancelled = False
@@ -179,7 +177,6 @@ class GanttFetchWorker(QThread):
             now = datetime.now()
             start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-            # Convert display ID to remote ID for database query
             remote_code = id_mapper.to_remote_id(display_code)
 
             if remote_code != display_code:
@@ -202,7 +199,7 @@ class GanttFetchWorker(QThread):
 
     def _fetch_sync(
         self,
-        device_code: str,  # Remote code for DB query
+        device_code: str,
         start_time: datetime,
         end_time: datetime,
         sync_url: str,
@@ -210,7 +207,6 @@ class GanttFetchWorker(QThread):
         from sqlalchemy import create_engine, text
         from sqlalchemy.pool import NullPool
 
-        # FIXED QUERY: Properly handle NULL end_time
         query = """
         SELECT 
             S.EQUIP_CODE, 
@@ -224,12 +220,10 @@ class GanttFetchWorker(QThread):
         WHERE S.EQUIP_CODE = :code 
             AND (S.DEL_FLAG = '0' OR S.DEL_FLAG IS NULL)
             AND (
-                -- Closed segments: must overlap with window
                 (S.END_TIME IS NOT NULL 
                     AND S.START_TIME <= :end_time 
                     AND S.END_TIME >= :start_time)
                 OR
-                -- Open segments (NULL end_time): only if started today
                 (S.END_TIME IS NULL AND S.START_TIME >= :start_time)
             )
         ORDER BY S.START_TIME ASC
@@ -251,9 +245,6 @@ class GanttFetchWorker(QThread):
                 if segment:
                     segments.append(segment)
 
-            total_duration = sum(s.get("duration_seconds", 0) for s in segments)
-            logger.debug(f"[GanttFetchWorker] {device_code}: {len(segments)} segments, " f"total={total_duration/3600:.1f}h")
-
         finally:
             engine.dispose()
 
@@ -265,18 +256,15 @@ class GanttFetchWorker(QThread):
         window_start: datetime,
         window_end: datetime,
     ) -> Optional[Dict[str, Any]]:
-        """Process a database row into a segment dict."""
         try:
             equip_status = int(row[1]) if row[1] else 0
             start_time = self._parse_datetime(row[2])
 
-            # Handle NULL end_time (ongoing status)
             if row[3]:
                 end_time = self._parse_datetime(row[3])
             else:
                 end_time = window_end
 
-            # Clip to window
             valid_start = max(start_time, window_start)
             valid_end = min(end_time, window_end)
 
@@ -285,11 +273,7 @@ class GanttFetchWorker(QThread):
 
             duration_seconds = (valid_end - valid_start).total_seconds()
 
-            # Sanity check
             if duration_seconds > 86400:
-                logger.warning(
-                    f"[GanttFetchWorker] Segment duration {duration_seconds/3600:.1f}h > 24h, " f"clipping. Start={valid_start}, End={valid_end}"
-                )
                 duration_seconds = min(duration_seconds, 86400)
 
             return {
@@ -304,7 +288,6 @@ class GanttFetchWorker(QThread):
             return None
 
     def _parse_datetime(self, val: Any) -> datetime:
-        """Parse datetime from various formats."""
         if isinstance(val, datetime):
             return val
         if isinstance(val, str):
@@ -328,15 +311,11 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
     """
     ViewModel for Gantt Chart.
 
+    UPDATED: Now integrates with DeviceStatusService for live status sync.
+
     Display: 00:00 - 24:00 of current day
     Data: 00:00 - now
     Future: now - 24:00 (striped zone)
-
-    Features:
-    - ID mapping support for display vs remote device IDs
-    - Worker pool with proper lifecycle
-    - Caching with TTL
-    - Performance metrics
     """
 
     # Signals
@@ -376,6 +355,10 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         # Metrics
         self._metrics = GanttMetrics()
 
+        # ✅ NEW: Device Status Service integration
+        self._status_service = get_device_status_service()
+        self._status_service.statusChanged.connect(self._on_device_status_changed)
+
     def initialize(self) -> None:
         self._set_state(UiState.idle())
         logger.info("[GanttChartViewModel] Initialized")
@@ -389,9 +372,7 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         logger.info("[GanttChartViewModel] MSSQL URL configured")
 
     def set_id_mapper(self, mapper: IDeviceIdMapper) -> None:
-        """Set ID mapper for display <-> remote ID conversion."""
         self._id_mapper = mapper or NoOpIdMapper()
-        # Update existing workers
         for worker in self._workers:
             worker.set_id_mapper(self._id_mapper)
         logger.info("[GanttChartViewModel] ID mapper configured")
@@ -417,17 +398,66 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         return self._metrics
 
     # ========================================================================
+    # ✅ NEW: Live Status Integration
+    # ========================================================================
+
+    @Slot(str, object)
+    def _on_device_status_changed(self, device_id: str, change: Any) -> None:
+        """
+        Handle status change from DeviceStatusService.
+
+        If the changed device is currently displayed, update the chart's
+        current status without refetching all segments.
+        """
+        if self._is_disposed:
+            return
+
+        if device_id != self._current_device:
+            return
+
+        if not self._current_chart:
+            return
+
+        # Get new live status
+        live_status = self._status_service.get_device_status(device_id)
+        if not live_status:
+            return
+
+        # ✅ Update current chart with new live status
+        # Create new chart with updated status (immutable)
+        updated_chart = GanttChartModel(
+            device_code=self._current_chart.device_code,
+            device_name=self._current_chart.device_name,
+            segments=self._current_chart.segments,
+            hour_marks=self._current_chart.hour_marks,
+            start_time=self._current_chart.start_time,
+            end_time=self._current_chart.end_time,
+            current_time=datetime.now(),  # Update current time
+            total_duration_seconds=self._current_chart.total_duration_seconds,
+            stats=self._current_chart.stats,
+            # ✅ Use LIVE status from service
+            current_status=live_status.status_name,
+            current_status_color=live_status.status_color,
+            live_status_code=live_status.status_code,
+            live_status_name=live_status.status_name,
+            live_status_color=live_status.status_color,
+        )
+
+        self._current_chart = updated_chart
+        self.chartReady.emit(updated_chart)
+
+        logger.debug(f"[GanttChartViewModel] Live status updated for {device_id}: " f"{live_status.status_name}")
+
+    def _get_live_status(self, device_code: str) -> Optional[DeviceStatus]:
+        """Get live status from DeviceStatusService."""
+        return self._status_service.get_device_status(device_code)
+
+    # ========================================================================
     # Public API
     # ========================================================================
 
     def load_device_chart(self, device_code: str, device_name: str = "") -> None:
-        """
-        Load Gantt chart for a device.
-
-        Args:
-            device_code: Display ID (e.g., "ALS01")
-            device_name: Optional display name
-        """
+        """Load Gantt chart for a device."""
         if self._is_disposed:
             return
 
@@ -465,14 +495,12 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         worker.start()
 
     def clear_chart(self) -> None:
-        """Clear current chart."""
         self._current_chart = None
         self._current_device = None
         self._last_emitted_chart_id = ""
         self._set_state(UiState.idle())
 
     def get_cached_segments(self, device_code: str) -> List[Dict[str, Any]]:
-        """Get cached segments for a device (by display code)."""
         cached = self._cache.get(device_code)
         if cached:
             age = (datetime.now() - cached.get("timestamp", datetime.min)).total_seconds()
@@ -481,14 +509,12 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         return []
 
     def invalidate_cache(self, device_code: Optional[str] = None) -> None:
-        """Invalidate cache for device or all devices."""
         if device_code:
             self._cache.pop(device_code, None)
         else:
             self._cache.clear()
 
     def get_metrics_dict(self) -> Dict[str, Any]:
-        """Get metrics as dictionary."""
         return self._metrics.to_dict()
 
     # ========================================================================
@@ -496,7 +522,6 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
     # ========================================================================
 
     def _get_from_cache(self, device_code: str) -> Optional[List[Dict[str, Any]]]:
-        """Get from cache by display code."""
         cached = self._cache.get(device_code)
         if cached:
             age = (datetime.now() - cached.get("timestamp", datetime.min)).total_seconds()
@@ -509,13 +534,10 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
     # ========================================================================
 
     def _get_available_worker(self) -> GanttFetchWorker:
-        """Get or create an available worker."""
-        # Find finished worker
         for worker in self._workers:
             if worker.isFinished():
                 return worker
 
-        # Create new if under limit
         if len(self._workers) < self.MAX_WORKERS:
             worker = GanttFetchWorker(
                 self._mssql_url,
@@ -527,7 +549,6 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
             self._workers.append(worker)
             return worker
 
-        # Wait for any worker
         for worker in self._workers:
             if worker.isRunning():
                 worker.wait(100)
@@ -546,22 +567,18 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         fetch_end: datetime,
         fetch_time_ms: float,
     ) -> None:
-        """Handle worker completion."""
         self._pending_devices.discard(display_code)
         self._metrics.total_fetch_time_ms += fetch_time_ms
 
-        # Cache by DISPLAY code
         self._cache[display_code] = {
             "data": segments,
             "timestamp": datetime.now(),
         }
 
-        # Process with DISPLAY code
         self._process_segments(display_code, display_code, segments, fetch_start, fetch_end)
 
     @Slot(str, str)
     def _on_worker_error(self, device_code: str, error: str) -> None:
-        """Handle worker error."""
         self._pending_devices.discard(device_code)
         self._metrics.errors += 1
         self._set_loading_state(device_code, error=error)
@@ -580,7 +597,7 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         fetch_start: datetime,
         fetch_end: datetime,
     ) -> None:
-        """Process segments for display."""
+        """Process segments for display - UPDATED with live status."""
         now = datetime.now()
 
         display_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -593,7 +610,18 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         actual_seconds = (fetch_end - display_start).total_seconds()
         stats = self._calculate_stats(segments, actual_seconds)
 
-        current_status, current_color = self._get_current_status(segments, now)
+        # ✅ UPDATED: Get status from DeviceStatusService first
+        live_status = self._get_live_status(device_code)
+
+        if live_status and not live_status.is_stale:
+            # ✅ Use live status from service (single source of truth)
+            current_status = live_status.status_name
+            current_color = live_status.status_color
+            live_status_code = live_status.status_code
+        else:
+            # Fallback to segment-based status
+            current_status, current_color = self._get_current_status(segments, now)
+            live_status_code = None
 
         chart = GanttChartModel(
             device_code=device_code,
@@ -607,10 +635,14 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
             stats=stats,
             current_status=current_status,
             current_status_color=current_color,
+            # ✅ NEW: Include live status in model
+            live_status_code=live_status_code,
+            live_status_name=current_status,
+            live_status_color=current_color,
         )
 
         # Deduplication
-        chart_id = f"{device_code}:{len(segments)}"
+        chart_id = f"{device_code}:{len(segments)}:{current_status}"
         if chart_id == self._last_emitted_chart_id:
             logger.debug(f"[GanttChartViewModel] Skipping duplicate emission for {device_code}")
             return
@@ -622,8 +654,7 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
 
         logger.info(
             f"[GanttChartViewModel] Chart ready: {device_code}, {len(segments)} segments, "
-            f"RUN={stats.total_running_seconds/3600:.1f}h ({stats.running_percent:.1f}%), "
-            f"STOP={stats.total_stopped_seconds/3600:.1f}h"
+            f"status={current_status}, live={live_status_code is not None}"
         )
         self.chartReady.emit(chart)
         self.metricsUpdated.emit(self._metrics.to_dict())
@@ -635,7 +666,6 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         end: datetime,
         total_seconds: float,
     ) -> List[GanttSegmentModel]:
-        """Create segment models from raw data."""
         now = datetime.now()
         segments: List[GanttSegmentModel] = []
 
@@ -684,7 +714,6 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         end: datetime,
         total_seconds: float,
     ) -> List[GanttHourMarkModel]:
-        """Generate hour marks for 00:00 - 24:00."""
         marks: List[GanttHourMarkModel] = []
         current = start
 
@@ -722,7 +751,6 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         segments: List[GanttSegmentModel],
         total_seconds: float,
     ) -> GanttStatsModel:
-        """Calculate statistics from segments."""
         running = stopped = alarm = maintenance = shutdown = 0.0
 
         for seg in segments:
@@ -763,11 +791,24 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         segments: List[GanttSegmentModel],
         now: datetime,
     ) -> Tuple[str, str]:
-        """Get current status from segments."""
+        """
+        Get current status from segments.
+
+        UPDATED: Improved logic for finding active segment.
+        """
+        # Find segment that is currently active
+        for seg in segments:
+            if seg.start_time <= now:
+                # If segment covers now (end_time > now or is_current)
+                if seg.end_time >= now or seg.is_current:
+                    return seg.status_name, seg.status_color
+
+        # Fallback: check reversed for any active segment
         for seg in reversed(segments):
             if seg.is_current or seg.end_time >= now:
                 return seg.status_name, seg.status_color
 
+        # Final fallback: last segment
         if segments:
             last = segments[-1]
             return last.status_name, last.status_color
@@ -775,7 +816,6 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         return "Unknown", "Transparent"
 
     def _format_duration(self, seconds: float) -> str:
-        """Format duration for display."""
         if seconds < 60:
             return f"{int(seconds)}s"
         if seconds < 3600:
@@ -791,7 +831,6 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         is_loading: bool = False,
         error: str = "",
     ) -> None:
-        """Update loading state."""
         self._loading_state = GanttLoadingState(
             device_code=device_code,
             is_loading=is_loading,
@@ -804,11 +843,15 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
     # ========================================================================
 
     def dispose(self) -> None:
-        """Clean up resources."""
         if self._is_disposed:
             return
 
-        # Cancel and cleanup workers
+        # Disconnect from status service
+        try:
+            self._status_service.statusChanged.disconnect(self._on_device_status_changed)
+        except (RuntimeError, TypeError):
+            pass
+
         for worker in self._workers:
             worker.cancel()
             if worker.isRunning():

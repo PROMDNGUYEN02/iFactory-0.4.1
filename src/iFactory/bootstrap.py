@@ -1,3 +1,4 @@
+# src/iFactory/bootstrap.py
 """
 Application Bootstrapper.
 Entry point with optimized initialization.
@@ -5,6 +6,7 @@ Entry point with optimized initialization.
 
 import asyncio
 import logging
+import warnings
 import sys
 from typing import Optional
 
@@ -29,31 +31,44 @@ def configure_logging() -> None:
     for noisy in ("aiosqlite", "qasync", "sqlalchemy.engine", "faker"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    # ✅ ADD: Suppress specific SQLAlchemy pool warnings
+    logging.getLogger("sqlalchemy.pool.impl").setLevel(logging.CRITICAL)
+
+    # ✅ ADD: Custom filter for asyncio to only suppress "Event loop is closed"
+    class EventLoopFilter(logging.Filter):
+        def filter(self, record):
+            # Hide "Event loop is closed" and "Unclosed connection"
+            if "Event loop is closed" in record.getMessage():
+                return False
+            if "Unclosed connection" in record.getMessage():
+                return False
+            return True
+
+    asyncio_logger = logging.getLogger("asyncio")
+    asyncio_logger.addFilter(EventLoopFilter())
+
+    # ✅ ADD: Suppress ResourceWarnings about unclosed connections
+    warnings.filterwarnings("ignore", message="unclosed", category=ResourceWarning)
+
 
 async def init_database() -> None:
-    """Initialize storage database."""
+    """
+    Initialize storage database directories.
+    """
     try:
         from iFactory.infrastructure.configuration.paths import PATHS
 
+        # Only ensure directories exist - don't create engine here!
         PATHS.ensure_directories()
+        PATHS.initialize_config_files()
 
-        from iFactory.infrastructure.persistence.sqlalchemy.database import (
-            get_storage_engine,
-        )
-
-        storage_engine = get_storage_engine()
-
-        from iFactory.infrastructure.persistence.sqlalchemy.models import StorageBase
-
-        async with storage_engine.begin() as conn:
-            await conn.run_sync(StorageBase.metadata.create_all)
-        logger.debug("Storage tables initialized")
+        logger.debug("[Bootstrap] Directories initialized")
 
     except ImportError as e:
-        logger.error(f"Configuration or Persistence module missing: {e}")
+        logger.error(f"Configuration module missing: {e}")
         raise
     except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
+        logger.error(f"Directory initialization failed: {e}")
         raise
 
 
@@ -99,14 +114,14 @@ def run_application() -> int:
     logger.info("=" * 60)
 
     try:
-        # Initialize databases
-        logger.info("Initializing database...")
+        # Initialize directories (not database engine!)
+        logger.info("Initializing directories...")
 
         if sys.platform == "win32":
             asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
         asyncio.run(init_database())
-        logger.info("Database initialized successfully")
+        logger.info("Directories initialized successfully")
 
         # Initialize event system
         init_event_system()
@@ -115,6 +130,7 @@ def run_application() -> int:
         qt_app = create_qt_application()
 
         # Run via ApplicationRunner
+        # AppContainer will handle database initialization
         from iFactory.shared.di.application_runner import ApplicationRunner
 
         runner = ApplicationRunner(qt_app)

@@ -1,15 +1,6 @@
 # src/iFactory/infrastructure/adapters/mssql_adapter.py
 """
 MSSQL Adapter - Production-ready with resilience patterns.
-
-ENHANCEMENTS v2.0:
-- Improved connection pooling with health monitoring
-- Enhanced circuit breaker with metrics
-- Smart query caching with TTL
-- Batch operations support
-- Progressive timeout strategy
-- Connection warmup
-- Detailed metrics and observability
 """
 
 from __future__ import annotations
@@ -21,6 +12,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from typing import Final
 from datetime import datetime, timedelta
 from enum import Enum, auto
 from typing import (
@@ -39,7 +31,7 @@ from typing import (
 from sqlalchemy import bindparam, event, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncConnection, create_async_engine
-from sqlalchemy.pool import NullPool, QueuePool
+from sqlalchemy.pool import NullPool, AsyncAdaptedQueuePool
 
 from iFactory.application.ports.remote import IRemoteDataSource
 from iFactory.infrastructure.configuration.db_settings import DatabaseConfig
@@ -53,10 +45,10 @@ T = TypeVar("T")
 # ============================================================================
 
 DEFAULT_QUERY_TIMEOUT: Final[float] = 30.0
-DEFAULT_MATERIAL_TIMEOUT: Final[float] = 10.0
-DEFAULT_MATERIAL_COOLDOWN: Final[float] = 60.0
-DEFAULT_CACHE_TTL: Final[float] = 30.0
-MAX_BATCH_SIZE: Final[int] = 100
+DEFAULT_MATERIAL_TIMEOUT: Final[float] = 5.0
+DEFAULT_MATERIAL_COOLDOWN: Final[float] = 30.0
+DEFAULT_CACHE_TTL: Final[float] = 60.0
+MAX_BATCH_SIZE: Final[int] = 50
 HEALTH_CHECK_INTERVAL: Final[float] = 60.0
 
 
@@ -681,38 +673,48 @@ class ConnectionHealthMonitor:
 
 @dataclass
 class MssqlAdapterConfig:
-    """Configuration for MSSQL adapter."""
+    """Configuration for MSSQL adapter - COMPLETE VERSION."""
 
     # Timeouts
     query_timeout: float = DEFAULT_QUERY_TIMEOUT
-    connect_timeout: int = 10
+    connect_timeout: int = 5
     material_timeout: float = DEFAULT_MATERIAL_TIMEOUT
 
     # Cooldown
     material_cooldown: float = DEFAULT_MATERIAL_COOLDOWN
-    max_cooldown: float = 300.0
+    max_cooldown: float = 120.0
 
-    # Retry
+    # Retry configuration
     retry: RetryConfig = field(default_factory=RetryConfig)
 
-    # Circuit breaker
+    # Circuit breaker configuration
     circuit_breaker: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
 
-    # Cache
+    # Cache configuration
     cache_enabled: bool = True
     cache_ttl: float = DEFAULT_CACHE_TTL
-    cache_max_size: int = 1000
+    cache_max_size: int = 500
 
-    # Health check
+    # Health check configuration
     health_check_interval: float = HEALTH_CHECK_INTERVAL
     health_check_enabled: bool = True
+
+    # Performance monitoring
+    slow_query_threshold_ms: float = 1000.0
+    very_slow_query_threshold_ms: float = 3000.0
 
     # Batch operations
     max_batch_size: int = MAX_BATCH_SIZE
 
+    # Connection pooling (NullPool by default)
+    pool_size: int = 0
+    max_overflow: int = 0
+    pool_recycle: int = -1
+    pool_pre_ping: bool = False
+
 
 # ============================================================================
-# MSSQL Adapter Implementation
+# MSSQL Adapter Implementation (FIXED)
 # ============================================================================
 
 
@@ -764,6 +766,10 @@ class MssqlAdapter(IRemoteDataSource):
         self._lock = asyncio.Lock()
         self._operation_semaphore = asyncio.Semaphore(20)  # Max concurrent operations
 
+        # Task registry for cancellation
+        self._active_tasks: Set[asyncio.Task] = set()
+        self._task_lock = asyncio.Lock()
+
         # Resilience components
         self._circuit_breaker = CircuitBreaker(self._config.circuit_breaker)
         self._cooldown_manager = CooldownManager(
@@ -800,20 +806,29 @@ class MssqlAdapter(IRemoteDataSource):
 
     def _create_engine(self, url: str) -> None:
         """Create SQLAlchemy async engine."""
+        from sqlalchemy.pool import NullPool
+
         self._engine = create_async_engine(
             url,
-            poolclass=NullPool,  # NullPool for better connection handling
+            poolclass=NullPool,
             echo=False,
             connect_args={
                 "timeout": self._config.connect_timeout,
             },
         )
+
         self._is_initialized = True
         logger.info(
-            "[MssqlAdapter] Engine created (timeout=%ds, material_timeout=%.1fs)",
+            "[MssqlAdapter] Engine created with NullPool " "(timeout=%ds, material_timeout=%.1fs)",
             self._config.query_timeout,
             self._config.material_timeout,
         )
+
+    # Helper to register tasks
+    def _register_task(self, task: asyncio.Task) -> None:
+        """Register an active task for cancellation tracking."""
+        self._active_tasks.add(task)
+        task.add_done_callback(self._active_tasks.discard)
 
     # =========================================================================
     # Properties
@@ -842,6 +857,7 @@ class MssqlAdapter(IRemoteDataSource):
             "health": self._health_monitor.get_status(),
             "cache": self._cache.stats if self._cache else None,
             "operations": self._metrics.to_dict(),
+            "active_tasks": len(self._active_tasks),
         }
 
     # =========================================================================
@@ -898,18 +914,100 @@ class MssqlAdapter(IRemoteDataSource):
         coro,
         timeout: Optional[float] = None,
         operation_name: str = "query",
+        is_retry: bool = False,
     ):
-        """Execute coroutine with timeout."""
+        """Execute coroutine with timeout and performance logging - ENHANCED."""
+
+        # ========== ADAPTIVE TIMEOUT FOR RETRIES ==========
+        if is_retry and timeout:
+            timeout = min(timeout * 0.6, 3.0)
+            logger.debug(f"[MssqlAdapter] Retry with reduced timeout: {timeout:.1f}s")
+
         timeout = timeout or self._config.query_timeout
+
+        # Task tracking
+        current_task = asyncio.current_task()
+        if current_task:
+            async with self._task_lock:
+                if not self._disposing:
+                    self._active_tasks.add(current_task)
+
+        start_time = datetime.now()
+
         try:
-            return await asyncio.wait_for(coro, timeout=timeout)
+            result = await asyncio.wait_for(coro, timeout=timeout)
+
+            # ========== ENHANCED PERFORMANCE LOGGING ==========
+            elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
+
+            # Very slow query warning
+            if elapsed_ms > self._config.very_slow_query_threshold_ms:
+                logger.warning(
+                    f"[SLOW QUERY] {operation_name}: {elapsed_ms:.0f}ms " f"(threshold: {self._config.very_slow_query_threshold_ms:.0f}ms)"
+                )
+                # Record for metrics
+                self._metrics.record_slow_query(operation_name, elapsed_ms)
+
+            # Slow query info
+            elif elapsed_ms > self._config.slow_query_threshold_ms:
+                logger.info(f"[Slow] {operation_name}: {elapsed_ms:.0f}ms")
+
+            # Debug fast queries (optional)
+            elif elapsed_ms < 100:
+                logger.debug(f"[Fast] {operation_name}: {elapsed_ms:.0f}ms")
+            # ==================================================
+
+            return result
+
         except asyncio.TimeoutError:
-            logger.error("[MssqlAdapter] %s timed out after %.1fs", operation_name, timeout)
+            elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
+
+            # ========== DETAILED TIMEOUT LOGGING ==========
+            logger.error(f"[TIMEOUT] {operation_name} exceeded {timeout:.1f}s limit " f"(actual: {elapsed_ms:.0f}ms)")
+
+            # Record timeout metrics
+            self._metrics.record_timeout(operation_name, elapsed_ms)
+
+            # Suggest optimization
+            if "material" in operation_name.lower():
+                logger.info(f"[Hint] Consider reducing date range for material queries " f"or contact DBA to optimize RPT_FEEDING_DETAIL table")
+            # ===============================================
+
             raise TimeoutError(f"{operation_name} timed out after {timeout}s")
+
+        except asyncio.CancelledError:
+            if not self._disposing:
+                elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
+                logger.debug(f"[Cancelled] {operation_name} after {elapsed_ms:.0f}ms")
+            raise
+
+        finally:
+            # Cleanup task tracking
+            if current_task:
+                async with self._task_lock:
+                    self._active_tasks.discard(current_task)
 
     # =========================================================================
     # Helper Methods
     # =========================================================================
+
+    def _is_event_loop_usable(self) -> bool:
+        """
+        Check if we have a usable event loop.
+
+        Returns False if:
+        - No event loop exists
+        - Event loop is closed
+        - We're in disposal
+        """
+        if self._disposing or self._is_disposed:
+            return False
+
+        try:
+            loop = asyncio.get_running_loop()
+            return not loop.is_closed()
+        except RuntimeError:
+            return False
 
     def _parse_datetime(self, val: Any) -> datetime:
         """Parse datetime from various formats."""
@@ -960,11 +1058,15 @@ class MssqlAdapter(IRemoteDataSource):
 
         Args:
             equipment_codes: List of equipment codes to fetch.
-                           If None, fetches all equipment.
+                        If None, fetches all equipment.
 
         Returns:
             List of status dictionaries.
         """
+        if not self._is_event_loop_usable():
+            logger.debug("[MssqlAdapter] Event loop not available for fetch_latest_status")
+            return []
+
         if not self.is_available:
             return []
 
@@ -994,54 +1096,135 @@ class MssqlAdapter(IRemoteDataSource):
                 if not self._is_disposed and not self._disposing:
                     logger.error("[MssqlAdapter] Fetch latest status error: %s", e)
                 return []
+            except asyncio.CancelledError:
+                if not self._disposing:
+                    raise
+                return []
             except Exception as e:
+                error_msg = str(e)
+
+                if "Event loop is closed" in error_msg or "closed" in error_msg.lower():
+                    logger.debug("[MssqlAdapter] Event loop closed during fetch_latest_status")
+                    return []
+
                 if not self._is_disposed and not self._disposing:
-                    logger.error("[MssqlAdapter] Unexpected error: %s", e)
+                    logger.error("[MssqlAdapter] Unexpected error: %s", error_msg[:200])  # Truncate long errors
                 return []
 
     async def _do_fetch_latest_status(
         self,
         equipment_codes: Optional[List[str]],
     ) -> List[Dict[str, Any]]:
-        """Execute the fetch latest status query."""
+        """Execute the fetch latest status query - FIXED VERSION."""
         if not self._engine or self._disposing:
             return []
 
-        filter_clause = ""
-        params: Dict[str, Any] = {}
-
         if equipment_codes:
-            filter_clause = "AND S.EQUIP_CODE IN :codes"
-            params["codes"] = tuple(equipment_codes)
+            # SQL injection protection
+            safe_codes = [code.replace("'", "''") for code in equipment_codes]
+            codes_list = "'" + "','".join(safe_codes) + "'"
+            where_clause = f"WHERE E.EQUIP_CODE IN ({codes_list})"
+        else:
+            where_clause = ""
 
-        query_str = f"""
-        WITH RankedStatus AS (
-            SELECT 
-                S.EQUIP_CODE, S.EQUIP_STATUS, S.START_TIME, S.END_TIME, S.REASON_CODE,
-                ROW_NUMBER() OVER (PARTITION BY S.EQUIP_CODE ORDER BY S.START_TIME DESC) as rn
-            FROM TT_EQ_STATUS S WITH (NOLOCK)
-            WHERE (S.DEL_FLAG = '0' OR S.DEL_FLAG IS NULL)
-            {filter_clause}
-        )
+        # ========== FIXED: Use OUTER APPLY for devices without status ==========
+        raw_sql = f"""
         SELECT 
-            R.EQUIP_CODE, R.EQUIP_STATUS, R.START_TIME, R.END_TIME, R.REASON_CODE,
+            E.EQUIP_CODE,
+            ISNULL(latest.EQUIP_STATUS, '0') as EQUIP_STATUS,
+            latest.START_TIME,
+            latest.END_TIME,
+            latest.REASON_CODE,
             E.EQUIP_NAME
-        FROM RankedStatus R
-        LEFT JOIN TT_EQ_EQUIPMENT E WITH (NOLOCK) ON R.EQUIP_CODE = E.EQUIP_CODE
-        WHERE R.rn = 1
+        FROM yntti.dbo.TT_EQ_EQUIPMENT E WITH (NOLOCK)
+        OUTER APPLY (  -- Changed from CROSS APPLY to include devices without status
+            SELECT TOP 1
+                S.EQUIP_STATUS,
+                S.START_TIME,
+                S.END_TIME,
+                S.REASON_CODE
+            FROM yntti.dbo.TT_EQ_STATUS S WITH (NOLOCK)
+            WHERE S.EQUIP_CODE = E.EQUIP_CODE
+            AND (S.DEL_FLAG = '0' OR S.DEL_FLAG IS NULL)
+            ORDER BY S.START_TIME DESC
+        ) latest
+        {where_clause}
         """
+        # ========================================================================
 
-        async with self._engine.connect() as conn:
-            if self._disposing:
-                return []
+        try:
+            async with self._engine.connect() as conn:
+                if self._disposing:
+                    return []
 
-            stmt = text(query_str)
-            if equipment_codes:
-                stmt = stmt.bindparams(bindparam("codes", expanding=True))
+                result = await conn.execute(text(raw_sql))
+                rows = result.fetchall()
 
-            result = await conn.execute(stmt, params)
-            rows = result.fetchall()
-            return [self._map_status_row(row) for row in rows]
+                # Enhanced logging
+                if equipment_codes:
+                    logger.info(f"[MssqlAdapter] Query executed: " f"requested={len(equipment_codes)}, " f"returned={len(rows)}")
+
+                    # Check for missing devices
+                    returned_codes = {str(row[0]).strip().upper() for row in rows if row[0]}
+                    requested_codes = {code.upper() for code in equipment_codes}
+                    missing_codes = requested_codes - returned_codes
+
+                    if missing_codes:
+                        logger.warning(f"[MssqlAdapter] Missing devices not in TT_EQ_EQUIPMENT: " f"{sorted(missing_codes)}")
+
+                # Process results with better null handling
+                results = []
+                for row in rows:
+                    try:
+                        mapped = self._map_status_row_enhanced(row)
+                        results.append(mapped)
+                    except Exception as e:
+                        logger.debug(f"[MssqlAdapter] Row mapping error: {e}")
+                        continue
+
+                return results
+
+        except Exception as e:
+            logger.error(f"[MssqlAdapter] Query execution failed: {e}")
+            return []
+
+    def _map_status_row_enhanced(self, row: Any) -> Dict[str, Any]:
+        """Enhanced row mapping with null handling."""
+        equip_code = str(row[0]).strip() if row[0] else "UNKNOWN"
+
+        # Handle devices without status records
+        if row[1] is None and row[2] is None:
+            # Device exists but no status records
+            return {
+                "equip_code": equip_code,
+                "equip_status": "0",  # Default to STOP
+                "raw_status": "NO_DATA",
+                "start_time": datetime.now(),
+                "end_time": None,
+                "reason_code": "NO_STATUS_RECORDS",
+                "equip_name": str(row[5]).strip() if row[5] else None,
+                "last_update": datetime.now(),
+                "has_data": False,  # Flag for UI
+            }
+
+        # Normal mapping for devices with status
+        equip_status = str(row[1]) if row[1] else "0"
+        start_time = self._parse_datetime(row[2]) if row[2] else datetime.now()
+        end_time = self._parse_datetime(row[3]) if row[3] else None
+        reason_code = str(row[4]).strip() if row[4] else None
+        equip_name = str(row[5]).strip() if row[5] else None
+
+        return {
+            "equip_code": equip_code,
+            "equip_status": equip_status,
+            "raw_status": equip_status,
+            "start_time": start_time,
+            "end_time": end_time,
+            "reason_code": reason_code,
+            "equip_name": equip_name,
+            "last_update": end_time or datetime.now(),
+            "has_data": True,
+        }
 
     # =========================================================================
     # Fetch Device History
@@ -1067,6 +1250,10 @@ class MssqlAdapter(IRemoteDataSource):
         end_time: datetime,
     ) -> List[Dict[str, Any]]:
         """Fetch device status history for a time range."""
+        if not self._is_event_loop_usable():
+            logger.debug("[MssqlAdapter] Event loop not available for fetch_device_history_range")
+            return []
+
         if not self.is_available:
             return []
 
@@ -1091,6 +1278,10 @@ class MssqlAdapter(IRemoteDataSource):
             except (TimeoutError, OperationalError, ConnectionError) as e:
                 if not self._is_disposed:
                     logger.error("[MssqlAdapter] History fetch error for %s: %s", equip_code, e)
+                return []
+            except asyncio.CancelledError:
+                if not self._disposing:
+                    raise
                 return []
             except Exception as e:
                 if not self._is_disposed:
@@ -1141,6 +1332,10 @@ class MssqlAdapter(IRemoteDataSource):
         limit: int = 1,
     ) -> List[Dict[str, Any]]:
         """Fetch most recent history records for a device."""
+        if not self._is_event_loop_usable():
+            logger.debug("[MssqlAdapter] Event loop not available for fetch_latest_history_records")
+            return []
+
         if not self.is_available:
             return []
 
@@ -1152,6 +1347,10 @@ class MssqlAdapter(IRemoteDataSource):
             except (TimeoutError, OperationalError, ConnectionError) as e:
                 if not self._is_disposed:
                     logger.error("[MssqlAdapter] Latest history error for %s: %s", equip_code, e)
+                return []
+            except asyncio.CancelledError:
+                if not self._disposing:
+                    raise
                 return []
             except Exception as e:
                 if not self._is_disposed:
@@ -1190,27 +1389,20 @@ class MssqlAdapter(IRemoteDataSource):
             return [self._map_status_row(row) for row in rows]
 
     # =========================================================================
-    # Material Input Fetching
+    # Material Input Fetching (With Task Registration)
     # =========================================================================
 
     async def fetch_material_inputs(
         self,
         equip_code: str,
     ) -> List[MaterialInputRecord]:
-        """
-        Fetch material inputs for equipment.
+        """Fetch material inputs with improved caching strategy."""
 
-        Features:
-        - Progressive cooldown on failure
-        - Optimized query with UNION for date fallback
-        - Result caching
+        # Early exit checks
+        if not self._is_event_loop_usable():
+            logger.debug("[MssqlAdapter] Event loop not available for material fetch: %s", equip_code)
+            return []
 
-        Args:
-            equip_code: Equipment code
-
-        Returns:
-            List of MaterialInputRecord
-        """
         if not self.is_available:
             return []
 
@@ -1220,12 +1412,27 @@ class MssqlAdapter(IRemoteDataSource):
             logger.debug("[MssqlAdapter] %s on cooldown (%.0fs remaining)", equip_code, remaining)
             return []
 
-        # Check cache
-        cache_key = f"material:{equip_code}"
+        # ========== ENHANCED CACHE STRATEGY ==========
+        # Use time-based cache key for better hit rate
+        cache_key_base = f"material:{equip_code}"
+
         if self._cache:
+            # Try current hour cache first (most specific)
+            current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+            cache_key = f"{cache_key_base}:{current_hour.hour}"
             cached = await self._cache.get(cache_key)
             if cached is not None:
+                logger.debug(f"[Cache HIT] {cache_key}")
                 return cached
+
+            # Try previous hour cache (fallback)
+            prev_hour = current_hour - timedelta(hours=1)
+            cache_key_prev = f"{cache_key_base}:{prev_hour.hour}"
+            cached = await self._cache.get(cache_key_prev)
+            if cached is not None:
+                logger.debug(f"[Cache HIT] {cache_key_prev} (previous hour)")
+                return cached
+        # =============================================
 
         async with self._operation_semaphore:
             try:
@@ -1237,8 +1444,19 @@ class MssqlAdapter(IRemoteDataSource):
 
                 # Success - clear cooldown and cache result
                 await self._cooldown_manager.clear_cooldown(equip_code)
+
+                # ========== CACHE WITH HOUR-BASED KEY ==========
                 if self._cache and result:
-                    await self._cache.set(cache_key, result, ttl=120.0)  # 2 min cache
+                    current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+                    cache_key = f"{cache_key_base}:{current_hour.hour}"
+
+                    # Cache for remainder of hour + buffer
+                    remaining_hour = 3600 - (datetime.now() - current_hour).total_seconds()
+                    ttl = max(300, remaining_hour + 300)  # Min 5 minutes, typically ~1 hour
+
+                    await self._cache.set(cache_key, result, ttl=ttl)
+                    logger.debug(f"[Cache SET] {cache_key} (TTL: {ttl:.0f}s)")
+                # ===============================================
 
                 if result:
                     logger.info("[MssqlAdapter] Fetched %d materials for %s", len(result), equip_code)
@@ -1247,60 +1465,68 @@ class MssqlAdapter(IRemoteDataSource):
 
             except (TimeoutError, asyncio.TimeoutError):
                 duration = await self._cooldown_manager.start_cooldown(equip_code)
-                logger.warning("[MssqlAdapter] Material timeout for %s, cooldown %.0fs", equip_code, duration)
-                self._metrics.record_timeout()
-                return []
-
-            except (OperationalError, ConnectionError) as e:
-                await self._cooldown_manager.start_cooldown(equip_code)
-                if not self._is_disposed:
-                    logger.warning("[MssqlAdapter] Material fetch error for %s: %s", equip_code, e)
+                logger.error(f"[MssqlAdapter] Material timeout for {equip_code}, " f"cooldown {duration:.0f}s")
+                self._metrics.record_timeout(f"material_{equip_code}", self._config.material_timeout * 1000)
                 return []
 
             except Exception as e:
                 await self._cooldown_manager.start_cooldown(equip_code)
-                if not self._is_disposed:
-                    logger.error("[MssqlAdapter] Unexpected material error for %s: %s", equip_code, e)
+                if not self._is_disposed and not self._disposing:
+                    logger.error(f"[MssqlAdapter] Material fetch error for {equip_code}: " f"{str(e)[:100]}")
                 return []
 
     async def _do_fetch_material_inputs(
         self,
         equip_code: str,
     ) -> List[MaterialInputRecord]:
-        """Execute material inputs query."""
+        """Execute material inputs query - OPTIMIZED WITHOUT INDEX."""
         if not self._engine or self._disposing:
             return []
 
-        # Optimized query: progressive date search using UNION
+        # ========== OPTIMIZED QUERY WITHOUT INDEX HINT ==========
+        # Strategy: Limit date range progressively
         query = """
+        -- First, try last 4 hours (most likely case)
         DECLARE @latest_lot NVARCHAR(100);
+        DECLARE @cutoff_time DATETIME;
         
-        -- Find latest LOT with progressive date filter (fast path first)
+        -- Try 4 hours first
+        SET @cutoff_time = DATEADD(HOUR, -4, GETDATE());
+        
         SELECT TOP 1 @latest_lot = LOT_NO
-        FROM (
-            -- Last 2 hours (most common case)
-            SELECT TOP 1 LOT_NO, FEED_TIME
-            FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
-            WHERE EQUIP_CODE = :equip_code
-              AND FEED_TIME >= DATEADD(HOUR, -2, GETDATE())
-            ORDER BY FEED_TIME DESC
-            
-            UNION ALL
-            
-            -- Last 2 days (fallback)
-            SELECT TOP 1 LOT_NO, FEED_TIME
-            FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
-            WHERE EQUIP_CODE = :equip_code
-              AND FEED_TIME >= DATEADD(DAY, -2, GETDATE())
-              AND FEED_TIME < DATEADD(HOUR, -2, GETDATE())
-            ORDER BY FEED_TIME DESC
-        ) AS combined
+        FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
+        WHERE EQUIP_CODE = :equip_code
+        AND FEED_TIME >= @cutoff_time
         ORDER BY FEED_TIME DESC;
         
-        -- Get materials for the LOT
+        -- If no data in 4 hours, try 24 hours
+        IF @latest_lot IS NULL
+        BEGIN
+            SET @cutoff_time = DATEADD(HOUR, -24, GETDATE());
+            
+            SELECT TOP 1 @latest_lot = LOT_NO
+            FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
+            WHERE EQUIP_CODE = :equip_code
+            AND FEED_TIME >= @cutoff_time
+            ORDER BY FEED_TIME DESC;
+        END
+        
+        -- If still no data, try 48 hours (final attempt)
+        IF @latest_lot IS NULL
+        BEGIN
+            SET @cutoff_time = DATEADD(HOUR, -48, GETDATE());
+            
+            SELECT TOP 1 @latest_lot = LOT_NO
+            FROM yntti.dbo.RPT_FEEDING_DETAIL WITH (NOLOCK)
+            WHERE EQUIP_CODE = :equip_code
+            AND FEED_TIME >= @cutoff_time
+            ORDER BY FEED_TIME DESC;
+        END
+        
+        -- Get materials for the LOT (if found)
         IF @latest_lot IS NOT NULL
         BEGIN
-            SELECT 
+            SELECT TOP 50  -- Limit results
                 LOT_NO,
                 MATERIAL_BATCH,
                 MATERIAL_NAME,
@@ -1313,34 +1539,41 @@ class MssqlAdapter(IRemoteDataSource):
             ORDER BY MIN(FEED_TIME) ASC;
         END
         """
+        # =======================================================
 
-        async with self._engine.connect() as conn:
-            if self._disposing:
-                return []
+        try:
+            async with self._engine.connect() as conn:
+                if self._disposing:
+                    return []
 
-            result = await conn.execute(
-                text(query),
-                {"equip_code": equip_code},
-            )
-            rows = result.fetchall()
+                result = await conn.execute(text(query), {"equip_code": equip_code})
+                rows = result.fetchall()
 
-            records = []
-            for row in rows:
-                try:
-                    record = MaterialInputRecord(
-                        lot_no=str(row[0]).strip() if row[0] else "",
-                        material_batch=str(row[1]).strip() if row[1] else "",
-                        material_name=str(row[2]).strip() if row[2] else "",
-                        feed_time=self._parse_datetime(row[3]) if row[3] else datetime.now(),
-                        feed_qty=float(row[4]) if row[4] else 0.0,
-                        feed_user=str(row[5]).strip() if row[5] else "",
-                    )
-                    records.append(record)
-                except Exception as e:
-                    logger.debug("[MssqlAdapter] Parse error: %s", e)
-                    continue
+                records = []
+                for row in rows:
+                    try:
+                        record = MaterialInputRecord(
+                            lot_no=str(row[0]).strip() if row[0] else "",
+                            material_batch=str(row[1]).strip() if row[1] else "",
+                            material_name=str(row[2]).strip() if row[2] else "",
+                            feed_time=self._parse_datetime(row[3]) if row[3] else datetime.now(),
+                            feed_qty=float(row[4]) if row[4] else 0.0,
+                            feed_user=str(row[5]).strip() if row[5] else "",
+                        )
+                        records.append(record)
+                    except Exception as e:
+                        logger.debug("[MssqlAdapter] Parse error: %s", e)
+                        continue
 
-            return records
+                return records
+
+        except Exception as e:
+            if "timeout" in str(e).lower():
+                logger.error(
+                    f"[MssqlAdapter] Material query timeout for {equip_code}. "
+                    f"Consider reducing date range or adding index on (EQUIP_CODE, FEED_TIME)"
+                )
+            raise
 
     # =========================================================================
     # Run Time Calculations
@@ -1349,7 +1582,7 @@ class MssqlAdapter(IRemoteDataSource):
     async def fetch_today_run_times(
         self,
         equipment_codes: List[str],
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Optional[float]]:
         """
         Fetch today's run time in seconds for multiple equipment.
 
@@ -1357,13 +1590,18 @@ class MssqlAdapter(IRemoteDataSource):
             equipment_codes: List of equipment codes
 
         Returns:
-            Dictionary mapping equipment code to run time seconds
+            Dictionary mapping equipment code to run time seconds.
+            Value is None if fetch failed for that device.
         """
+        if not self._is_event_loop_usable():
+            logger.debug("[MssqlAdapter] Event loop not available for fetch_today_run_times")
+            return {code.upper(): None for code in equipment_codes}
+
         if not self.is_available or not equipment_codes:
-            return {code: 0.0 for code in equipment_codes}
+            return {code.upper(): None for code in equipment_codes}
 
         # Batch in chunks
-        results: Dict[str, float] = {}
+        results: Dict[str, Optional[float]] = {}
 
         for i in range(0, len(equipment_codes), self._config.max_batch_size):
             batch = equipment_codes[i : i + self._config.max_batch_size]
@@ -1375,15 +1613,18 @@ class MssqlAdapter(IRemoteDataSource):
                         results.update(batch_results)
 
                 except Exception as e:
-                    if not self._is_disposed:
-                        logger.error("[MssqlAdapter] Run times fetch error: %s", e)
-                    # Return zeros for failed batch
-                    results.update({code: 0.0 for code in batch})
+                    error_msg = str(e)
+                    if "Event loop is closed" in error_msg or "closed" in error_msg.lower():
+                        logger.debug("[MssqlAdapter] Event loop closed during run times fetch")
+                    else:
+                        if not self._is_disposed:
+                            logger.error("[MssqlAdapter] Run times fetch error: %s", e)
 
-        # Ensure all requested codes have a value
+                    results.update({code.upper(): None for code in batch})
+
         for code in equipment_codes:
             if code.upper() not in results:
-                results[code.upper()] = 0.0
+                results[code.upper()] = None
 
         return results
 
@@ -1393,6 +1634,7 @@ class MssqlAdapter(IRemoteDataSource):
     ) -> Dict[str, float]:
         """Execute today's run times query."""
         if not self._engine or self._disposing:
+            logger.debug("[MssqlAdapter] Engine not available for run times")
             return {}
 
         now = datetime.now()
@@ -1454,21 +1696,33 @@ class MssqlAdapter(IRemoteDataSource):
             )
             rows = result.fetchall()
 
+            logger.debug("[MssqlAdapter] Run times query returned %d rows for %d devices", len(rows), len(equipment_codes))
+
             run_times = {code.upper(): 0.0 for code in equipment_codes}
             for row in rows:
                 code = str(row[0]).strip().upper()
                 seconds = float(row[1]) if row[1] else 0.0
                 run_times[code] = min(max(0.0, seconds), total_seconds_today)
 
+            devices_with_data = [k for k, v in run_times.items() if v is not None]
+            devices_without_data = [k for k, v in run_times.items() if v is None]
+            if devices_without_data:
+                logger.debug("[MssqlAdapter] No run time data for: %s", devices_without_data[:5])
+
             return run_times
 
     async def fetch_single_device_run_time(
         self,
         equipment_code: str,
-    ) -> float:
-        """Fetch today's run time for a single device."""
+    ) -> Optional[float]:
+        """
+        Fetch today's run time for a single device.
+
+        Returns:
+            Run time in seconds, or None if fetch failed.
+        """
         results = await self.fetch_today_run_times([equipment_code])
-        return results.get(equipment_code.upper(), 0.0)
+        return results.get(equipment_code.upper())
 
     # =========================================================================
     # Health Check
@@ -1494,6 +1748,20 @@ class MssqlAdapter(IRemoteDataSource):
     # =========================================================================
     # Management Methods
     # =========================================================================
+
+    async def cancel_pending(self) -> None:
+        """Cancel all pending operations."""
+        async with self._task_lock:
+            tasks_to_cancel = list(self._active_tasks)
+
+        if tasks_to_cancel:
+            logger.info("[MssqlAdapter] Cancelling %d pending operations", len(tasks_to_cancel))
+            for task in tasks_to_cancel:
+                if not task.done():
+                    task.cancel()
+
+            # Wait briefly for cancellation
+            await asyncio.sleep(0.1)
 
     def reset_circuit_breaker(self) -> None:
         """Reset circuit breaker and clear all cooldowns."""
@@ -1531,35 +1799,41 @@ class MssqlAdapter(IRemoteDataSource):
     # =========================================================================
 
     async def dispose(self) -> None:
-        """Clean up adapter resources."""
+        """Clean up adapter resources - IMPROVED."""
         if self._is_disposed:
             return
 
         logger.info("[MssqlAdapter] Starting disposal...")
 
+        # Mark as disposing to prevent new operations
         async with self._lock:
             self._disposing = True
             active = self._active_count
 
-        # Wait for active operations (with timeout)
+        # Cancel all active tasks properly
+        async with self._task_lock:
+            tasks_to_cancel = list(self._active_tasks)
+
+        if tasks_to_cancel:
+            logger.info("[MssqlAdapter] Cancelling %d active tasks", len(tasks_to_cancel))
+            for task in tasks_to_cancel:
+                if not task.done():
+                    task.cancel()
+
+            # Wait for cancellation with timeout
+            try:
+                await asyncio.wait_for(asyncio.gather(*tasks_to_cancel, return_exceptions=True), timeout=1.0)
+            except asyncio.TimeoutError:
+                logger.debug("[MssqlAdapter] Task cancellation timeout")
+            except Exception as e:
+                logger.debug(f"[MssqlAdapter] Task cancellation error: {e}")
+
+            self._active_tasks.clear()
+
+        # Wait briefly for active operations to complete
         if active > 0:
-            logger.info("[MssqlAdapter] Waiting for %d operations...", active)
-            wait_time = 0
-            max_wait = 3.0
-
-            while wait_time < max_wait:
-                await asyncio.sleep(0.1)
-                wait_time += 0.1
-                async with self._lock:
-                    if self._active_count == 0:
-                        break
-
-            async with self._lock:
-                if self._active_count > 0:
-                    logger.warning(
-                        "[MssqlAdapter] Forcing disposal with %d active operations",
-                        self._active_count,
-                    )
+            logger.debug("[MssqlAdapter] Waiting for %d operations...", active)
+            await asyncio.sleep(0.3)
 
         self._is_disposed = True
 
@@ -1567,17 +1841,21 @@ class MssqlAdapter(IRemoteDataSource):
         if self._cache:
             await self._cache.clear()
 
-        # Dispose engine
+        # Proper engine disposal
         if self._engine:
             try:
-                await asyncio.wait_for(self._engine.dispose(), timeout=2.0)
+                # Dispose engine (closes all connections)
+                await self._engine.dispose()
                 logger.info("[MssqlAdapter] Engine disposed")
-            except asyncio.TimeoutError:
-                logger.warning("[MssqlAdapter] Engine dispose timed out")
             except Exception as e:
-                logger.debug("[MssqlAdapter] Engine dispose error: %s", e)
+                logger.debug(f"[MssqlAdapter] Engine dispose error: {e}")
             finally:
                 self._engine = None
+
+        # Give connections time to close
+        await asyncio.sleep(0.1)
+
+        logger.info("[MssqlAdapter] Disposal complete")
 
 
 # ============================================================================
@@ -1586,7 +1864,7 @@ class MssqlAdapter(IRemoteDataSource):
 
 
 class _AdapterMetrics:
-    """Internal metrics tracking for adapter."""
+    """Internal metrics tracking for adapter - ENHANCED."""
 
     def __init__(self):
         self.total_operations = 0
@@ -1594,7 +1872,31 @@ class _AdapterMetrics:
         self.failed_operations = 0
         self.rejected_operations = 0
         self.timeout_operations = 0
+
+        # ========== NEW METRICS ==========
+        self.slow_queries: List[Tuple[str, float, datetime]] = []  # (name, ms, time)
+        self.timeout_queries: List[Tuple[str, float, datetime]] = []
+        self.max_history = 100
+        # =================================
+
         self._lock = asyncio.Lock()
+
+    def record_slow_query(self, operation: str, duration_ms: float) -> None:
+        """Record slow query for analysis."""
+        self.slow_queries.append((operation, duration_ms, datetime.now()))
+
+        # Keep only recent
+        if len(self.slow_queries) > self.max_history:
+            self.slow_queries = self.slow_queries[-self.max_history :]
+
+    def record_timeout(self, operation: str, duration_ms: float) -> None:
+        """Record timeout for analysis."""
+        self.timeout_operations += 1
+        self.timeout_queries.append((operation, duration_ms, datetime.now()))
+
+        # Keep only recent
+        if len(self.timeout_queries) > self.max_history:
+            self.timeout_queries = self.timeout_queries[-self.max_history :]
 
     def record_success(self) -> None:
         self.total_operations += 1
@@ -1607,10 +1909,41 @@ class _AdapterMetrics:
     def record_rejected(self) -> None:
         self.rejected_operations += 1
 
-    def record_timeout(self) -> None:
-        self.timeout_operations += 1
+    def get_summary(self) -> Dict[str, Any]:
+        """Get detailed metrics summary."""
+        success_rate = self.successful_operations / self.total_operations if self.total_operations > 0 else 0.0
+
+        # Calculate average slow query time
+        avg_slow_time = sum(ms for _, ms, _ in self.slow_queries) / len(self.slow_queries) if self.slow_queries else 0.0
+
+        # Get top slow operations
+        slow_by_operation = defaultdict(list)
+        for op, ms, _ in self.slow_queries:
+            slow_by_operation[op].append(ms)
+
+        top_slow = sorted(
+            [(op, len(times), sum(times) / len(times)) for op, times in slow_by_operation.items()], key=lambda x: x[1], reverse=True  # Sort by count
+        )[:5]
+
+        return {
+            "total": self.total_operations,
+            "successful": self.successful_operations,
+            "failed": self.failed_operations,
+            "rejected": self.rejected_operations,
+            "timeouts": self.timeout_operations,
+            "success_rate": f"{success_rate:.1%}",
+            "slow_queries": {
+                "count": len(self.slow_queries),
+                "avg_duration_ms": f"{avg_slow_time:.0f}",
+                "top_operations": [{"operation": op, "count": count, "avg_ms": f"{avg_ms:.0f}"} for op, count, avg_ms in top_slow],
+            },
+            "recent_timeouts": [
+                {"operation": op, "duration_ms": f"{ms:.0f}", "time": ts.strftime("%H:%M:%S")} for op, ms, ts in self.timeout_queries[-5:]
+            ],
+        }
 
     def to_dict(self) -> Dict[str, int]:
+        """Legacy method for compatibility."""
         return {
             "total": self.total_operations,
             "successful": self.successful_operations,
