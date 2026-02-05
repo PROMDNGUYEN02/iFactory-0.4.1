@@ -67,33 +67,6 @@ class CacheEntry(Generic[T]):
 class MemoryCache(ICacheProvider):
     """
     In-Memory Cache with LRU eviction and TTL expiration.
-
-    Features:
-    - Max size limit with LRU eviction
-    - TTL-based expiration
-    - Tag-based invalidation
-    - Async-safe with lock
-    - Statistics tracking
-    - Periodic cleanup of expired entries
-    - Get-or-set pattern with deduplication
-
-    Usage:
-        cache = MemoryCache(max_size=1000, default_ttl=300)
-
-        # Basic operations
-        await cache.set("key", value, ttl=60)
-        value = await cache.get("key")
-
-        # With tags
-        await cache.set("user:123", user, ttl=300, tags={"users"})
-        await cache.delete_by_tag("users")  # Invalidate all users
-
-        # Get-or-set pattern
-        value = await cache.get_or_set(
-            "expensive_key",
-            lambda: compute_expensive_value(),
-            ttl=300
-        )
     """
 
     __slots__ = (
@@ -471,6 +444,175 @@ class MemoryCache(ICacheProvider):
     def _update_size_stat(self) -> None:
         """Update current size statistic."""
         self._stats.current_size = len(self._store)
+
+    async def get_entry_with_metadata(self, key: str) -> Optional[CacheEntry]:
+        """
+        Get cache entry with full metadata.
+
+        Used by SWR service to check entry age and determine
+        if data is fresh, stale, or expired.
+
+        Returns:
+            CacheEntry with value, expiry, age_seconds, etc.
+            None if key doesn't exist or is expired.
+
+        Example:
+            entry = await cache.get_entry_with_metadata("device:ABC")
+            if entry:
+                print(f"Age: {entry.age_seconds}s")
+                print(f"Value: {entry.value}")
+        """
+        async with self._lock:
+            await self._maybe_cleanup()
+
+            if key not in self._store:
+                self._stats.misses += 1
+                return None
+
+            entry = self._store[key]
+
+            if entry.is_expired:
+                await self._remove_entry(key)
+                self._stats.expirations += 1
+                self._stats.misses += 1
+                return None
+
+            # Move to end (most recently used)
+            self._store.move_to_end(key)
+            entry.touch()
+
+            self._stats.hits += 1
+            return entry
+
+    async def get_with_age(self, key: str) -> Tuple[Optional[Any], float]:
+        """
+        Get value and its age in seconds.
+
+        Returns:
+            Tuple of (value, age_seconds)
+            (None, 0) if not found
+
+        Example:
+            value, age = await cache.get_with_age("device:ABC")
+            if value and age < 5:
+                print("Fresh data!")
+        """
+        entry = await self.get_entry_with_metadata(key)
+
+        if entry is None:
+            return (None, 0.0)
+
+        return (entry.value, entry.age_seconds)
+
+    async def set_with_stale_ttl(
+        self,
+        key: str,
+        value: Any,
+        fresh_ttl: int,
+        stale_ttl: int,
+        tags: Optional[Set[str]] = None,
+    ) -> None:
+        """
+        Set value with separate fresh and stale TTLs.
+
+        The entry expires at stale_ttl, but is_fresh() returns False
+        after fresh_ttl.
+
+        Args:
+            key: Cache key
+            value: Value to cache
+            fresh_ttl: Time in seconds data is fresh
+            stale_ttl: Time in seconds data is usable (stale)
+            tags: Optional tags for group invalidation
+
+        Note: Uses stale_ttl for actual expiry, fresh_ttl for metadata.
+        """
+        expiry = time.time() + stale_ttl
+        entry_tags = tags or set()
+
+        async with self._lock:
+            # Remove old entry if exists
+            if key in self._store:
+                await self._remove_entry(key)
+
+            # Evict if necessary
+            while len(self._store) >= self._max_size:
+                await self._evict_lru()
+
+            # Create entry with fresh_ttl as metadata
+            entry = CacheEntry(
+                value=value,
+                expiry=expiry,
+                tags=entry_tags,
+            )
+            # Store fresh_ttl for SWR checks
+            entry._fresh_ttl = fresh_ttl
+
+            self._store[key] = entry
+
+            # Register tags
+            for tag in entry_tags:
+                if tag not in self._tags:
+                    self._tags[tag] = set()
+                self._tags[tag].add(key)
+
+            self._update_size_stat()
+
+    async def is_fresh(self, key: str, fresh_ttl: Optional[int] = None) -> bool:
+        """
+        Check if cached data is still fresh.
+
+        Args:
+            key: Cache key
+            fresh_ttl: Fresh TTL in seconds (uses default if None)
+
+        Returns:
+            True if data exists and is fresh
+        """
+        entry = await self.get_entry_with_metadata(key)
+
+        if entry is None:
+            return False
+
+        # Use stored fresh_ttl if available
+        if fresh_ttl is None:
+            fresh_ttl = getattr(entry, "_fresh_ttl", self._default_ttl)
+
+        return entry.age_seconds < fresh_ttl
+
+    async def get_keys_by_pattern(self, pattern: str) -> List[str]:
+        """
+        Get all keys matching a pattern.
+
+        Supports simple prefix matching with '*'.
+
+        Args:
+            pattern: Pattern like "device:*" or "gantt:ABC*"
+
+        Returns:
+            List of matching keys
+        """
+        async with self._lock:
+            if "*" not in pattern:
+                # Exact match
+                return [pattern] if pattern in self._store else []
+
+            # Prefix match
+            prefix = pattern.rstrip("*")
+            return [key for key in self._store.keys() if key.startswith(prefix)]
+
+    async def delete_by_pattern(self, pattern: str) -> int:
+        """
+        Delete all entries matching a pattern.
+
+        Args:
+            pattern: Pattern like "device:*"
+
+        Returns:
+            Number of entries deleted
+        """
+        keys = await self.get_keys_by_pattern(pattern)
+        return await self.delete_many(keys)
 
 
 # ============================================================================

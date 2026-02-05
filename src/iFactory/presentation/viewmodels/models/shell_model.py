@@ -5,6 +5,7 @@ Pure data classes for shell/navigation state.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 
@@ -15,6 +16,7 @@ class SystemStatusModel:
     mssql_connected: bool = False
     sqlite_connected: bool = False
     message: str = ""
+    last_sync_time: Optional[datetime] = None  # ✅ ADD: Track sync timestamp
 
     @property
     def is_online(self) -> bool:
@@ -35,6 +37,34 @@ class SystemStatusModel:
         if self.sqlite_connected:
             return "#F59E0B"  # Amber
         return "#EF4444"  # Red
+
+    # ✅ ADD: Format sync time for display
+    @property
+    def formatted_sync_time(self) -> str:
+        """Human-readable sync time."""
+        if not self.last_sync_time:
+            return "Never"
+
+        delta = datetime.now() - self.last_sync_time
+        seconds = int(delta.total_seconds())
+
+        if seconds < 10:
+            return "Just now"
+        elif seconds < 60:
+            return f"{seconds}s ago"
+        elif seconds < 3600:
+            return f"{seconds // 60}m ago"
+        else:
+            return f"{seconds // 3600}h ago"
+
+    # ✅ ADD: Check if data is stale
+    @property
+    def is_stale(self) -> bool:
+        """Check if sync data is stale (>30 seconds)."""
+        if not self.last_sync_time:
+            return True
+        delta = (datetime.now() - self.last_sync_time).total_seconds()
+        return delta > 30
 
 
 @dataclass(frozen=True, slots=True)

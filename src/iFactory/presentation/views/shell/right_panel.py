@@ -1124,6 +1124,10 @@ class RightPanelView:
             is_expanded=False, selected_device_id=None, theme=theme_service.current_theme, content_state=PanelState.PLACEHOLDER
         )
 
+        self._refresh_timer = QTimer()
+        self._refresh_timer.timeout.connect(self._auto_refresh_device)
+        self._refresh_timer.setInterval(3000)
+
         self._setup_ui()
         self._bind_signals()
         self._apply_container_style()
@@ -1164,6 +1168,22 @@ class RightPanelView:
             logger.debug(f"[RightPanel] State access error for {device_id}: {e}")
 
         return None
+
+    def _auto_refresh_device(self) -> None:
+        """Auto-refresh current device data without showing loading state."""
+        if not self._state.selected_device_id:
+            self._refresh_timer.stop()
+            return
+
+        if not self._state.is_expanded:
+            self._refresh_timer.stop()
+            return
+
+        logger.debug(f"[RightPanel] Auto-refresh: {self._state.selected_device_id}")
+
+        # Fetch latest data silently
+        if self._device_vm:
+            self._device_vm._fetch_device_details_parallel(self._state.selected_device_id)
 
     def _setup_ui(self) -> None:
         """Setup panel UI with stacked content."""
@@ -1255,6 +1275,7 @@ class RightPanelView:
             self._stack.setCurrentIndex(PanelState.PLACEHOLDER)
             self._stale_banner.hide()
             self._header.set_title("Device Details")
+            self._refresh_timer.stop()
             return
 
         device_id = selection.selected_device_id
@@ -1262,6 +1283,9 @@ class RightPanelView:
         self._state = RightPanelState(
             is_expanded=self._state.is_expanded, selected_device_id=device_id, theme=self._state.theme, content_state=self._state.content_state
         )
+
+        if self._state.is_expanded:
+            self._refresh_timer.start()
 
         # Check loading state safely
         if self._device_vm.is_device_loading(device_id):
@@ -1421,6 +1445,13 @@ class RightPanelView:
         width = Layout.RIGHT_PANEL_EXPANDED_WIDTH if expanded else Layout.RIGHT_PANEL_COLLAPSED_WIDTH
         self._container.setFixedWidth(width)
 
+        if expanded and self._state.selected_device_id:
+            logger.debug(f"[RightPanel] Start auto-refresh for {self._state.selected_device_id}")
+            self._refresh_timer.start()
+        else:
+            logger.debug("[RightPanel] Stop auto-refresh")
+            self._refresh_timer.stop()
+
     def _on_retry(self) -> None:
         """Handle retry click."""
         if self._state.selected_device_id:
@@ -1444,6 +1475,8 @@ class RightPanelView:
 
     def dispose(self) -> None:
         """Clean up resources."""
+        if self._refresh_timer:
+            self._refresh_timer.stop()
         self._content.clear()
 
         try:

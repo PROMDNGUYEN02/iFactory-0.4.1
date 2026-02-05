@@ -408,6 +408,8 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
 
         If the changed device is currently displayed, update the chart's
         current status without refetching all segments.
+
+        ✅ FIX: Only update when status ACTUALLY changes to avoid unnecessary re-renders.
         """
         if self._is_disposed:
             return
@@ -423,8 +425,18 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
         if not live_status:
             return
 
+        # ✅ FIX: Check if status actually changed
+        current_status_code = self._current_chart.live_status_code
+        current_status_name = self._current_chart.current_status
+
+        if current_status_code == live_status.status_code and current_status_name == live_status.status_name:
+            # No actual change - skip update to avoid UI flicker
+            logger.debug(f"[GanttChartViewModel] Status unchanged for {device_id}, skipping")
+            return
+
+        logger.info(f"[GanttChartViewModel] Status changed for {device_id}: " f"{current_status_name} → {live_status.status_name}")
+
         # ✅ Update current chart with new live status
-        # Create new chart with updated status (immutable)
         updated_chart = GanttChartModel(
             device_code=self._current_chart.device_code,
             device_name=self._current_chart.device_name,
@@ -432,10 +444,9 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
             hour_marks=self._current_chart.hour_marks,
             start_time=self._current_chart.start_time,
             end_time=self._current_chart.end_time,
-            current_time=datetime.now(),  # Update current time
+            current_time=datetime.now(),
             total_duration_seconds=self._current_chart.total_duration_seconds,
             stats=self._current_chart.stats,
-            # ✅ Use LIVE status from service
             current_status=live_status.status_name,
             current_status_color=live_status.status_color,
             live_status_code=live_status.status_code,
@@ -445,8 +456,6 @@ class GanttChartViewModel(BaseViewModel, AsyncViewModelMixin):
 
         self._current_chart = updated_chart
         self.chartReady.emit(updated_chart)
-
-        logger.debug(f"[GanttChartViewModel] Live status updated for {device_id}: " f"{live_status.status_name}")
 
     def _get_live_status(self, device_code: str) -> Optional[DeviceStatus]:
         """Get live status from DeviceStatusService."""

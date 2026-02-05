@@ -45,6 +45,16 @@ from .models.device_model import (
 from ..constants.status import Status, StatusCode
 from ..adapters.async_executor import AsyncExecutor
 
+from ..services.progressive_loader import (
+    ProgressiveDeviceLoader,
+    LoadingStage,
+    LoadPriority,
+)
+from ..services.viewport_manager import DeviceViewportManager, ViewportChange
+from ..services.page_device_manager import PageDeviceManager
+from ..constants.timing import Timing
+from iFactory.application.services.swr_service import SWRService, CachePolicy
+
 if TYPE_CHECKING:
     from ..services.page_device_manager import PageDeviceManager
     from iFactory.application.ports.remote import IRemoteDataSource
@@ -335,46 +345,6 @@ class ConnectionInfo:
 class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     """
     Enhanced Device List ViewModel with production-ready features.
-
-    Features:
-    - Per-device loading states with skeleton support
-    - Status change signals for UI animations
-    - Stale data detection and indicators
-    - Automatic retry with exponential backoff
-    - Connection state tracking
-    - Optimistic UI updates
-    - Memory-efficient device storage
-    - Batch operation support
-
-    Signals:
-        devicesChanged: Emitted when device list changes
-        selectionChanged: Emitted when selection changes
-        syncStatusChanged: Emitted when sync status changes
-        deviceLoadingChanged: Per-device loading state
-        deviceStatusChanged: Individual status changes (for animations)
-        deviceErrorChanged: Per-device error state
-        connectionStateChanged: Connection state changes
-        staleDataDetected: Stale device list
-
-    Usage:
-        vm = DeviceListViewModel(
-            page_manager=page_manager,
-            sync_orchestrator=orchestrator,
-        )
-        vm.initialize()
-
-        # Connect signals
-        vm.devicesChanged.connect(on_devices_changed)
-        vm.deviceStatusChanged.connect(on_status_animation)
-
-        # Load devices
-        vm.load_page("assembly_page", ["DEV01", "DEV02"])
-
-        # Select device
-        vm.select_device("DEV01", open_panel=True)
-
-        # Retry failed
-        vm.retry_all_failed()
     """
 
     # Core signals
@@ -394,6 +364,9 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
     # Batch signals
     batchLoadingChanged = Signal(bool)  # is_batch_loading
 
+    loading_stage_changed = Signal(str, object, object)  # device_id, stage, data
+    viewport_changed = Signal(object)  # ViewportChange
+
     def __init__(
         self,
         page_manager: Optional["PageDeviceManager"] = None,
@@ -401,6 +374,7 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         sync_orchestrator: Optional["SyncOrchestrator"] = None,
         shell_vm: Optional["ShellViewModel"] = None,
         id_mapper: Optional[IDeviceIdMapper] = None,
+        memory_cache: Optional[Any] = None,
         parent: Optional[QObject] = None,
     ):
         BaseViewModel.__init__(self, parent)
@@ -452,6 +426,231 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
         # Connect to page manager
         if self._page_manager:
             self._safe_connect(self._page_manager.page_changed, self._on_page_changed)
+
+        self._memory_cache = memory_cache
+        self._swr_service: Optional[SWRService] = None
+        self._progressive_loader: Optional[ProgressiveDeviceLoader] = None
+        self._viewport_manager: Optional[DeviceViewportManager] = None
+        self._page_device_manager: Optional[PageDeviceManager] = None
+
+        # Initialize if cache provided
+        if memory_cache:
+            self._init_progressive_services(memory_cache)
+
+    def _init_progressive_services(self, cache: Any) -> None:
+        """Initialize progressive loading services."""
+
+        # Create SWR service
+        self._swr_service = SWRService(
+            cache=cache,
+            policy=CachePolicy(
+                fresh_ttl=Timing.Cache.DEVICE_FRESH_TTL,
+                stale_ttl=Timing.Cache.DEVICE_STALE_TTL,
+                background_refresh_threshold=Timing.Cache.REFRESH_THRESHOLD,
+            ),
+        )
+
+        # Create viewport manager
+        self._viewport_manager = DeviceViewportManager(
+            prefetch_distance=Timing.Viewport.PREFETCH_DISTANCE_PX,
+        )
+
+        # Create progressive loader
+        from ..services.device_status_service import DeviceStatusService
+
+        self._progressive_loader = ProgressiveDeviceLoader(
+            swr_service=self._swr_service,
+            device_service=self,  # Use self as device service
+            status_service=DeviceStatusService.instance(),
+            max_concurrent_loads=10,
+        )
+
+        # Connect loader callbacks
+        self._progressive_loader.on_stage_changed(self._on_progressive_stage_changed)
+
+        # Create page manager
+        self._page_device_manager = PageDeviceManager(
+            progressive_loader=self._progressive_loader,
+            viewport_manager=self._viewport_manager,
+            status_service=DeviceStatusService.instance(),
+        )
+
+        # Connect page manager signals
+        self._page_device_manager.device_stage_changed.connect(self._on_page_stage_changed)
+
+        logger.info("[DeviceListViewModel] Progressive services initialized")
+
+    # ========================================================================
+    # Progressive Loading Integration
+    # ========================================================================
+
+    def _on_progressive_stage_changed(
+        self,
+        device_id: str,
+        stage: LoadingStage,
+        data: Any,
+    ) -> None:
+        """Handle stage changes from progressive loader."""
+        # Update internal state
+        if stage == LoadingStage.SKELETON:
+            self._set_device_loading(device_id, LoadingPhase.SKELETON)
+        elif stage == LoadingStage.STALE:
+            self._set_device_loading(device_id, LoadingPhase.LOADING)
+            # Update with stale data
+            if data:
+                self._update_device_from_data(device_id, data, is_stale=True)
+        elif stage == LoadingStage.FRESH:
+            self._set_device_loading(device_id, LoadingPhase.LOADED)
+            # Update with fresh data
+            if data:
+                self._update_device_from_data(device_id, data, is_stale=False)
+        elif stage == LoadingStage.LIVE:
+            # Live updates started
+            pass
+        elif stage == LoadingStage.ERROR:
+            self._set_device_loading(device_id, LoadingPhase.ERROR)
+
+        # Emit signal for UI
+        self.loading_stage_changed.emit(device_id, stage, data)
+
+    def _on_page_stage_changed(
+        self,
+        device_id: str,
+        stage: LoadingStage,
+        data: Any,
+    ) -> None:
+        """Handle stage changes from page manager."""
+        # Forward to progressive stage handler
+        self._on_progressive_stage_changed(device_id, stage, data)
+
+    def _update_device_from_data(
+        self,
+        device_id: str,
+        data: Any,
+        is_stale: bool = False,
+    ) -> None:
+        """Update device model from loaded data."""
+        if isinstance(data, dict):
+            model = self._transform_record_to_display_model(data, device_id)
+        elif hasattr(data, "to_dict"):
+            model = self._transform_record_to_display_model(data.to_dict(), device_id)
+        else:
+            return
+
+        # Mark as stale if applicable
+        if is_stale:
+            model = model._replace(is_stale=True) if hasattr(model, "_replace") else model
+
+        self._devices[device_id] = model
+        self.devicesChanged.emit({device_id: model.to_dict()})
+
+    # ========================================================================
+    # Viewport Integration
+    # ========================================================================
+
+    def handle_viewport_scroll(
+        self,
+        scroll_y: int,
+        viewport_height: int,
+        device_positions: List[Tuple[str, int, int]],
+    ) -> None:
+        """
+        Handle scroll event for viewport tracking.
+
+        Called by DeviceCanvas when scroll changes.
+        """
+        if not self._page_device_manager:
+            return
+
+        # Use executor to avoid blocking UI
+        self._executor.execute(
+            self._page_device_manager.handle_scroll(
+                scroll_y,
+                viewport_height,
+                device_positions,
+            ),
+            on_success=lambda _: None,
+            on_error=lambda e: logger.error(f"Scroll handling error: {e}"),
+        )
+
+    # ========================================================================
+    # Enhanced Load Methods
+    # ========================================================================
+
+    def load_page_progressive(
+        self,
+        page_name: str,
+        device_ids: List[str],
+        visible_positions: Optional[List[Tuple[str, int, int]]] = None,
+    ) -> None:
+        """
+        Load page using progressive loading.
+
+        Args:
+            page_name: Page identifier
+            device_ids: All device IDs on page
+            visible_positions: Optional initial viewport positions
+        """
+        if not self._page_device_manager:
+            # Fallback to standard loading
+            self.load_page(page_name, device_ids)
+            return
+
+        logger.info(f"[DeviceListViewModel] Progressive load: {page_name} " f"({len(device_ids)} devices)")
+
+        # Execute progressive load
+        self._executor.execute(
+            self._page_device_manager.initial_load(
+                page_name,
+                device_ids,
+                visible_positions,
+            ),
+            on_success=lambda _: logger.info("Progressive load complete"),
+            on_error=lambda e: logger.error(f"Progressive load error: {e}"),
+        )
+
+    async def fetch_device_async(self, device_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch device data asynchronously.
+
+        Used by ProgressiveDeviceLoader as factory function.
+        """
+        if not self._remote_source:
+            return None
+
+        try:
+            remote_id = self._id_mapper.to_remote_id(device_id)
+            records = await self._remote_source.fetch_latest_status([remote_id])
+
+            if records:
+                return records[0]
+            return None
+
+        except Exception as e:
+            logger.error(f"Fetch device error: {e}")
+            return None
+
+    # ========================================================================
+    # Metrics
+    # ========================================================================
+
+    def get_progressive_metrics(self) -> Dict[str, Any]:
+        """Get metrics from progressive loading services."""
+        metrics = {}
+
+        if self._swr_service:
+            metrics["swr"] = self._swr_service.get_metrics()
+
+        if self._progressive_loader:
+            metrics["loader"] = self._progressive_loader.get_metrics()
+
+        if self._viewport_manager:
+            metrics["viewport"] = self._viewport_manager.get_stats()
+
+        if self._page_device_manager:
+            metrics["page_manager"] = self._page_device_manager.get_metrics()
+
+        return metrics
 
     # =========================================================================
     # Initialization
@@ -1182,6 +1381,14 @@ class DeviceListViewModel(BaseViewModel, AsyncViewModelMixin):
             logger.info(
                 "[DeviceListViewModel] %d status changes detected",
                 len(status_changes),
+            )
+
+        if self._shell_vm:
+            self._shell_vm.update_system_status(
+                mssql_connected=True,
+                sqlite_connected=True,
+                message="Ready",
+                last_sync_time=timestamp,
             )
 
     def _on_sync_error(self, error: Exception) -> None:

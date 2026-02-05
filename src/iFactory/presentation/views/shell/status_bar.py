@@ -9,15 +9,16 @@ OPTIMIZATIONS:
 - State comparison for skip redundant updates
 - Cached styles per theme
 - Proper lifecycle management
+- ✅ Auto-refresh sync time display
 """
-
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Dict, Optional
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QStatusBar, QWidget
 
 if TYPE_CHECKING:
@@ -41,6 +42,7 @@ class StatusBarState:
     sqlite_connected: bool
     message: str
     theme: str
+    last_sync_time: Optional[datetime] = None  # ✅ ADD: Track sync time
 
 
 # =============================================================================
@@ -60,8 +62,6 @@ class ConnectionIndicator(QLabel):
     - Skip redundant style updates
     - Theme change handling
     """
-
-    # NOTE: No __slots__ here - needed for Qt signal connections
 
     def __init__(
         self,
@@ -166,8 +166,6 @@ class SystemModeLabel(QLabel):
     - Cached styles
     """
 
-    # NOTE: No __slots__ here - needed for Qt signal connections
-
     MODE_TEXTS: Dict[str, str] = {
         "online": "ONLINE SYSTEM",
         "offline": "OFFLINE MODE",
@@ -255,16 +253,15 @@ class StatusBarView:
     Status bar showing system status.
 
     Features:
-    - Message display
+    - Message display with sync timestamp
     - Connection indicators (Local/Remote)
     - System mode indicator
+    - ✅ Auto-refresh sync time display
 
     OPTIMIZATIONS:
     - State comparison for skip redundant updates
     - Cached styles per theme
     - Proper lifecycle management
-
-    NOTE: No __slots__ - needed for Qt signal weak references
     """
 
     def __init__(
@@ -283,6 +280,7 @@ class StatusBarView:
             sqlite_connected=False,
             message="Ready",
             theme=theme_service.current_theme,
+            last_sync_time=None,
         )
 
         # Style cache
@@ -296,9 +294,20 @@ class StatusBarView:
         self._sep: Optional[QFrame] = None
         self._mode_label: Optional[SystemModeLabel] = None
 
+        # ✅ ADD: Timer for refreshing time display
+        self._time_refresh_timer: Optional[QTimer] = None
+
         self._setup()
         self._apply_theme_style()
         self._bind_viewmodel()
+        self._setup_time_refresh_timer()
+
+    def _setup_time_refresh_timer(self) -> None:
+        """Setup timer to refresh sync time display."""
+        self._time_refresh_timer = QTimer()
+        self._time_refresh_timer.timeout.connect(self._refresh_time_display)
+        self._time_refresh_timer.setInterval(10000)  # 10 seconds
+        self._time_refresh_timer.start()
 
     def _bind_viewmodel(self) -> None:
         """Bind to ViewModel signals."""
@@ -316,6 +325,7 @@ class StatusBarView:
             sqlite_connected=self._state.sqlite_connected,
             message=self._state.message,
             theme=theme,
+            last_sync_time=self._state.last_sync_time,
         )
         self._style_cache.clear()
         self._apply_theme_style()
@@ -328,17 +338,26 @@ class StatusBarView:
             sqlite_connected=status.sqlite_connected,
             message=status.message,
             theme=self._state.theme,
+            last_sync_time=status.last_sync_time,  # ✅ Include sync time
         )
 
-        # Skip if no change
-        if new_state == self._state:
+        # ✅ CHANGED: Always update if sync time changed (for relative time display)
+        # Skip only if EVERYTHING is the same
+        if (
+            new_state.mssql_connected == self._state.mssql_connected
+            and new_state.sqlite_connected == self._state.sqlite_connected
+            and new_state.message == self._state.message
+            and new_state.theme == self._state.theme
+            and new_state.last_sync_time == self._state.last_sync_time
+        ):
             return
 
         self._state = new_state
 
-        # Update UI components
-        if self._lbl_msg:
-            self._lbl_msg.setText(status.message)
+        # ✅ Update message with sync time
+        self._update_message_display(status)
+
+        # Update connection indicators
         if self._indicator_mssql:
             self._indicator_mssql.set_connected(status.mssql_connected, "Remote: On", "Remote: Off")
         if self._indicator_sqlite:
@@ -352,6 +371,45 @@ class StatusBarView:
                 self._mode_label.set_mode("offline")
             else:
                 self._mode_label.set_mode("halted")
+
+    def _update_message_display(self, status: "SystemStatusModel") -> None:
+        """Update message label with sync time."""
+        if not self._lbl_msg:
+            return
+
+        # Build display message
+        display_msg = status.message if status.message else "Ready"
+
+        # ✅ Add sync time if available
+        if status.last_sync_time:
+            sync_text = status.formatted_sync_time
+            display_msg = f"{display_msg} • Synced {sync_text}"
+
+        self._lbl_msg.setText(display_msg)
+
+    def _refresh_time_display(self) -> None:
+        """
+        Refresh time display without waiting for new status.
+
+        This ensures "5s ago" → "15s ago" → "1m ago" updates automatically.
+        """
+        if not self._state.last_sync_time:
+            return
+
+        if not self._lbl_msg:
+            return
+
+        # Create temporary status to get formatted time
+        from ...viewmodels.models.shell_model import SystemStatusModel
+
+        temp_status = SystemStatusModel(
+            mssql_connected=self._state.mssql_connected,
+            sqlite_connected=self._state.sqlite_connected,
+            message=self._state.message,
+            last_sync_time=self._state.last_sync_time,
+        )
+
+        self._update_message_display(temp_status)
 
     def _setup(self) -> None:
         """Setup status bar UI."""
@@ -462,6 +520,11 @@ class StatusBarView:
 
     def dispose(self) -> None:
         """Clean up resources."""
+        # ✅ Stop timer
+        if self._time_refresh_timer:
+            self._time_refresh_timer.stop()
+            self._time_refresh_timer = None
+
         self._style_cache.clear()
 
         # Dispose child components

@@ -1,4 +1,3 @@
-# File: presentation/viewmodels/shell_viewmodel.py
 """
 Shell ViewModel.
 
@@ -7,16 +6,18 @@ Manages shell/navigation state including:
 - Current page
 - Sidebar expansion
 - Right panel expansion
+- System status with sync timestamp
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, QTimer
 
 from .base import BaseViewModel, UiState
 from .models.shell_model import SystemStatusModel
@@ -36,7 +37,7 @@ class ShellViewModel(BaseViewModel):
     - Theme switching (via injected ThemeService)
     - Page navigation
     - Panel states
-    - System status
+    - System status with sync timestamp
     """
 
     themeChanged = Signal(str)
@@ -70,11 +71,17 @@ class ShellViewModel(BaseViewModel):
         self._right_panel_expanded: bool = False
         self._system_status = SystemStatusModel()
 
+        # ✅ ADD: Track last sync time
+        self._last_sync_time: Optional[datetime] = None
+
         # Cache
         self._layout_cache: Dict[str, Any] = {}
 
         # Forward theme service signals
         self._theme_service.themeChanged.connect(self._on_theme_service_changed)
+
+        # ✅ ADD: Timer to refresh sync time display
+        self._sync_time_refresh_timer: Optional[QTimer] = None
 
     def _on_theme_service_changed(self, theme: str) -> None:
         """Forward theme changes from service."""
@@ -83,6 +90,13 @@ class ShellViewModel(BaseViewModel):
     def initialize(self) -> None:
         """Initialize shell state."""
         self._set_state(UiState.success())
+
+        # ✅ ADD: Start sync time refresh timer
+        self._sync_time_refresh_timer = QTimer(self)
+        self._sync_time_refresh_timer.timeout.connect(self._refresh_sync_time_display)
+        self._sync_time_refresh_timer.setInterval(10000)  # 10 seconds
+        self._sync_time_refresh_timer.start()
+
         logger.info("[ShellViewModel] Initialized")
 
     # =========================================================================
@@ -131,6 +145,11 @@ class ShellViewModel(BaseViewModel):
     @property
     def system_status(self) -> SystemStatusModel:
         return self._system_status
+
+    @property
+    def last_sync_time(self) -> Optional[datetime]:
+        """Get last sync timestamp."""
+        return self._last_sync_time
 
     # =========================================================================
     # Theme Actions
@@ -217,12 +236,40 @@ class ShellViewModel(BaseViewModel):
         mssql_connected: Optional[bool] = None,
         sqlite_connected: Optional[bool] = None,
         message: Optional[str] = None,
+        last_sync_time: Optional[datetime] = None,  # ✅ ADD parameter
     ) -> None:
         """Update system connection status."""
+        # ✅ Update sync time if provided
+        if last_sync_time is not None:
+            self._last_sync_time = last_sync_time
+
         self._system_status = SystemStatusModel(
             mssql_connected=(mssql_connected if mssql_connected is not None else self._system_status.mssql_connected),
             sqlite_connected=(sqlite_connected if sqlite_connected is not None else self._system_status.sqlite_connected),
             message=message if message is not None else self._system_status.message,
+            last_sync_time=self._last_sync_time,  # ✅ Include sync time
+        )
+        self.systemStatusChanged.emit(self._system_status)
+
+    def _refresh_sync_time_display(self) -> None:
+        """
+        Periodically refresh sync time display.
+
+        This ensures "5s ago" → "15s ago" → "1m ago" updates automatically
+        without waiting for a new sync.
+        """
+        if self._is_disposed:
+            return
+
+        if not self._last_sync_time:
+            return
+
+        # Re-emit status to trigger UI update with new relative time
+        self._system_status = SystemStatusModel(
+            mssql_connected=self._system_status.mssql_connected,
+            sqlite_connected=self._system_status.sqlite_connected,
+            message=self._system_status.message,
+            last_sync_time=self._last_sync_time,
         )
         self.systemStatusChanged.emit(self._system_status)
 
@@ -271,6 +318,7 @@ class ShellViewModel(BaseViewModel):
                 "mssql": self._system_status.mssql_connected,
                 "sqlite": self._system_status.sqlite_connected,
                 "message": self._system_status.message,
+                "last_sync_time": (self._last_sync_time.isoformat() if self._last_sync_time else None),
             },
         }
 
@@ -280,6 +328,11 @@ class ShellViewModel(BaseViewModel):
 
     def dispose(self) -> None:
         """Clean up resources."""
+        # ✅ Stop timer
+        if self._sync_time_refresh_timer:
+            self._sync_time_refresh_timer.stop()
+            self._sync_time_refresh_timer = None
+
         self._layout_cache.clear()
         super().dispose()
 
